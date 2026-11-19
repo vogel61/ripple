@@ -1171,6 +1171,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.url:
             command = ("./.venv/bin/python tools/mockup_snapshot.py --url %s --out %s"
                        % (base, out_arg))
+        elif args.manual_crops and not args.config:
+            # The throwaway configuration is written by the tool itself, so
+            # `--manual-crops` alone reproduces this file. Naming the generated
+            # path (or `--config None`) would print a command that does not run,
+            # which is worse than no command at all.
+            command = ("./.venv/bin/python tools/mockup_snapshot.py --manual-crops"
+                       " --port %d --out %s" % (args.port, out_arg))
         else:
             command = ("./.venv/bin/python tools/mockup_snapshot.py --config %s --port %d"
                        " --out %s" % (args.config, args.port, out_arg))
@@ -1178,8 +1185,14 @@ def main(argv: list[str] | None = None) -> int:
             # The key is what unlocks the operator controls in the capture; it is
             # read from the environment so it never lands in this file.
             command += ' --admin-key "$RIPPLE_ADMIN_KEY"'
+        # Which fleet the head names: with the shim installed the page never saw
+        # the instance's own (empty) fleet, so the note has to come from the same
+        # payload the page rendered. Naming the throwaway instance's nodes there
+        # would describe a different page than the one below it.
+        reported = (demo.healthz(commit=commit, dirty=dirty)["hosts"]
+                    if args.manual_crops else (health.get("hosts") or []))
         fleet_note = ", ".join("%s (%s)" % (h.get("name"), h.get("state"))
-                               for h in (health.get("hosts") or []))
+                               for h in reported)
         document = build_document(panels=fragments, masthead=fragments["masthead"],
                                   tabs=fragments["tabs"], footer=fragments["footer"],
                                   css=css, commit=commit, command=command,

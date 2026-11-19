@@ -5,6 +5,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-19
+
 ### Added
 
 - **Sites as data** (issue #67) — a top-level `sites:` block of named locations

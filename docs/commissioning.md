@@ -81,8 +81,9 @@ script.
 The LaunchAgent in `deploy/ai.ripple.plist` starts RIPPLE at login and restarts
 it after a crash.
 
-**Only on the M5.** The plist hardcodes `/Users/vogel/Projects/ripple` and that
-venv's Python, and RIPPLE is the single entry point from outside — the M3 runs
+**Only on the M5.** The plist is a template (`__REPO__`, `__HOME__`) that
+`deploy/install-launchd.command` renders for the checkout and the account it runs
+in, and RIPPLE is the single entry point from outside — the M3 runs
 oMLX and nothing else. Installing it **must happen from a normal Terminal window
 on the M5**, not from inside the agent gateway: the gateway blocks
 `launchctl bootstrap` so that a tool call can never restart it indirectly.
@@ -107,9 +108,9 @@ end of a pasted line (`cp … # 2.`) are read as arguments by zsh, which turned
 Without trailing comments, so a paste works:
 
 ```bash
-cd /Users/vogel/Projects/ripple
+cd /Users/operator/Projects/ripple
 deploy/stop-ripple.command
-cp deploy/ai.ripple.plist ~/Library/LaunchAgents/
+sed -e "s|__REPO__|$PWD|g" -e "s|__HOME__|$HOME|g" deploy/ai.ripple.plist > ~/Library/LaunchAgents/ai.ripple.plist
 plutil -replace EnvironmentVariables.OMLX_API_KEY -string "$(cat ~/.omlx/api_key.txt)" ~/Library/LaunchAgents/ai.ripple.plist
 chmod 600 ~/Library/LaunchAgents/ai.ripple.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.ripple.plist

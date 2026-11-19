@@ -8,7 +8,7 @@ about before it is a public issue.
 
 ## Reporting a vulnerability
 
-Write to **o.stein@inforatio.at** with the subject line `RIPPLE security` and
+Write to **r.vogel@inforatio.at** with the subject line `RIPPLE security` and
 include:
 
 * what an attacker gains (read traffic, spend GPU time, change configuration,

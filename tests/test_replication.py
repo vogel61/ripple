@@ -37,7 +37,7 @@ ADMIN = bearer("test-admin-key")
 
 GB = 1_000_000_000
 QWEN = "Qwen3.8-Flash-Next-oQ4e-mtp"
-SOURCE_ROOT = "/Users/vogel/.omlx/models"
+SOURCE_ROOT = "/Users/operator/.omlx/models"
 TARGET_ROOT = "/Volumes/GLM4TB/models"
 
 
@@ -479,7 +479,7 @@ hosts:
     addresses: ["http://127.0.0.1:8000"]
     node_id: e19d4c08-e64f-4641-98eb-19721a27d449
     replication:
-      model_roots: ["/Users/vogel/.omlx/models"]
+      model_roots: ["/Users/operator/.omlx/models"]
 """, encoding="utf-8")
     assert "model root" not in " | ".join(load_config(path).warnings)
 
@@ -1375,7 +1375,7 @@ hosts:
       address: vogel@192.168.77.1
       ssh_user: vogel
       model_roots:
-        - /Users/vogel/.omlx/models
+        - /Users/operator/.omlx/models
         - /Volumes/GLM4TB/models
   - name: M3-beta
     role: worker
@@ -1388,8 +1388,8 @@ hosts:
       address: vogel@192.168.77.2
       ssh_user: vogel
       model_roots:
-        - /Users/vogel/.omlx/models
-        - /Users/vogel/.omlx/gguf
+        - /Users/operator/.omlx/models
+        - /Users/operator/.omlx/gguf
 """
 
 

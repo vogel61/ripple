@@ -35,7 +35,7 @@ QWEN = "Qwen3.8-Flash-Next-oQ4e-mtp"
 # oMLX infrastructure: loaded on every node, 0 GB, in no allow-list. Resident
 # everywhere, dispatched nowhere — the model a lock can never protect.
 INFRA = "MarkItDown"
-SOURCE_ROOT = "/Users/vogel/.omlx/models"
+SOURCE_ROOT = "/Users/operator/.omlx/models"
 TARGET_ROOT = "/Volumes/GLM4TB/models"
 
 

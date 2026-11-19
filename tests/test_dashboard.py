@@ -394,9 +394,9 @@ REPLICATION = {
         "model": "Qwen3.8-Flash-Next-oQ4e-mtp",
         "source_path": "/Volumes/GLM4TB/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
         "relative": "Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
-        "target_root": "/Users/vogel/.omlx/models",
-        "target_path": "/Users/vogel/.omlx/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
-        "staging_path": "/Users/vogel/.omlx/models/.replication-incoming/Jundot/"
+        "target_root": "/Users/operator/.omlx/models",
+        "target_path": "/Users/operator/.omlx/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
+        "staging_path": "/Users/operator/.omlx/models/.replication-incoming/Jundot/"
                         "Qwen3.8-Flash-Next-oQ4e-mtp",
         "size_bytes": 111_609_397_878, "size_gb": 111.61,
         "required_bytes": 117_189_867_772, "free_bytes": 6_470_284_789_504,
@@ -3013,7 +3013,7 @@ def test_the_replication_panel_shows_the_four_things_the_dialog_must_name(render
     assert "copyable" in markup
     assert "Copy" in markup
     # the destination path is spelled out, staging directory included
-    assert "/Users/vogel/.omlx/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp" in markup
+    assert "/Users/operator/.omlx/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp" in markup
     assert ".replication-incoming" in markup
 
 

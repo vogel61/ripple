@@ -46,9 +46,13 @@ dev = [
 [project.scripts]
 ripple = "ripple.__main__:main"
 
-# `[project.urls]` is deliberately absent: the only home this repository has is an
-# internal Gitea, and an internal hostname does not belong in a distribution that
-# is meant to be published. Set it when the public home exists (#65, #59 §5).
+# The public home exists since 19.11.2026: the repository is published on GitHub,
+# so the distribution metadata can point at it instead of staying silent (#65).
+[project.urls]
+Homepage = "https://github.com/vogel61/ripple"
+Documentation = "https://github.com/vogel61/ripple/blob/main/docs/manual-en.md"
+Issues = "https://github.com/vogel61/ripple/issues"
+Changelog = "https://github.com/vogel61/ripple/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["ripple"]

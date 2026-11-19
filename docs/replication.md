@@ -282,14 +282,14 @@ hosts:
     replication:
       address: 192.0.2.11        # the machine RIPPLE runs on: ignored, no SSH (§3a)
       model_roots:                 # `model.model_dirs` of ~/.omlx/settings.json
-        - /Users/vogel/.omlx/models
+        - /Users/operator/.omlx/models
         - /Volumes/GLM4TB/models
   - name: M3-beta
     replication:
       address: 192.168.77.2        # the Thunderbolt address, not the LAN one (§3)
       ssh_user: vogel
       model_roots:
-        - /Users/vogel/.omlx/models
+        - /Users/operator/.omlx/models
         - /Volumes/GLM4TB/models
 ```
 
@@ -371,8 +371,8 @@ memory, and the maintenance window is cleared by the job itself.
 On the target (operator, by hand — this is the documented way back):
 
 ```sh
-rm -rf /Users/vogel/.omlx/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp   # the copy
-rm -rf /Users/vogel/.omlx/models/.replication-incoming/Jundot         # a cancelled copy
+rm -rf /Users/operator/.omlx/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp   # the copy
+rm -rf /Users/operator/.omlx/models/.replication-incoming/Jundot         # a cancelled copy
 ```
 
 then `POST /admin/api/reload` on the target so oMLX forgets the model. The

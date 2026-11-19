@@ -10,7 +10,7 @@ measured. Contributions that keep that honest are welcome.
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -e '.[dev]'      # or: pip install -r requirements.txt
-./.venv/bin/python -m pytest -q          # ~160 s, 700+ tests
+./.venv/bin/python -m pytest -q          # ~230 s, 1292 tests
 ```
 
 Python **3.9 or newer**. The code is written for 3.9 on purpose (the reference
@@ -59,8 +59,8 @@ missing. Both are meant to be runnable without reading the source.
 ## Secrets
 
 Never commit a key, a token, a password or a real internal address. Examples use
-placeholders or documentation ranges (`192.168.1.x`, `127.0.0.1`). Before
-anything is published:
+placeholders or documentation ranges (`192.0.2.x`, `198.51.100.x`, `127.0.0.1`).
+Before anything is published:
 
 ```bash
 tools/secret_scan.py --key-file ~/.omlx/api_key.txt

@@ -36,8 +36,9 @@ Why a second Mac only helps when the work above RIPPLE is parallel:
 [`docs/manual-en.md`](docs/manual-en.md) §9.
 
 State: `ripple init`, `ripple discover` and `ripple doctor` exist, the
-distribution builds as `ripple-proxy`, and the suite has 1264 tests
-(`python -m pytest --collect-only`, 19.11.2026 — a snapshot, not a target).
+distribution builds as `ripple-proxy`, and the suite has 1292 tests — 1290
+passed, 2 skipped, 229 s (`python -m pytest -q`, 19.11.2026; a snapshot with a
+date on it, not a target).
 Start with [`docs/install.md`](docs/install.md) (English, the primary document)
 or [`docs/install-de.md`](docs/install-de.md) (German).
 
