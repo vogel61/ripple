@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ripple-proxy"
+description = "RIPPLE — thread-based placement proxy with residency protection in front of several oMLX instances"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Oliver Stein", email = "o.stein@inforatio.at" }]
+keywords = ["llm", "proxy", "placement", "omlx", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Runtime dependencies only — the test tooling lives in the `dev` extra so an
+# operator installing the proxy does not pull pytest onto the inference node.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+]
+# The distribution is `ripple-proxy` (the PyPI name `ripple` belongs to unrelated
+# projects); the import package and the console script stay `ripple`.
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+ripple = "ripple.__main__:main"
+
+# `[project.urls]` is deliberately absent: the only home this repository has is an
+# internal Gitea, and an internal hostname does not belong in a distribution that
+# is meant to be published. Set it when the public home exists (#65, #59 §5).
+
+[tool.setuptools]
+packages = ["ripple"]
+# The dashboard is served straight from the package directory
+# (`StaticFiles(directory=Path(__file__).with_name("static"))`), so the catalogs,
+# the stylesheet, the behaviour and the wordmark font have to travel inside the
+# wheel. Without the i18n catalogs the page boots with empty labels — the silent
+# failure this packaging exists to prevent. `tests/test_packaging.py` builds the
+# wheel and checks every file under `ripple/static` is in it.
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "ripple.__version__" }
+
+[tool.setuptools.package-data]
+ripple = ["static/**/*"]

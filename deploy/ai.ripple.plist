@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.ripple</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>__REPO__/.venv/bin/python</string>
+		<string>-m</string>
+		<string>ripple</string>
+		<string>--config</string>
+		<string>__REPO__/config.yaml</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>__REPO__</string>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<!-- launchd cannot read files: the key is not in the repository.
+		     After installing, replace the placeholder with the real key:
+		     plutil -replace EnvironmentVariables.OMLX_API_KEY -string \
+		       "$(cat ~/.omlx/api_key.txt)" ~/Library/LaunchAgents/ai.ripple.plist
+		     Then chmod 600 that file. See deploy/README.md. -->
+		<key>OMLX_API_KEY</key>
+		<string>PUT_YOUR_OMLX_API_KEY_HERE</string>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+</dict>
+</plist>

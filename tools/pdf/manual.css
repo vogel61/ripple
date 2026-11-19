@@ -1,0 +1,243 @@
+/* tools/pdf/manual.css — the print style sheet for docs/manual-en.md (issue #109).
+ *
+ * One page format, one text size, one set of rules; `tools/pdf_manual.py` inlines
+ * this file into the HTML it hands to Chrome, so a PDF is this sheet applied to
+ * the manual and nothing else. It is a *print* sheet: no hover, no columns, no
+ * screen-only affordances. A4 with 20 mm margins, 10.5 pt body text at 1.45 line
+ * height — a page an operator can read at arm's length and print on the office
+ * printer without a second thought.
+ *
+ * The three things that can silently ruin a printed manual, and what is done
+ * about each here:
+ *
+ *   1. A table that is wider than the text column. The manual's tables carry
+ *      whole sentences in a cell (the `ripple init` table has 369-character
+ *      cells), so the cells get `overflow-wrap: anywhere`: a long word — a URL,
+ *      a model name — breaks inside the cell instead of pushing the table over
+ *      the margin. `table-layout` stays auto so the columns keep their natural
+ *      proportions; a fixed layout would give three columns a third each and
+ *      make the narrow one ragged.
+ *   2. A code block that runs off the page. `pre` wraps (`pre-wrap`) and breaks
+ *      long tokens (`anywhere`); an unwrapped 200-character `curl` line would
+ *      simply be clipped by the printer.
+ *   3. A picture that is bigger than the page. The full-tab screenshots are
+ *      1440 px wide — 381 mm at 96 dpi — so `max-width: 100%` scales them down
+ *      to the text column. Nothing is upscaled: `max-width`, not `width`, so a
+ *      small crop keeps the size it was rendered at.
+ */
+
+@page {
+  size: A4;
+  /* Bottom is deeper than the other three: the page footer (drawn by Chrome
+   * into the margin box, see FOOTER in tools/pdf_manual.py) lives there. */
+  margin: 20mm 20mm 24mm 20mm;
+}
+
+html {
+  font-size: 10.5pt;
+}
+
+body {
+  margin: 0;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.45;
+  color: #1b1b1b;
+  /* The manual's grey code backgrounds and table headers must print as
+   * backgrounds, not be dropped by the browser's ink-saving default. */
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ── text ─────────────────────────────────────────────────────────────────── */
+
+p {
+  margin: 0 0 0.55em;
+  orphans: 2;
+  widows: 2;
+}
+
+h1, h2, h3, h4 {
+  font-weight: 600;
+  line-height: 1.2;
+  color: #111;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+/* The title block: the document's first line and the italic subtitle under it. */
+h1 {
+  font-size: 21pt;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.3em;
+  padding-bottom: 0.35em;
+  border-bottom: 0.8pt solid #1b1b1b;
+}
+
+h2 {
+  font-size: 14.5pt;
+  margin: 1.5em 0 0.45em;
+  padding-bottom: 0.2em;
+  border-bottom: 0.4pt solid #d5d5d5;
+}
+
+h3 {
+  font-size: 11.8pt;
+  margin: 1.2em 0 0.35em;
+}
+
+h4 {
+  font-size: 10.5pt;
+  margin: 1em 0 0.3em;
+  color: #333;
+}
+
+h2 + p, h3 + p, h4 + p {
+  margin-top: 0;
+}
+
+em { font-style: italic; }
+strong { font-weight: 600; }
+
+a {
+  color: #0b5394;
+  text-decoration: none;
+}
+
+hr {
+  border: 0;
+  border-top: 0.4pt solid #d5d5d5;
+  margin: 1.3em 0;
+}
+
+ul, ol {
+  margin: 0 0 0.6em;
+  padding-left: 1.35em;
+}
+
+li {
+  margin: 0 0 0.22em;
+}
+
+li > p {
+  margin-bottom: 0.25em;
+}
+
+blockquote {
+  margin: 0.7em 0;
+  padding: 0.1em 0 0.1em 0.9em;
+  border-left: 1.6pt solid #d5d5d5;
+  color: #444;
+}
+
+/* ── code ─────────────────────────────────────────────────────────────────── */
+
+code, pre, kbd, samp {
+  font-family: "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+
+code {
+  font-size: 0.88em;
+  background: #f1f1f1;
+  padding: 0 0.18em;
+  border-radius: 2px;
+  /* An inline code span is often a path or a key name: let it break rather than
+   * push the paragraph's last word past the margin. */
+  overflow-wrap: anywhere;
+}
+
+pre {
+  margin: 0.6em 0 0.9em;
+  padding: 6pt 8pt;
+  font-size: 8.4pt;
+  line-height: 1.35;
+  background: #f5f5f5;
+  border: 0.4pt solid #e0e0e0;
+  border-radius: 2px;
+  /* Wrap and break: the manual's `curl` examples and `ripple doctor` output are
+   * wider than the text column, and a clipped command is a wrong command. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+pre code {
+  font-size: 1em;
+  background: none;
+  padding: 0;
+}
+
+/* ── tables ───────────────────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  margin: 0.6em 0 1.1em;
+  border-collapse: collapse;
+  font-size: 8.8pt;
+  line-height: 1.32;
+}
+
+/* A table that spans a page break repeats its header on the next page: a
+ * continuation without column names is a table nobody can read. */
+thead {
+  display: table-header-group;
+}
+
+tr {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+th, td {
+  border: 0.4pt solid #c9c9c9;
+  padding: 3pt 4.5pt;
+  text-align: left;
+  vertical-align: top;
+  /* The cell that makes a table wider than the page is always one long token:
+   * `http://127.0.0.1:8000`, `~/.ripple/keys.yaml`, a model name. Break it. */
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+
+th {
+  background: #f0f0f0;
+  font-weight: 600;
+}
+
+td code, th code {
+  font-size: 0.92em;
+  background: none;
+  padding: 0;
+}
+
+/* ── pictures ─────────────────────────────────────────────────────────────── */
+
+/* `max-width`, never `width`: a 1440 px screenshot is scaled down to the text
+ * column, a 700 px crop is left at 700 px. */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0.5em auto 0.35em;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+figure {
+  margin: 0.7em 0 1em;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+figure img {
+  margin: 0 auto;
+}
+
+figcaption {
+  margin-top: 0.3em;
+  font-size: 9pt;
+  line-height: 1.35;
+  color: #555;
+  text-align: center;
+}

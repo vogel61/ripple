@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+config.yaml
+# A hand-kept backup of the live configuration carries the same secrets as the
+# file itself — and `config.yaml` alone does not cover `config.yaml.bak-…`.
+config.yaml.bak*
+*.log
+.pytest_cache/
+.DS_Store
+tools/soak/
+
+# build artefacts of `pip install .` and `pip wheel .`, and the PDF that
+# `tools/pdf_manual.py` writes to dist/ripple-manual-en.pdf — a generated binary
+# is not a source file, and a committed one would be stale the day after.
+build/
+dist/
+*.egg-info/

@@ -1,0 +1,1238 @@
+/* RIPPLE dashboard — the approved design (docs/dashboard-mockup.html, explained
+   in docs/dashboard-design.md). One file, no CDN, no framework, no build step.
+
+   The wordmark's font is the one asset beside this file: Rubik Microbe
+   (SIL Open Font License 1.1, OFL.txt next to it), subset to R,I,P,L,E and
+   served from /static/fonts/. The mockup embeds it as a data URI; the page
+   ships the file, because a data URI in a style sheet is unreadable and the
+   license has to travel with the font anyway. Either way nothing is fetched
+   from the network — design §4. */
+  /* Wortmarke: Rubik Microbe, Subset auf R,I,P,L,E (8,8 kB woff2 statt 235 kB).
+     Ein anderes Wort in dieser Schrift braucht ein neues Subset. */
+  @font-face{
+    font-family:'Rubik Microbe';font-style:normal;font-weight:400;font-display:swap;
+    src:url(fonts/rubik-microbe-wordmark.woff2) format('woff2');
+  }
+
+  /* ── Tokens ─────────────────────────────────────────────────────────────── */
+  :root{
+    --bg:#0b0d11;
+    --surface:#12161c;
+    --surface-2:#171c23;
+    --surface-3:#1d232b;
+    --line:#242b34;
+    --line-2:#323a45;
+    --line-3:#46505e;
+    --fg:#e8ecf1;
+    --fg-2:#a8b2c0;
+    --fg-3:#7b8694;
+    --accent:#6f9dff;
+    --accent-dim:rgba(111,157,255,.22);
+
+    /* Zustand: Farbe + Form. Die Farbe allein trägt nie die Bedeutung. */
+    /* Grasgrün statt Mint (#57): `#31c48d` ist HSL 158°/60 %, der Farbton sitzt
+       fast bei Cyan und wirkt auf den breiten Balken kalt; neben dem Lila von
+       `mixed` zusätzlich blass. `#57a639` ist 103°/49 %/44 % — Kontrast 6,0 auf
+       dem Panel (Text bleibt lesbar), Abstand zum Lila wächst von ΔE 25,9 auf
+       29,1. `--ok-bright` (#6fcf4a) bleibt auf demselben Farbton 103°, nur
+       heller — ein Blinken zwischen zwei Farbtönen läse sich als Zustandswechsel
+       (Test `test_the_brighter_half_is_the_same_hue`) — und hell genug für die
+       LED: Kontrast 8,7 auf `--surface-2`. */
+    --ok:#57a639;      --ok-bg:rgba(87,166,57,.13);   --ok-bd:rgba(87,166,57,.40);
+    --load:#5aa9e6;    --load-bg:rgba(90,169,230,.13); --load-bd:rgba(90,169,230,.40);
+    /* Ein Schritt derselben Farbe nach unten (Farbton ≈206°, 20 % dunkler in der
+       Helligkeit, Sättigung unverändert). Der Fuß der Balken und der Schätzung;
+       die Farbfamilie der Ladephase steht damit an einer Stelle (#19). */
+    --load-deep:#3f87c4;
+    --warn:#e8a33d;    --warn-bg:rgba(232,163,61,.13); --warn-bd:rgba(232,163,61,.40);
+    --maint:#c08bd6;   --maint-bg:rgba(192,139,214,.13);--maint-bd:rgba(192,139,214,.40);
+    --down:#e8604a;    --down-bg:rgba(232,96,74,.13);  --down-bd:rgba(232,96,74,.42);
+    /* Die Tönung der beiden Betreiber-Zustände (#79): dieselbe 13-%-Regel wie
+       bei den Farbfamilien, einmal für das Weiß von `--fg` (`draining`), einmal
+       für das Grau von `--fg-3` (`disabled`). */
+    --fg-bg:rgba(232,236,241,.13);   --fg-bd:rgba(232,236,241,.40);
+    --fg3-bg:rgba(123,134,148,.13);  --fg3-bd:rgba(123,134,148,.42);
+    /* Ein Schritt derselben Farbe nach oben: derselbe Farbton, nur heller. Das
+       ist die zweite Hälfte des Phasenblinks (#18) — ein Blinken zwischen zwei
+       Farbtönen wäre ein Zustandswechsel, ein Blinken zwischen zwei Helligkeiten
+       desselben Tons ist eine Bewegung. */
+    --ok-bright:#6fcf4a;
+    --warn-bright:#f6c477;
+
+    /* Der Host-Streifen (Issue #89): eine Farbe je Knoten, damit ein Blick
+       sagt, welcher Thread wo sitzt. Die vier Töne sitzen in der Mitte der
+       vier größten Lücken der Zustandspalette (36° · 103° · 206° · 282° · 8°),
+       also je ~34° von der nächsten Zustandsfarbe entfernt — keiner liegt auf
+       einem Zustand. Die Helligkeit ist gestaffelt (L* 80 · 68 · 56 · 46),
+       damit zwei Töne auch ohne Farbkanal auseinanderfallen; das ist die
+       zweite Hälfte der Graustufen-Zusage, die erste ist das Muster.
+       `--host-N-wash` ist dieselbe Tinte bei 30 %: der Grund unter dem Muster,
+       damit ein gepunkteter oder schraffierter Streifen seinen Ton behält.
+       Kontraste gegen `--surface` in docs/dashboard-design.md §3. */
+    --host-1:#56dbc5; --host-1-wash:rgba(86,219,197,.30);
+    --host-2:#9fad58; --host-2-wash:rgba(159,173,88,.30);
+    --host-3:#bd6c9b; --host-3-wash:rgba(189,108,155,.30);
+    --host-4:#6964b0; --host-4-wash:rgba(105,100,176,.30);
+
+    /* Typo-Skala: sechs Stufen, Untergrenze 12 px. Nichts darunter. */
+    --t-xs:12px;  /* Spaltenköpfe, Einheiten, Tooltips */
+    --t-s:13px;   /* Tabellenzellen, Sekundärtext */
+    --t-m:14px;   /* Fließtext */
+    --t-l:17px;   /* Knotenname */
+    --t-xl:20px;  /* Abschnittstitel, Kennzahl */
+
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --radius:10px;
+  }
+
+  *,*::before,*::after{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--bg);
+    background-image:radial-gradient(1100px 460px at 18% -12%,rgba(111,157,255,.07),transparent 70%);
+    background-repeat:no-repeat;
+    color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
+    font-size:var(--t-m);
+    line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1440px;margin:0 auto;padding:var(--s6) var(--s6) 56px}
+  .mono{font-family:var(--mono);font-size:var(--t-s)}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+  code{font-family:var(--mono);font-size:var(--t-xs);color:var(--fg-2)}
+
+  /* ── Tabs (issue #56) ───────────────────────────────────────────────────── */
+  /* Vier Tabs statt einer 2 785 px langen Seite. Die Leiste klebt am
+     Seitenkopf, damit man beim Scrollen (besonders im Verlauf, der kein eigenes
+     Scrollfenster mehr hat) noch sieht, in welchem Tab man ist: sie braucht
+     dafür einen deckenden Grund, sonst scrollt der Inhalt durch sie hindurch.
+     `--tabbar-h` ist die gemessene Höhe der Leiste (44 px Knopf + 1 px Rand,
+     bei 1440 px Fensterbreite) — `.log thead th` rückt um genau diesen Wert
+     nach unten, damit die Spaltenköpfe unter der Leiste kleben und nicht
+     dahinter verschwinden. Der Wert steht hier als Variable und nicht in der
+     Regel, weil er sich mit der Typo-Skala ändert, nicht mit dem Log. */
+  :root{--tabbar-h:45px}
+  .tabs{position:sticky;top:0;z-index:20;display:flex;flex-wrap:nowrap;gap:2px;
+        margin:var(--s5) 0 0;background:var(--bg);
+        border-bottom:1px solid var(--line);
+        /* Kein Umbruch: die Leiste ist `--tabbar-h` hoch, und ein zweiter
+           Streifen würde die Spaltenköpfe des Verlaufs um genau diese Höhe
+           falsch stellen. Auf einem schmalen Fenster scrollt sie waagerecht. */
+        overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+  .tabs button{appearance:none;-webkit-appearance:none;background:none;border:0;
+        border-bottom:2px solid transparent;border-radius:0;
+        font:inherit;font-size:var(--t-s);font-weight:600;letter-spacing:.02em;
+        color:var(--fg-3);padding:10px 14px;min-height:44px;cursor:pointer;
+        white-space:nowrap}
+  .tabs button:hover{color:var(--fg-2);background:var(--surface)}
+  .tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--ok-bright)}
+  .tabs button:focus-visible{outline:2px solid var(--ok-bright);outline-offset:-2px}
+  /* Ein Panel ist ein Tab: `hidden` ist die Wahrheit, nicht eine Klasse — und
+     es muss auch dann greifen, wenn ein Panel einmal `display:grid` bekommt. */
+  .tab-panel{margin-top:var(--s5)}
+  .tab-panel[hidden]{display:none}
+  .tab-panel > :first-child{margin-top:0}
+
+  /* ── Kopf ───────────────────────────────────────────────────────────────── */
+  .masthead{display:flex;justify-content:space-between;align-items:center;gap:var(--s5);
+            padding-bottom:var(--s4);border-bottom:1px solid var(--line)}
+  /* Wortmarke — der einzige dekorative Ton der Seite (design §3, §4).
+     40 px, Rubik Microbe, Cap-Höhe 28 px; Sperrung bewusst eng, die Textur
+     braucht keine Luft zwischen den Buchstaben. Das Salbeigrün steht hier und
+     nirgends sonst: auf einem Datenelement trägt Farbe Zustand, nie Schmuck. */
+  h1{margin:0;font-family:'Rubik Microbe',-apple-system,BlinkMacSystemFont,sans-serif;
+     font-size:40px;font-weight:400;letter-spacing:.02em;line-height:1.05;
+     color:#9BBA7D;text-transform:uppercase}
+  .tagline{margin:6px 0 0;color:var(--fg-3);font-size:var(--t-s);letter-spacing:.01em}
+  /* Sprache, Beschriftung und Uhr in einer Zeile (#57): darunter stand die
+     Herkunft in drei Zeilen und machte den Kopf 163 px hoch, obwohl die
+     Wortmarke nur 67 braucht. */
+  .snapshot{text-align:right;flex:0 0 auto;display:flex;align-items:center;
+            gap:var(--s4);justify-content:flex-end;flex-wrap:wrap}
+  .snap-when{display:flex;align-items:baseline;gap:8px}
+  /* Sprachwahl oben rechts (issue #17): Emoji-Flagge + Eigenname der Sprache.
+     Kein Icon-Set (FA-22) — die Flagge ist die Emoji-Sequenz, die das
+     System-Font als Flagge zeichnet. */
+  /* Kein Abstand nach unten mehr (#57): der Wähler stand unter der Uhr, der
+     12-px-Rand war der Abstand zum Label darunter. In einer Zeile schiebt er
+     den Wähler um 12 px aus der Mitte. */
+  .lang{display:flex;justify-content:flex-end}
+  .lang select{font:inherit;font-size:var(--t-xs);letter-spacing:.02em;
+    color:var(--fg-2);background:var(--surface-2);
+    border:1px solid var(--line-2);border-radius:6px;
+    padding:3px 6px;cursor:pointer;max-width:11em}
+  .lang select:hover{color:var(--fg);border-color:var(--line-3)}
+  .lang select:focus-visible{outline:2px solid var(--ok-bright);outline-offset:1px}
+  .snap-label{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:.10em;color:var(--fg-3);font-weight:600}
+  .snap-time{font-size:var(--t-l);font-weight:600;letter-spacing:.01em;margin-top:2px}
+  /* Nicht sichtbar: der Text ist der Tooltip der Uhr (siehe `snapWhen` in
+     `dashboard.js`). `display:none` hält ihn aus dem Layout, `textContent`
+     bleibt lesbar. */
+  .snap-src{display:none}
+
+  /* ── Legende: das Zustandssystem, einmal ausgeschrieben ─────────────────── */
+  /* Sieben Zustände seit #70 (`draining` und `disabled` kamen dazu). Mit den
+     fünf festen Spalten von vorher fielen die beiden in eine zweite Zeile —
+     60 px Höhe auf einem Tab, der bei 1440 × 1000 ohnehin zu lang ist (#77).
+     Die Spaltenzahl *ist* die Breite eines Eintrags: eine Spalte je Zustand
+     ergibt bei 1440 px 179 px je Eintrag (1 325 px innen, 6 × 12 px Abstand).
+     Das reicht für die breiteste Marke (`maintenance`, 113 px) und für das
+     längste Wort einer Erklärung (63 px); die Erklärung darf umbrechen, die
+     Marke nicht. Kleiner wird nichts: 12-px-Untergrenze, Form und Farbtoken je
+     Zustand bleiben, wie sie sind. Unter 1440 px ist Umbruch erlaubt und
+     richtig — vier Spalten unter 1100 px, zwei unter 900 px. */
+  .legend{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--s3);
+          margin:var(--s5) 0 0;padding:var(--s3) var(--s4);background:var(--surface);
+          border:1px solid var(--line);border-radius:var(--radius)}
+  .legend-item{display:flex;flex-direction:column;gap:3px;min-width:0}
+  .legend-def{font-size:var(--t-xs);color:var(--fg-3);line-height:1.35}
+  .legend-note{grid-column:1/-1;margin-top:2px;padding-top:var(--s2);border-top:1px solid var(--line);
+               font-size:var(--t-xs);color:var(--fg-3)}
+
+  /* ── Zustandsmarke ──────────────────────────────────────────────────────── */
+  .state{display:inline-flex;align-items:center;gap:7px;padding:3px 10px 3px 8px;
+         border-radius:999px;border:1px solid;font-size:var(--t-xs);font-weight:600;
+         letter-spacing:.01em;line-height:1.5;white-space:nowrap}
+  [data-state="healthy"]{--c:var(--ok);--c-bg:var(--ok-bg);--c-bd:var(--ok-bd)}
+  [data-state="loading"]{--c:var(--load);--c-bg:var(--load-bg);--c-bd:var(--load-bd)}
+  [data-state="degraded"]{--c:var(--warn);--c-bg:var(--warn-bg);--c-bd:var(--warn-bd)}
+  [data-state="maintenance"]{--c:var(--maint);--c-bg:var(--maint-bg);--c-bd:var(--maint-bd)}
+  [data-state="down"]{--c:var(--down);--c-bg:var(--down-bg);--c-bd:var(--down-bd)}
+  /* Die beiden Betreiber-Zustände aus Issue #70 — eigene Farbe und eigene Form
+     seit #79. `draining` ist weiß (`--fg`): der Knoten läuft aus, er ist nicht
+     krank. `disabled` ist das Grau von `--fg-3`: stillgelegt, nicht kaputt.
+     Kontrast auf dem Panel (`--surface`, #12161c): weiß 15,3:1, grau 4,9:1 —
+     eine 9-px-Form braucht 3:1. */
+  [data-state="draining"]{--c:var(--fg);--c-bg:var(--fg-bg);--c-bd:var(--fg-bd)}
+  [data-state="disabled"]{--c:var(--fg-3);--c-bg:var(--fg3-bg);--c-bd:var(--fg3-bd)}
+  .state{color:var(--c);background:var(--c-bg);border-color:var(--c-bd)}
+  /* Form: sieben Zustände, sieben Erscheinungen — gefüllter Kreis, halber
+     Kreis, gefülltes Dreieck, offenes Quadrat, Tropfen, Kreuz, hohles Dreieck.
+     Auch in Graustufen und für Rot-Grün-Schwäche unterscheidbar; die Paarung
+     (Silhouette, Füllung) ist bei keinem Zustand doppelt
+     (`test_every_state_has_its_own_shape`). */
+  .glyph{position:relative;width:9px;height:9px;flex:0 0 auto;display:inline-block}
+  [data-state="healthy"] .glyph{background:var(--c);border-radius:50%}
+  [data-state="loading"] .glyph{border-radius:50%;
+      background:conic-gradient(var(--c) 0 50%,transparent 50% 100%);
+      box-shadow:inset 0 0 0 1.5px var(--c)}
+  [data-state="degraded"] .glyph{background:var(--c);clip-path:polygon(50% 0,100% 100%,0 100%)}
+  [data-state="maintenance"] .glyph{border:1.5px solid var(--c);border-radius:1px;background:transparent}
+  /* `draining` ist ein Tropfen: eine Ecke der 9-px-Box bleibt spitz, die anderen
+     drei sind rund; um 45° gedreht zeigt die Spitze nach unten. Der Knoten läuft
+     aus, er fällt nicht aus — weiß, nicht rot. */
+  [data-state="draining"] .glyph{background:var(--c);border-radius:50% 50% 50% 0;
+      transform:rotate(-45deg)}
+  [data-state="down"] .glyph::before,[data-state="down"] .glyph::after{
+      content:"";position:absolute;left:0;top:3.5px;width:9px;height:2px;background:var(--c);
+      border-radius:1px}
+  [data-state="down"] .glyph::before{transform:rotate(45deg)}
+  [data-state="down"] .glyph::after{transform:rotate(-45deg)}
+  /* `disabled` ist dasselbe Dreieck wie `degraded`, aber nur als Kontur: zwei
+     Umrisse in einem Pfad, der innere gegenläufig gewickelt, sodass die Fläche
+     offen bleibt. Die nonzero-Regel tut das ohne `fill-rule`-Argument — das
+     trägt nicht jeder Browser, die Gegenläufigkeit schon. */
+  [data-state="disabled"] .glyph{background:var(--c);
+      clip-path:path("M4.5 0L9 9L0 9Z M4.5 3.4L1.8 7.6L7.2 7.6Z")}
+
+  /* ── Abschnitte ─────────────────────────────────────────────────────────── */
+  section{margin-top:var(--s6)}
+  .block-head{display:flex;align-items:baseline;gap:var(--s3);margin-bottom:var(--s3);
+              flex-wrap:wrap}
+  h2{margin:0;font-size:var(--t-xl);font-weight:600;letter-spacing:-.005em;color:var(--maint)}
+  /* Die Abschnittsnummer trägt einen Ring und steht mit ihm und dem Titel in
+     `--maint` — der Lilie des Zustands `maintenance`, nicht im Orange von
+     `degraded` (#19). Hauptabschnitte (1…6) sind ein Zeichen breit und werden
+     durch `min-width:height` zum Kreis; Unterabschnitte (2.1, 6.1…6.6) sind
+     breiter und bekommen dieselbe Form als Ellipse: gleiche Höhe, gleicher
+     1-px-Rahmen, die Breite folgt dem Text. Gilt auch für die Nummer der
+     Klappzeile, die nicht in einem <h2> steht. */
+  .idx{color:var(--maint);font-weight:600;margin-right:8px;font-variant-numeric:tabular-nums;
+       display:inline-flex;align-items:center;justify-content:center;
+       min-width:1.7em;height:1.7em;padding:0 .45em;border:1px solid var(--maint);
+       border-radius:999px;line-height:1}
+  .hint{margin:0;color:var(--fg-3);font-size:var(--t-s)}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+  /* Acht Spalten brauchen engeren Innenabstand als drei. Gilt für Kopf und
+     Körper gemeinsam, sonst stünden die Zahlen nicht mehr unter ihrer Einheit.
+     Werte und Knotennamen bleiben einzeilig: eine umbrochene Zeile wäre
+     doppelt so hoch wie die Spalte breit ist. */
+  #models th,#models td{padding-left:8px;padding-right:8px}
+  #models td.num,#models td:nth-child(2){white-space:nowrap}
+
+  /* ── Host-Streifen (Issue #89) ──────────────────────────────────────────── */
+  /* Ein Streifen am linken Rand jedes Blocks, der zu einem Host gehört: die
+     Flottenkarte, der Speicherbalken, der Balken in der Verteilung, die
+     Thread-Zeile. Farbe **und** Muster leiten sich aus der `node_id` ab
+     (`hostSlot()` in dashboard.js), nie aus dem Index der Liste — sonst malte
+     ein Knoten, der den Pool verlässt, alle anderen um, und das Gedächtnis des
+     Betreibers („M3 ist der grüne") wäre nach jedem Neustart falsch.
+
+     Sechs Pixel im vorhandenen Innenabstand (`--s4` = 16 px): der Streifen
+     bekommt keinen eigenen Platz, die Karte wächst um keinen Pixel. Er ist
+     `aria-hidden` — der Name des Knotens steht weiter im Text, der Streifen
+     macht das Scannen schneller und ersetzt den Namen nicht.
+
+     Farbe trägt die Botschaft nie allein (§6): zu jedem Ton gibt es vier
+     Muster, und `data-slot` (0…15) legt beides fest — `slot % 4` den Ton, das
+     Muster `(slot / 4 + Ton) % 4`. Die Drehung ist der Punkt: zwei Knoten mit
+     demselben Ton bekommen **nie** dasselbe Muster. Zwei Knoten mit
+     verschiedenem Ton trennt zusätzlich die Helligkeit (L* 80 · 68 · 56 · 46);
+     teilen sie sich ein Muster, bleiben 1,43:1 dazwischen. Der Streifen liegt
+     am Blockrand, nie im Zustandsbereich: Chip, Punkt und Dreieck bleiben die
+     einzigen Träger der sieben Knotenzustände. */
+  .host-stripe{position:absolute;left:0;top:0;bottom:0;width:6px;display:block;
+               pointer-events:none;background:var(--hc);
+               border-radius:4px 0 0 4px}
+  .host-stripe[data-tone="1"]{--hc:var(--host-1);--hcw:var(--host-1-wash)}
+  .host-stripe[data-tone="2"]{--hc:var(--host-2);--hcw:var(--host-2-wash)}
+  .host-stripe[data-tone="3"]{--hc:var(--host-3);--hcw:var(--host-3-wash)}
+  .host-stripe[data-tone="4"]{--hc:var(--host-4);--hcw:var(--host-4-wash)}
+  /* Die drei gemusterten Fassungen liegen auf der 30-%-Wäsche ihres Tons: die
+     Tinte zeichnet das Muster, der Grund hält den Ton. `solid` ist die volle
+     Tinte. */
+  .host-stripe[data-pattern="hatch"]{background-color:var(--hcw);
+    background-image:repeating-linear-gradient(45deg,var(--hc) 0 2px,transparent 2px 5px)}
+  .host-stripe[data-pattern="dots"]{background-color:var(--hcw);
+    background-image:radial-gradient(var(--hc) 1.2px,transparent 1.4px);
+    background-size:5px 5px}
+  .host-stripe[data-pattern="lines"]{background-color:var(--hcw);
+    background-image:repeating-linear-gradient(0deg,var(--hc) 0 2px,transparent 2px 5px)}
+  /* Der Streifen braucht einen positionierten Block. `.card` und
+     `.thread-item` hatten keinen — `position:relative` ändert an ihrem Raster
+     nichts, es gibt dem absolut gesetzten Kind nur seinen Bezugsrahmen. */
+  .card.host,.thread-item{position:relative}
+  /* Im Balken wird KEIN Streifen gezeichnet. Er trug den Knoten-Ton, damit der
+     Balken ihn auch unter der Füllung zeigt — nur: der Balken beginnt auf
+     derselben Flucht wie der 6-px-Kartenstreifen (gemessen 19.11. bei 756 und
+     1440 px: Karte x 32, Streifen x 33..39, Balken x 33). Die Markierung lag
+     damit AUF dem Streifen, der den Ton schon trägt, und fügte einer Schraffur
+     eine solide Linie hinzu — als Artefakt gelesen, nicht als Marke. Der Ton
+     kommt vom Kartenstreifen, der Balken bleibt ein Balken. */
+  .mem .bar > .host-stripe{display:none}
+  .dtrack > .host-stripe{width:3px;border-radius:2px 0 0 2px;z-index:1}
+  /* Die Zielmarke der Verteilung ist eine 2-px-Marke über der ganzen Spur; sie
+     bleibt sichtbar, auch wenn sie bei 0 % auf dem Streifen sitzt. */
+  .dtrack i.tk{z-index:2}
+  .thread-item > .host-stripe{width:4px;border-radius:3px 0 0 3px}
+
+  /* ── Flottenkarten ──────────────────────────────────────────────────────── */
+  .fleet{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s5)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+        padding:var(--s4) var(--s4) 0}
+  .host-head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--s4);
+             padding-bottom:var(--s3)}
+  .host-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+  h3{margin:0;font-size:var(--t-l);font-weight:650;letter-spacing:-.01em}
+  .role{font-size:var(--t-xs);color:var(--fg-3);text-transform:uppercase;letter-spacing:.08em;
+        font-weight:600}
+  /* Herkunft des Knotens (Issue #70): config.yaml oder Overlay. Klein und ohne
+     Farbe — es ist eine Auskunft, keine Warnung. */
+  .host-src{font-size:var(--t-xs);color:var(--fg-3);letter-spacing:.02em;
+            border:1px solid var(--line);border-radius:999px;padding:1px 8px;
+            white-space:nowrap;cursor:help}
+  .host-src[data-src="overlay"]{border-style:dashed}
+  /* Der deklarierte Standort gegen den abgeleiteten (Issue #67): eine Zeile,
+     kein Werkzeugtip — der Widerspruch ist die ganze Nachricht. */
+  .site-warn{font-size:var(--t-xs);color:var(--warn);background:var(--warn-bg);
+        border:1px solid var(--warn-bd);border-radius:999px;padding:1px 7px;
+        white-space:nowrap}
+  .host-addr{text-align:right;flex:0 0 auto}
+  .addr{color:var(--fg-2);font-size:var(--t-xs)}
+  .addr-note{display:block;font-size:var(--t-xs);color:var(--fg-3);margin-top:2px}
+
+  /* Speicher: ein Vorrat gegen eine Decke, nicht ein Haarstrich. */
+  .mem{padding:var(--s3) 0 var(--s3);border-top:1px solid var(--line)}
+  .mem-top{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);
+           margin-bottom:var(--s2)}
+  .lbl{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:.09em;color:var(--fg-3);
+       font-weight:600}
+  .mem-amount{font-size:var(--t-l);font-weight:600;letter-spacing:-.01em}
+  .mem-amount .unit{font-size:var(--t-xs);font-weight:500;color:var(--fg-3);margin-left:3px}
+  .mem-amount .of{font-size:var(--t-xs);font-weight:500;color:var(--fg-3);margin:0 6px}
+  .mem-amount .cap{color:var(--fg-2);font-weight:500}
+  .mem-right{display:block;text-align:right}
+  .mem-est{display:block;font-size:var(--t-xs);color:var(--fg-3);margin-top:3px;
+           font-variant-numeric:tabular-nums}
+  .bar{position:relative;height:14px;border-radius:4px;background:var(--surface-3);
+       box-shadow:inset 0 0 0 1px var(--line-2)}
+  /* Der Balken trägt seinen Verlauf weiter, aber in der Farbe der Ladephase:
+     `0deg` läuft nach oben, also steht der dunklere Schritt unten und `--load`
+     — genau der Ton der `loading`-Marke — oben. Der Glanz an der Innenkante
+     bleibt; er ist es, was den Balken als Balken lesbar macht (#19). */
+  .bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:3px;
+             background:linear-gradient(0deg,var(--load-deep),var(--load));
+             box-shadow:inset 0 1px 0 rgba(255,255,255,.22)}
+  .bar .fill.joint{border-radius:3px 0 0 3px}
+  .bar .fill.over{background:linear-gradient(0deg,#c94a34,#f07a66)}
+  /* Schätzungsüberschuss: die Strecke, die nur die Schätzung behauptet — im
+     selben Farbton, als Alpha statt als zweite Farbe. */
+  .bar .est{position:absolute;top:0;bottom:0;border-radius:0 3px 3px 0;
+            background:repeating-linear-gradient(45deg,rgba(90,169,230,.60) 0 2px,transparent 2px 6px)}
+  .bar .est.over{background:repeating-linear-gradient(45deg,rgba(240,122,102,.60) 0 2px,transparent 2px 6px)}
+  .bar .danger{position:absolute;top:0;bottom:0;right:0;border-radius:0 3px 3px 0;
+               background:repeating-linear-gradient(135deg,rgba(232,163,61,.30) 0 3px,transparent 3px 7px)}
+  .bar .hard{position:absolute;top:-3px;bottom:-3px;width:0;
+             border-left:1px dashed rgba(232,163,61,.85)}
+  .bar .limit{position:absolute;right:-1px;top:-4px;bottom:-4px;width:2px;border-radius:1px;
+              background:var(--line-3)}
+  .mem-foot{display:flex;justify-content:space-between;gap:var(--s3);margin-top:7px;
+            font-size:var(--t-xs);color:var(--fg-3)}
+
+  /* Kennzahlen der Karte: vier gleich breite Zellen (Variante 3 aus Handover 5).
+     Die Slots-Zelle trägt seit #80 zwei Zahlen in einer Zeile — das Gewicht und
+     die relative Last. Beide Wörter zusammen sind in einer Viertel-Karte (150 px
+     bei 1440) nicht in jeder Sprache unterzubringen: griechisch „στόχος 100 % ·
+     φόρτος 100 %“ ist 171 px, russisch und polnisch fehlten 19/17 px. Deshalb
+     steht in der Zeile nur die Zahl; das Wort steht im Tooltip der Zelle
+     (`fleet.relative_load` sagt „Last", `tip.relative_load` erklärt sie).
+     Ungleiche Spalten (`auto`/`1fr`) hätten das gelöst, aber die zwei
+     Host-Karten wären dann nicht mehr pixelgleich — die Karten sind das
+     Vergleichsbild, also bleiben die Spalten gleich. */
+  .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s3);
+           padding:var(--s3) 0;border-top:1px solid var(--line)}
+  .metric{min-width:0}
+  .metric-lbl{font-size:var(--t-xs);color:var(--fg-3);letter-spacing:.02em;white-space:nowrap;
+              overflow:hidden;text-overflow:ellipsis}
+  .metric-val{font-size:var(--t-xl);font-weight:600;letter-spacing:-.015em;line-height:1.25;
+              margin-top:1px}
+  .metric-val .den{font-size:var(--t-s);font-weight:500;color:var(--fg-3);letter-spacing:0}
+  .metric-sub{font-size:var(--t-xs);color:var(--fg-3);margin-top:1px;white-space:nowrap;
+              overflow:hidden;text-overflow:ellipsis}
+  /* Die relative Last neben dem Gewicht (issue #80): dieselbe Zeile, dieselbe
+     Größe — sie darf die Karte nicht wachsen lassen, und bei 1440 px ist der
+     Platz durch den Fahrtenschreiber verbraucht. Tabellarische Ziffern, damit
+     die Zahl beim 2-s-Patch nicht springt; das `—` ist keine 0. */
+  .metric-sub .rel{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+  .metric-sub .rel.none{color:var(--fg-3)}
+  /* Die Messung des Servers (issue #98): eine Zeile über die volle Kartenbreite
+     unter den vier gleich breiten Zellen. Fünf gleich breite Spalten hätten die
+     vier bestehenden Zellen von 160 auf 125 px verschmälert — genau der Grund,
+     aus dem #80 die relative Last zu einer nackten Zahl gemacht hat; die Zeile
+     kostet 22 px Höhe und keine Breite. Sie ist trotzdem eine Spalte der Karte:
+     dieselbe Beschriftung, derselbe Wert, dieselbe Unterzeile, nur in einer
+     Zeile statt in dreien. */
+  .metrics .metric.wide{grid-column:1/-1;display:grid;
+                        grid-template-columns:auto auto minmax(0,1fr);
+                        align-items:baseline;gap:var(--s3);
+                        border-top:1px dashed var(--line);padding-top:8px}
+  .metrics .metric.wide .metric-val{margin-top:0}
+  .metrics .metric.wide .metric-sub{margin-top:0;text-align:right}
+  .host-foot{display:flex;flex-wrap:wrap;gap:0 var(--s3);padding:10px 0 11px;
+             border-top:1px solid var(--line);font-size:var(--t-xs);color:var(--fg-3)}
+  .host-foot span{white-space:nowrap}
+
+  /* ── Fahrtenschreiber je Knoten (issue #83) ─────────────────────────────── */
+  /* Zwei Linien über das Fenster: durchgezogen = total, gestrichelt = per
+     thread. Die Strichart trägt die Aussage, nicht die Farbe — in Graustufen
+     (und für Rot-Grün-Schwäche) bleiben die beiden an `solid`/`dash`
+     unterscheidbar; die Farbe ist die zweite, leisere Auskunft. 14 px Kopf
+     (Einheit links, Legende mittig, Fenster rechts) + 34 px Fläche = 48 px:
+     die Höhe, die der Flotten-Tab an dieser Stelle hat, ohne zu wachsen. Kein
+     Gitternetz, keine Skalenstriche — die Achse trägt nur, was eine Zahl hat. */
+  .spark{padding:0 0 6px}
+  .spark-head{display:flex;align-items:center;gap:10px;height:14px;
+              font-size:var(--t-xs);line-height:1;color:var(--fg-3);white-space:nowrap}
+  .spark-unit{font-variant-numeric:tabular-nums}
+  .spark-leg{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden}
+  .spark-key{display:inline-flex;align-items:center;gap:5px;color:var(--fg-2)}
+  /* Die Marke in der Legende hat dasselbe Muster wie die Linie: 2 px Strich,
+     bei `dash` 4 px an / 3 px aus — der Rhythmus aus `stroke-dasharray`. */
+  .sw{display:inline-block;width:16px;height:0;border-top:2px solid currentColor}
+  .sw.dash{height:2px;border-top:0;
+           background-image:repeating-linear-gradient(90deg,currentColor 0 4px,transparent 4px 7px)}
+  .spark-win{margin-left:auto;font-variant-numeric:tabular-nums}
+  /* Der Zeiger auf der Fläche (#102): die Zahl steht in der Kopfzeile neben
+     ihrer Marke — dieselbe Zeile, dieselbe Höhe, kein Kasten über der Form.
+     `tabular-nums` hält die Breite beim Wandern ruhig, damit die Kopfzeile
+     nicht bei jedem Bucket zappelt. */
+  .spark-v{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+  /* Ein 1-px-Fadenkreuz im gedämpften Vordergrundton: es zeigt die x-Position,
+     nicht den Wert — der Wert steht oben. `non-scaling-stroke` hält den Strich
+     bei 1 px, obwohl der viewBox gestreckt wird. */
+  .spark-cross{stroke:var(--fg-3);stroke-width:1;pointer-events:none}
+  .spark-plot{display:block;width:100%;height:34px;margin-top:2px}
+  .spark-line{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+  .spark-line.total{stroke:var(--load)}
+  .spark-line.per_thread{stroke:var(--fg-3);stroke-dasharray:4 3}
+
+  /* ── Kennzahlenleiste ───────────────────────────────────────────────────── */
+  .kpis{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;
+        background:var(--line);border:1px solid var(--line);border-radius:var(--radius);
+        overflow:hidden;margin-top:var(--s5)}
+  .kpi{background:var(--surface);padding:var(--s3) var(--s4)}
+  .kpi-lbl{font-size:var(--t-xs);color:var(--fg-3);letter-spacing:.02em;white-space:nowrap}
+  .kpi-val{font-size:var(--t-xl);font-weight:600;letter-spacing:-.015em;line-height:1.3}
+  .kpi-val .den{font-size:var(--t-s);font-weight:500;color:var(--fg-3)}
+  .kpi-sub{font-size:var(--t-xs);color:var(--fg-3);white-space:nowrap;overflow:hidden;
+           text-overflow:ellipsis}
+
+  /* ── 2 Verteilung: ein Block je Modell, nebeneinander ───────────────────── */
+  /* Seit #73 teilt sich `2` die Zeile nicht mehr mit der Thread-Registry (die
+     hat einen eigenen Tab): was bleibt, ist der Vergleich der Modelle
+     untereinander. `auto-fit` legt sie nebeneinander, solange ein Block seine
+     Mindestbreite bekommt — bei 1440 px sind das zwei Blöcke zu je 660 px,
+     ein dritter Modellblock geht in die zweite Zeile. Unter 900 px stapeln sie
+     (siehe Media-Query): dort sind zwei halbe Spalten zwei unlesbare Spalten.
+
+     Die Spur ist seit #80 oben begrenzt (`660px` statt `1fr`): ein Modell mit
+     Arbeit bekam vorher die ganze Zeile — 1361 px Block, 1061 px Balken für
+     eine Zahl zwischen 0 und 100 %, und der Betreiber las die Zeile wie ein
+     Lineal. Was rechts frei bleibt, ist gewollt: zwei Blöcke teilen sich die
+     Zeile, ein einzelner bleibt schmal.
+     `width:max-content` ist der Grund, warum rechts keine graue Fläche steht:
+     `--line` ist der Grund des Containers, und der Container endet jetzt an
+     der letzten Spur statt am Rand der Seite (gemessen: rechts vom Block steht
+     die Seite, `#12161c`/`#0b0d11`, nicht `--line`). `max-width:100%` hält den
+     Leer-Hinweis davon ab, die Seite zu schieben. */
+  #dist{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,660px));
+        gap:1px;background:var(--line);overflow:hidden;
+        width:max-content;max-width:100%}
+  /* Die Blöcke tragen die Fläche, die Lücke zwischen ihnen ist die Haarlinie —
+     so stimmt die Trennung bei zwei Blöcken, bei dreien und in der zweiten
+     Zeile, ohne dass eine Regel zählen muss, wer in welcher Spalte steht. */
+  #dist > .dist-block{background:var(--surface)}
+  /* Ein einzelner Block (keine Modelle mit Arbeit) nimmt die ganze Zeile —
+     sonst sähe die halbe Spalte daneben wie ein fehlender Block aus. */
+  #dist > .dist-solo{grid-column:1/-1}
+
+  /* ── Tabellen ───────────────────────────────────────────────────────────── */
+  table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--t-s)}
+  /* Kopfband: genau eine Zelle je Datenspalte — Beschriftung oben, Einheit
+     darunter. `vertical-align:bottom` hält alle Unterzeilen auf einer Linie;
+     vorher lief die Unterzeile der breiten Größenspalte nach links unter die
+     Nachbarspalte, weil sie nirgends umbrechen durfte. */
+  thead th{background:var(--surface-2);text-align:left;padding:9px 10px 8px;
+           border-bottom:1px solid var(--line-2);vertical-align:bottom}
+  /* Die schmalen Spalten (Marker, Zähler) stossen sonst fast berührungslos
+     aneinander: eine Haarlinie trennt die Kopfzellen, ohne den Datenkörper
+     zu zerschneiden. */
+  thead th + th{box-shadow:inset 1px 0 0 var(--line)}
+  .th-main{display:block;font-size:var(--t-xs);font-weight:600;text-transform:uppercase;
+           letter-spacing:.075em;color:var(--fg-2);white-space:nowrap}
+  /* Umbruch statt Überlauf: eine Unterzeile bleibt in ihrer Spalte. */
+  .th-sub{display:block;font-size:var(--t-xs);font-weight:400;color:var(--fg-3);
+          letter-spacing:.01em;text-transform:none;margin-top:1px;
+          white-space:normal;overflow-wrap:break-word}
+  th.num{text-align:right}
+  th.num .th-main,th.num .th-sub{text-align:right}
+  tbody td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  /* `live / capability` (#30): the second half of a tok/s cell is the calibrated
+     capability, and it has to read as the denominator — the same quieter tone the
+     cards give `inflight 3 / 6`, not a second measured value. */
+  tbody td .den{color:var(--fg-3);font-weight:500}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover td{background:rgba(255,255,255,.022)}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+  .model-cell{font-family:var(--mono);font-size:var(--t-s);color:var(--fg);
+              overflow:hidden}
+  /* Der Modellname kürzt weiter mit „…“, jetzt auf seiner eigenen Zeile: über
+     ihm steht seit #23 das Schloss, und eine Zeile mit zwei Blöcken kann nicht
+     mehr am `td` abgeschnitten werden. Das Abzeichen „nicht routbar“ wandert
+     mit in die Zeile, damit es wie bisher an den Namen anschließt. */
+  .model-line{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* ── Das Schloss des Locks (Betreiberaktion, issue #23) ─────────────────── */
+  /* Eine Zeile ist ein (Modell, Knoten)-Paar, der Lock gilt aber je Modell —
+     deshalb steht das Schloss in der Modellzelle, linksbündig über dem Namen,
+     und nicht in der Knotenspalte. Offen ist es `--ok` (RIPPLE darf verdrängen),
+     geschlossen `--down`, und der Modellname nimmt dann die Farbe der
+     Ladephase (`--load`): das Modell ist gesperrt, nicht kaputt. Kein Icon-Set
+     (FA-22) — das SVG bringt seine Pfade mit und nimmt die Farbe aus
+     `currentColor`, also aus diesen Regeln. Keine Animation: für das Schloss
+     gibt es nichts zu blinken, und `prefers-reduced-motion` bleibt unberührt. */
+  /* 26 px statt 13 (Betreiberkorrektur 16.11.: „winzig") und optisch höher.
+     `top` verschiebt nur die Malposition, nicht den Fluss; das negative
+     `margin-bottom` nimmt dem Modellnamen genau die Höhe wieder weg, die das
+     größere Icon ihm sonst nach unten zuschieben würde. Mehr als 9 px nach oben
+     geht nicht: die Zelle hat oben 5 px Innenabstand und der Knopf sitzt 4,6 px
+     darunter — bei 15 px (4 mm) malt das Schloss in die Zeile darüber. */
+  .model-lock{display:inline-block;position:relative;top:-5px;margin:0 0 -11px;padding:0;border:0;
+              background:none;color:var(--ok);line-height:0;cursor:pointer}
+  .model-lock svg{display:block}
+  .model-lock[data-locked="1"]{color:var(--down)}
+  /* Ohne Admin-Schlüssel sichtbar, aber wirkungslos — der Tooltip sagt warum. */
+  .model-lock[aria-disabled="true"]{cursor:not-allowed;opacity:.55}
+  .model-lock[data-locked="1"] ~ .model-line .model-name{color:var(--load)}
+  tr.group-start td{border-top:2px solid var(--line-2)}
+  tr.group-start:first-child td{border-top:0}
+  tr.dim td{color:var(--fg-3)}
+  tr.dim .model-cell{color:var(--fg-2)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle}
+  .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(87,166,57,.14)}
+  .dot.off{box-shadow:inset 0 0 0 1.5px var(--line-3);background:transparent}
+
+  /* ── Phase: was der Knoten gerade tut (issue #18) ───────────────────────── */
+  /* Ein Punkt, der blinkt, sagt etwas über *jetzt*: `pp`, solange eine Anfrage
+     zwischen Auslieferung und erstem Token steht, `tg`, solange Token strömen.
+     1 Hz, die hellere Hälfte 500 ms in **demselben** Farbton — Orange ist der
+     Ton von `degraded` (Prefill heißt warten), Grün der von `healthy` (es
+     fließt). Die beiden helleren Töne stehen als `--ok-bright` /
+     `--warn-bright` neben ihren Grundtönen, damit „heller" eine benannte Stufe
+     ist und kein ausgedachter Hex-Wert mitten in den Keyframes. Kein `step()`:
+     der Übergang ist eine Bewegung, kein Schalter. */
+  .dot[data-phase="pp"]{background:var(--warn);box-shadow:0 0 0 3px rgba(232,163,61,.14);
+                        animation:ripple-phase-pp 1s linear infinite}
+  .dot[data-phase="tg"]{background:var(--ok);box-shadow:0 0 0 3px rgba(87,166,57,.14);
+                        animation:ripple-phase-tg 1s linear infinite}
+  /* Der Punkt der Gesundmarke rechts vom Knotennamen läuft auf derselben Uhr und
+     ist immer grün: er sagt „mindestens ein Modell dieses Knotens arbeitet",
+     nicht welches und nicht in welcher Phase. Nur an der `healthy`-Marke — an
+     `loading`, `degraded` oder `down` trägt der Glyph schon eine eigene Form. */
+  [data-state="healthy"][data-phase] .glyph{animation:ripple-phase-tg 1s linear infinite}
+  @keyframes ripple-phase-pp{
+    0%,49.9%{background:var(--warn);box-shadow:0 0 0 3px rgba(232,163,61,.14)}
+    50%,100%{background:var(--warn-bright);box-shadow:0 0 0 3px rgba(232,163,61,.34)}
+  }
+  @keyframes ripple-phase-tg{
+    0%,49.9%{background:var(--ok);box-shadow:0 0 0 3px rgba(87,166,57,.14)}
+    50%,100%{background:var(--ok-bright);box-shadow:0 0 0 3px rgba(87,166,57,.34)}
+  }
+  .divider-row td{background:var(--surface-2);padding:7px 10px;font-size:var(--t-xs);
+                  text-transform:uppercase;letter-spacing:.09em;color:var(--fg-3);
+                  font-weight:600;border-bottom:1px solid var(--line-2)}
+  /* „nicht routbar“ ist ein Ausfall dieses (Modell, Knoten)-Paares und trägt
+     deshalb das Rot des Zustands `down` — dieselbe Farbe wie die Marke oben,
+     nicht das neutrale Grau von vorher (#19). */
+  .badge{display:inline-block;padding:1px 7px;border-radius:999px;background:var(--down-bg);
+         border:1px solid var(--down-bd);font-size:var(--t-xs);color:var(--down);font-weight:500;
+         letter-spacing:0;text-transform:none}
+  /* Der Wrapper scrollt, statt zu schneiden: eine Kopfzelle, die nicht in ihre
+     Spalte passt, laeuft sonst in die Nachbarspalte (#53 — Griechisch
+     "Κατάσταση" in einer 74-px-Spalte, das Panel bekam davon einen
+     horizontalen Balken). Die Spaltenbreiten in `dashboard.js` sind die
+     gemessenen Maxima ueber alle sechzehn Sprachen; wird eine Sprache breiter
+     als ihre Spalte, ist ein Balken die ehrliche Antwort und kein Ueberlauf. */
+  .table-wrap{padding:0;overflow-x:auto;overflow-y:hidden;border-radius:var(--radius)}
+  /* Acht Spalten mit Ueberschriften in sechzehn Sprachen: 714 px fest plus
+     mindestens 126 px fuer den Modellnamen. Unter 840 px scrollt der Block,
+     statt die Modellspalte auf null zu quetschen; darueber nimmt sie den Rest. */
+  #models table{min-width:840px}
+  /* Block 2.1 (Auslastung je Host, #33): sieben Zahlenspalten. Mit der
+     Standard-Polsterung (2 × 10 px) und 0.075em Sperrung passte
+     "COMPLETION-TOKENS" nicht in seine Kopfzelle — die Zelle lief 2 px über,
+     `.table-wrap{overflow:hidden}` schnitt den Rest ab (#37). Enger gepolstert
+     und weniger gesperrt, damit das Wort ohne Umbruch passt. Seit #73 steht der
+     Block über die volle Breite; die Polsterung bleibt, sie war nie der Grund. */
+  #load thead th,#load tbody td{padding-left:6px;padding-right:6px}
+  #load .th-main{letter-spacing:.03em}
+  /* Anteilsbalken (#38): die fünf Zustände als ein Balken je Zeile, Breite =
+     Anteil am abgetasteten Fenster. Die Farben sind die der Zustands-Marken,
+     damit der Balken ohne Legende lesbar bleibt; Leerlauf ist neutral, weil er
+     keine Arbeit ist. Ein Zustand mit 0 s bekommt kein Segment — ein 0-%-Strich
+     sähe nach Messung aus. */
+  /* Zwei Spalten in 2.1 (#40): Balken links, Arbeitstabelle rechts. Untereinander
+     war der Block über die ganze Seitenbreite gestreckt für drei Zahlenspalten. */
+  #load .load-split{display:grid;grid-template-columns:minmax(0,2.2fr) minmax(0,1fr);
+                    gap:var(--s5);align-items:start;padding:0 var(--s4)}
+  #load .load-main,#load .load-side{min-width:0}
+  #load .load-side{padding-top:var(--s3)}
+  /* Legende links, Umschalter rechts in derselben Zeile: der Schalter gehört zu
+     den Balken, nicht über die Tabelle. */
+  #load .load-legendrow{display:flex;align-items:center;justify-content:space-between;
+                        gap:var(--s4);border-bottom:1px solid var(--line);
+                        padding-bottom:var(--s3)}
+  #load .load-tools{display:flex;flex:0 0 auto}
+  /* Der Umschalter ist ein Zustand, kein Aufruf: gedrückt = ausgeschlossen. */
+  #load .load-toggle{padding:2px 9px;font-size:var(--t-xs);color:var(--fg-3);
+                     border-color:var(--line-2)}
+  #load .load-toggle:hover{color:var(--fg);border-color:var(--line-3)}
+  #load .load-toggle[aria-pressed="true"]{color:var(--fg);background:var(--surface-3);
+                                          border-color:var(--line-3)}
+  /* Das untere Padding ist um den Absatz der Summenzeile gekürzt (#102/#106):
+     die Summe steht 8 px tiefer als ihre Teile, und der Block wächst deshalb
+     nicht — 12 + 4 + 8 ist dasselbe wie 12 + 12. */
+  #load .loadbars{display:flex;flex-direction:column;gap:9px;
+                  padding:var(--s3) 0 calc(var(--s3) - 8px)}
+  #load .loadrow{display:grid;grid-template-columns:104px minmax(0,1fr) 168px;
+                 align-items:center;gap:14px}
+  #load .lr-name{font-family:var(--mono);font-size:var(--t-s);color:var(--fg);
+                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Die Summenzeile ist die lauteste Zeile, nicht die leiseste (#102). Sie war
+     `--fg-2` mit `opacity:.7` am Balken: die Summe also leiser als ihre Teile,
+     und weil die Deckkraft am Container hing, wurde auch die leere Spur
+     mitgeblasst. Der Name liest in `--fg`, der Balken trägt keine eigene Farbe.
+     Getrennt wird sie durch eine **Achse**, nicht durch ein weiteres Neutral
+     (#106): der 1-px-Ring in `--fg-2` (#a8b2c0) stand gegen den idle-Anteil in
+     `--fg-3` (#7b8694) — beides unbunt, 45 Luminanzstufen Unterschied, aber ein
+     dünner grauer Strich um eine zu 70–80 % graue Fläche gruppiert sich mit ihr.
+     Statt dessen: 8 px Abstand und eine 1-px-Linie in `--line-3` (#46505e) über
+     die volle Zeilenbreite. Die Linie sitzt **im** Abstand (`top:-8px`, absolut
+     positioniert), kostet also kein Layout — ein `border-top` würde die Zeile um
+     1 px verschieben; `margin-top:8px` wird aus dem unteren Padding des Blocks
+     bezahlt. Die Segmentfarben bleiben unverändert. */
+  #load .loadrow.total{margin-top:8px;position:relative}
+  #load .load-sum-rule{position:absolute;left:0;right:0;top:-8px;height:1px;
+                       background:var(--line-3);pointer-events:none}
+  #load .lr-lead{font-size:var(--t-xs);color:var(--fg-2);text-align:right;
+                 white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #load .lr-lead b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
+  #load .loadbar{display:flex;height:14px;border-radius:3px;overflow:hidden;
+                 background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--line)}
+  #load .loadbar .seg{display:block;height:100%;transition:filter .12s}
+  #load .loadbar .seg:hover{filter:brightness(1.35)}
+  #load .loadbar.empty{background:repeating-linear-gradient(
+      135deg,var(--surface-3) 0 6px,var(--surface-2) 6px 12px)}
+  #load .loadlegend{display:flex;flex-wrap:wrap;gap:6px 16px}
+  #load .lg{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-xs);
+            color:var(--fg-3);cursor:default}
+  #load .lg i{display:block;width:9px;height:9px;border-radius:2px}
+  /* Prefill trägt das Warn-Orange, nicht das Blau der Ladephase: Laden und
+     Prefill sind beide „der Knoten arbeitet, liefert aber noch nichts" — zwei
+     Blautöne nebeneinander waren im Balken nicht zu unterscheiden (#39). */
+  .seg-idle{background:var(--fg-3)}
+  .seg-loading{background:var(--load)}
+  .seg-prefill{background:var(--warn)}
+  .seg-decode{background:var(--ok)}
+  .seg-mixed{background:var(--maint)}
+
+  /* ── Verteilung ─────────────────────────────────────────────────────────── */
+  .dist-block{padding:var(--s4)}
+  .dist-head{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s2);
+             margin-bottom:10px}
+  .dist-name{font-family:var(--mono);font-size:var(--t-s);color:var(--fg);
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dist-count{font-size:var(--t-xs);color:var(--fg-3);white-space:nowrap}
+  /* Sechs Spalten seit #91: der Slot-Anteil heißt jetzt `thread share` (er
+     zählt Threads, nicht Arbeit) und daneben steht die zweite, ehrliche Zahl —
+     Requests je (Knoten, Modell) im Fenster.
+
+     Die Breiten sind gemessen, nicht geschätzt: die Kopfwörter sind in 16
+     Sprachen unterschiedlich lang, und der längste Kopf einer Spalte setzt ihre
+     Mindestbreite (12 px, Sperrung 0). Gemessen in allen 16 Katalogen:
+     Knoten 80 (`Csomópont`), Requests 81 (`Solicitudes`), Ziel 70 (`Docelowy`),
+     Ist 88 (`Rzeczywisty`), Abweichung 94 (`Scostamento`) — je 1 px Luft.
+     Vorher standen hier 60/62/62/96, damit liefen `Skutečnost` (+29 px),
+     `Πραγματικό` (+24), `Rzeczywisty` (+34) und `Csomópont` (+27) schon in acht
+     Sprachen über, ohne dass es jemand gemessen hatte. Bezahlt wird das vom
+     Balken, nicht von der Lesbarkeit: er behält `minmax(0,1fr)` und ist bei
+     660 px Block noch ~170 px breit. Die Spalte „Knoten" bleibt bei 81 px: ein
+     Knotenname ist kurz und kürzt mit Auslassung. */
+  .dist-row{display:grid;grid-template-columns:81px minmax(0,1fr) 82px 71px 89px 95px;
+            gap:var(--s2);align-items:center;margin-bottom:4px}
+  /* Spaltenkopf der Verteilung: eine Zelle je Zahl, wie in der Modelltabelle.
+     Vorher stand die Abweichung zwischen den Wörtern „Ziel" und „Ist" und las
+     sich dadurch wie der Zielwert; jetzt hat jede Zahl ihre eigene Beschriftung
+     und ihre eigene Einheit. Kopf und Körper tragen dasselbe Raster — sonst
+     stünde keine Zahl unter ihrer Einheit. */
+  .dist-cols{display:grid;grid-template-columns:81px minmax(0,1fr) 82px 71px 89px 95px;
+             gap:var(--s2);align-items:end;padding-bottom:5px;margin-bottom:6px;
+             border-bottom:1px solid var(--line);font-size:var(--t-xs);color:var(--fg-3)}
+  /* Keine Sperrung, nur hier: die fünf Kopfwörter sind die breiteste Zelle
+     ihrer Spalte, und `.06em` kostet 0,72 px je Zeichen — bei `Rzeczywisty`
+     sind das 8 px, die dem Balken fehlen (#91). Die Schriftgröße bleibt bei
+     `--t-xs` (12 px): kleiner wäre unter der Typoskala (§4). */
+  .dist-cols .dc b{display:block;font-size:var(--t-xs);font-weight:600;color:var(--fg-2);
+                   text-transform:uppercase;letter-spacing:0;line-height:1.3;
+                   white-space:nowrap}
+  .dist-cols .num,.dist-cols .num b{text-align:right}
+  .dist-cols .key{display:block;margin-top:1px;line-height:1.3}
+  .dist-host{font-size:var(--t-s);color:var(--fg-2);white-space:nowrap;
+             overflow:hidden;text-overflow:ellipsis}
+  /* Kein belegter Slot: statt eines leeren Balkens steht hier der Grund (#91).
+     Der Balken misst den Anteil an den belegten Slots — ohne einen einzigen
+     gibt es nichts zu füllen, und ein leerer Balken sähe aus wie 0 % Ist. */
+  .dist-why{font-size:var(--t-s);color:var(--fg-3);font-style:italic;
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dtrack{position:relative;height:9px;border-radius:3px;background:var(--surface-3);
+          box-shadow:inset 0 0 0 1px var(--line)}
+  .dtrack i.a{position:absolute;left:0;top:0;bottom:0;border-radius:2px;display:block;
+              background:linear-gradient(0deg,var(--load-deep),var(--load));min-width:2px}
+  /* Zielmarke: 2 px breit und über die Spur hinaus, damit sie auch bei 0 % und
+     100 % nicht im Rand verschwindet. */
+  .dtrack i.tk{position:absolute;top:-3px;bottom:-3px;width:2px;margin-left:-1px;
+               border-radius:1px;background:var(--fg);display:block;
+               box-shadow:0 0 0 1px var(--surface)}
+  .dval{text-align:right;font-variant-numeric:tabular-nums;font-size:var(--t-s);
+        color:var(--fg)}
+  .dval.plain{color:var(--fg-3)}
+  .delta{display:inline-block;padding:0 5px;border-radius:4px;font-size:var(--t-xs);
+         font-variant-numeric:tabular-nums;border:1px solid;white-space:nowrap}
+  .delta.off{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-bd)}
+  .delta.on{color:var(--fg-3);background:transparent;border-color:var(--line-2)}
+  /* Kein belegter Slot, kein Ist-Anteil: der Block sagt das, statt 100 % und
+     0 % aus einer Division durch null zu zeigen. */
+  .dist-empty{padding:2px 0 6px;font-size:var(--t-s);color:var(--fg-3)}
+  .dist-empty b{color:var(--fg-2);font-weight:600}
+  .dist-note{margin-top:10px;padding-top:9px;border-top:1px solid var(--line);
+             font-size:var(--t-xs);color:var(--fg-3);line-height:1.5}
+  .dist-note b{color:var(--fg-2);font-weight:600}
+
+  /* ── Thread-Registry ────────────────────────────────────────────────────── */
+  /* Zwei Spalten seit #80: sieben Threads in einer Spalte waren 1374 px breit
+     und 440 px hoch — die Zeile trug einen Schlüssel, zwei Chips und viel Luft,
+     sonst nichts. `column-count` füllt spaltenweise, nicht zeilenweise: vier
+     Blöcke stehen 2×2, sieben stehen 4+3 (linke Spalte voll, rechte kürzer),
+     und die Lesereihenfolge bleibt die der Liste — von oben nach unten, dann
+     die rechte Spalte. Ein Raster mit `grid-auto-flow:column` müsste dafür die
+     Zeilenzahl kennen; die Spalten hier tun das von selbst, weil sie nach Höhe
+     ausgleichen. `break-inside:avoid` ist die Bedingung dafür, dass kein Block
+     über die Spaltengrenze zerteilt wird (ein Thread ist ein Block, keine
+     Fortsetzung). Unter 1200 px eine Spalte — siehe Media-Query. */
+  #threads{column-count:2;column-gap:1px;column-rule:1px solid var(--line)}
+  #threads > .thread-item{break-inside:avoid}
+  .thread-item{padding:var(--s4)}
+  /* Die Zeile trug ihre drei Stücke mit `space-between`: die mittlere
+     Beschriftung (`interactive · header`) stand dort, wo gerade Platz übrig
+     war, und wanderte mit der Länge des Schlüssels und der Breite des
+     Schlüssel-Chips um bis zu 17 px hin und her (#80, gemessen: 462 px neben
+     445 px). Jetzt sind es drei Rasterspalten: der Schlüssel nimmt den Rest und
+     kürzt, die mittlere Beschriftung hat 132 px — die breiteste misst 125 px —,
+     der Schlüssel-Chip hat dieselben 132 px und steht rechts. Beide festen
+     Spalten sind so breit wie ihr breitester Inhalt, damit keine Zelle die
+     andere schiebt: die mittlere Spalte steht in jeder Zeile und in beiden
+     Spalten des Tabs an derselben Stelle. Ein längerer Schlüsselname wird
+     gekürzt statt die Spalte zu weiten — dieselbe Regel wie beim Schlüssel
+     selbst. */
+  .th-top{display:grid;grid-template-columns:minmax(0,1fr) 132px 132px;
+          gap:var(--s2);align-items:center}
+  .th-top > .chip:not(:last-child){justify-self:start}
+  .th-top > .chip:last-child{justify-self:end;max-width:100%;overflow:hidden;
+                             text-overflow:ellipsis}
+  /* Der Schlüssel ist das breiteste Kind der Zeile und kann nicht schrumpfen:
+     bei 800 px Panelbreite lief die Zeile 4 px über, bei 760 px 24 (#58). Er
+     kürzt jetzt mit Auslassung (`minmax(0,1fr)`, seit #80 eine Rasterspalte),
+     die Zeile bleibt in ihrer Spalte. */
+  .th-key{font-family:var(--mono);font-size:var(--t-s);color:var(--fg-2);
+          min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .th-top > *{min-width:0}
+  .chip{display:inline-block;padding:1px 7px;border-radius:4px;background:var(--surface-3);
+        border:1px solid var(--line-2);font-size:var(--t-xs);color:var(--fg-2);white-space:nowrap}
+  .th-model{font-family:var(--mono);font-size:var(--t-s);color:var(--fg);margin-top:7px;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Der Modellname eines arbeitenden Threads steht im healthy-Grün (#69): der
+     Slot, an dem gerade eine Anfrage hängt, ist auf einen Blick zu sehen, ohne
+     die Metazeile zu lesen. Gemessen statt angenommen: `--ok` (#57a639) misst
+     5,98:1 gegen `--surface` (#12161c, der Grund des Panels) und liegt damit
+     über der 4,5-Grenze für Text — `--ok-bright` (9,25:1) bleibt der LED und
+     dem Blinken vorbehalten. Das Attribut setzt der Renderer; es fehlt bei
+     einem ruhenden Thread, deshalb nur `[data-busy="true"]`. */
+  .thread-item[data-busy="true"] .th-model{color:var(--ok)}
+  .th-meta{font-size:var(--t-xs);color:var(--fg-3);margin-top:5px;display:flex;flex-wrap:wrap;
+           gap:0 10px}
+  /* Die Felder der Metazeile werden auf die Hoehe des Loeschknopfs gestreckt
+     (25 px statt 17 px). Ein `.tip` zeichnet seine punktierte Unterkante am
+     Rand seines Kastens: als direktes Kind der Flex-Zeile also 9 px unter dem
+     Text, waehrend die Werte daneben (deren `.tip` innen sitzt) die Linie am
+     Text tragen (#55, #57). Deshalb steckt der Tipp jedes Feldes in einem
+     eigenen `<span>` — der wird gestreckt, die Linie bleibt am Text. Die
+     Unterkante gehoert nie auf das Flex-Kind. */
+
+  /* ── Entscheidungsstrom ─────────────────────────────────────────────────── */
+  /* Seit #56 im eigenen Tab `Verlauf`: kein eigenes Scrollfenster mehr, die
+     Seite scrollt. Die Spaltenköpfe kleben unter der Tab-Leiste
+     (`--tabbar-h`), nicht am Fensterrand — sonst lägen sie dahinter. */
+  .log{padding-bottom:var(--s2)}
+  /* Die Spaltenbreiten (#101): gemessen wie die der Modelltabelle — Griechisch
+     braucht 92 px für „Κατάσταση", Russisch 126 für die Dauer, der Prompt 84.
+     Die achte Spalte (sid) nimmt ihre Breite von der Modellspalte, die `auto`
+     bleibt. Sie stehen hier und nicht inline im `colgroup`, weil die schmale
+     Regel unten sie überschreiben muss; mit `table-layout:fixed` ist die Summe
+     der festen Breiten die Tabelle. */
+  .log col.c-time{width:104px}
+  .log col.c-model{width:auto}
+  .log col.c-sid{width:168px}
+  .log col.c-node{width:100px}
+  .log col.c-reason{width:116px}
+  .log col.c-prompt{width:84px}
+  .log col.c-dur{width:126px}
+  .log col.c-status{width:96px}
+  /* Die Kurzform des Thread-Schlüssels ist ein Bezeichner, kein Satz: Mono,
+     eine Zeile, und was nicht passt, wird ausgelassen — der volle Schlüssel
+     steht im `title` und im Tooltip. 168 px halten auch den längsten Fall
+     (`gwk_a69118d#6684d451`, gemessen 144,5 px) ohne Auslassung. */
+  .log .sid{font-family:var(--mono);font-size:var(--t-xs);color:var(--fg-2);
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:help}
+  /* Kein Treffer heißt eine Zeile Text, nicht ein verschwindender Block: die
+     Tabelle behält Kopf und Fuß, damit die Fläche beim Tippen nicht springt. */
+  .log-none td{padding:14px 12px;font-size:var(--t-xs);color:var(--fg-3)}
+  /* Die Filterleiste (#101) steht in der Shell über dem Panel, nicht darin: ein
+     Feld in `#log` würde bei jedem 2-s-Patch ersetzt und verlöre Text und
+     Cursor. Drei Felder in einer Zeile, die auf schmalen Fenstern umbricht. */
+  .log-filters{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;
+               margin:0 0 var(--s3)}
+  .lf{display:flex;flex-direction:column;gap:2px;font-size:var(--t-xs);
+      color:var(--fg-3);min-width:0}
+  .lf-label{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:.08em;
+            color:var(--fg-3);font-weight:600}
+  .lf input,.lf select{font:inherit;font-size:var(--t-xs);background:var(--surface-2);
+        color:var(--fg);border:1px solid var(--line-2);border-radius:6px;
+        padding:4px 8px}
+  .lf input{width:20ch;font-family:var(--mono)}
+  .lf select{max-width:18ch;cursor:pointer}
+  .lf input:focus-visible,.lf select:focus-visible{
+        outline:2px solid var(--ok-bright);outline-offset:1px}
+  .lf-hint{margin-left:auto;align-self:center}
+  .log thead th{position:sticky;top:var(--tabbar-h);z-index:3;background:var(--surface-2);
+                box-shadow:inset 0 -1px 0 var(--line-2)}
+  .log tbody td{padding:5px 10px}
+  .log .t{font-variant-numeric:tabular-nums;color:var(--fg-2);white-space:nowrap}
+  .log .m{font-family:var(--mono);font-size:var(--t-xs);color:var(--fg);
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dur{display:flex;align-items:center;justify-content:flex-end;gap:7px}
+  .dur-track{display:block;position:relative;width:46px;height:3px;border-radius:2px;
+             background:var(--surface-3);flex:0 0 auto}
+  /* Die Dauer ist 3 px hoch: ein Verlauf wäre darauf nicht zu sehen, sie nimmt
+     die flache Farbe der Ladephase (#19, vorher `--accent`). */
+  .dur-track i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--load);
+               opacity:.55;display:block;min-width:2px}
+  .st{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+  .st::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
+  .st.bad::before{background:var(--down)}
+  .st.warn::before{background:var(--warn)}
+  .log-foot{display:flex;flex-wrap:wrap;gap:0 var(--s4);padding:10px 12px;
+            border-top:1px solid var(--line);background:var(--surface-2);
+            font-size:var(--t-xs);color:var(--fg-3);
+            border-radius:0 0 var(--radius) var(--radius)}
+  .log-foot b{color:var(--fg-2);font-weight:600}
+
+  /* ── Tooltip ────────────────────────────────────────────────────────────── */
+  /* Das Element ist nur der Zielbereich: gepunktete Unterstreichung und der
+     Hilfe-Zeiger. Der Kasten selbst ist `#tip-layer` am <body>, positioniert
+     von `dashboard.js`. Warum kein Pseudo-Element mit `attr()` in `content`:
+     ein Pseudo-Element wird von jedem `overflow:hidden`-Vorfahren abgeschnitten
+     (die Modelltabelle und das Entscheidungslog sind genau das), es hängt am
+     Hover-Zustand eines Knotens, den der 2-s-Patch ersetzen kann, und `attr()`
+     in `content` verhält sich nicht in jedem Browser gleich. Der Text kommt aus
+     demselben `data-tip`, das die Tests prüfen. */
+  .tip{position:relative;cursor:help;border-bottom:1px dotted var(--line-3)}
+  .tip:hover{border-bottom-color:var(--fg-3)}
+  /* Zelle als Ganzes ist der Hover-Zielbereich; nur die Zahl wird markiert. */
+  .tip.cell{border-bottom:0;cursor:help}
+  .tip.cell .metric-val,.tip.cell .kpi-val{border-bottom:1px dotted var(--line-3)}
+  .tip.cell:hover .metric-val,.tip.cell:hover .kpi-val{border-bottom-color:var(--fg-3)}
+  #tip-layer{
+    position:fixed;left:0;top:0;z-index:200;
+    width:max-content;max-width:320px;
+    background:#080a0e;color:var(--fg);border:1px solid var(--line-3);border-radius:8px;
+    padding:9px 11px;font-size:var(--t-xs);font-weight:400;line-height:1.45;
+    letter-spacing:0;text-transform:none;text-align:left;white-space:pre-line;
+    box-shadow:0 14px 34px rgba(0,0,0,.65);
+    pointer-events:none;display:none;
+  }
+  #tip-layer.on{display:block}
+  .tip .src{color:var(--fg-3)}
+
+  /* ── Fuß ────────────────────────────────────────────────────────────────── */
+  footer{margin-top:44px;padding-top:var(--s4);border-top:1px solid var(--line);
+         font-size:var(--t-xs);color:var(--fg-3);display:flex;flex-wrap:wrap;gap:4px 18px}
+
+  /* ── Umbruch: eine Spalte statt gequetschter Spalten ────────────────────── */
+
+  /* ── Was der Umbau ergänzt ──────────────────────────────────────────────── */
+  /* Banner: eine Fähigkeit fehlt (FA-18) oder der Betreiber hat etwas
+     abgeschaltet. Oben, weil es den Rest der Seite erklärt. */
+  .banners{display:flex;flex-direction:column;gap:var(--s2);margin-top:var(--s5)}
+  .banners:empty{display:none}
+  .banner{border:1px solid var(--warn-bd);background:var(--warn-bg);color:var(--warn);
+          padding:9px 12px;border-radius:8px;font-size:var(--t-s)}
+
+  /* Ladephase eines Knotens (docs/loading-state-contract.md §8): eigener
+     Streifen in der Karte, in der Farbe des Zustands `loading`. */
+  .loading{display:flex;flex-wrap:wrap;gap:0 10px;padding:9px 0;border-top:1px solid var(--line);
+           font-size:var(--t-xs);color:var(--load)}
+  .loading b{font-weight:600}
+  .loading .src{color:var(--fg-3)}
+  .card .btn{margin-left:2px}
+
+  /* ── Wartung (Betreiberaktion, issue #10) ───────────────────────────────── */
+  /* Eigener Streifen am Fuß der Karte, wie der Ladestreifen: Zustand links,
+     die drei Vorgaben und „beenden“ rechts. Ein gesetztes Fenster färbt die
+     Beschriftung in `--maint` — derselbe Ton wie der Zustand `maintenance` im
+     Chip und die Abschnittstitel, damit „Wartung“ überall dieselbe Farbe hat
+     (#19; vorher stand hier das Orange von `degraded`). */
+  .maint{display:flex;flex-direction:column;gap:4px;padding:9px 0 10px;
+         border-top:1px solid var(--line);font-size:var(--t-xs);color:var(--fg-3)}
+  .maint-row{display:flex;align-items:baseline;gap:0 var(--s3);flex-wrap:wrap}
+  .maint-lbl{text-transform:uppercase;letter-spacing:.075em;font-weight:600;color:var(--fg-2)}
+  .maint.on .maint-lbl{color:var(--maint)}
+  .maint .maint-drain{color:var(--warn);font-weight:600}
+  .maint .maint-done{color:var(--ok);font-weight:600}
+  .maint-btns{margin-left:auto;display:flex;flex-wrap:wrap;gap:4px}
+  .maint-why{color:var(--fg-3)}
+
+  /* ── Modell-Policy (Betreiberaktion, issue #11) ─────────────────────────── */
+  /* Das Feld sitzt in der Knotenzelle, weil der Zustand je (Modell, Knoten)
+     gilt: eine Zeile, eine Auswahl. Ein gesetzter Zustand färbt Beschriftung
+     und Rahmen im Warn-Ton — dieselbe Farbe wie `maintenance` im Chip, damit
+     „nicht im Normalbetrieb“ überall gleich aussieht. */
+  .node-name{display:block}
+  .pol-sel{display:block;width:100%;margin-top:3px;font:inherit;font-size:var(--t-xs);
+           background:var(--surface-2);color:var(--fg-2);border:1px solid var(--line-2);
+           border-radius:5px;padding:1px 2px;cursor:pointer}
+  .pol-sel:hover:not(:disabled){border-color:var(--line-3)}
+  .pol-sel:disabled{color:var(--fg-3);border-color:var(--line);cursor:not-allowed}
+  .pol-sel:not([data-level=""]):not(:disabled){color:var(--warn);border-color:var(--maint-bd)}
+  /* Ohne Schlüssel: ein Satz über der Tabelle statt eines Dutzends toter Felder. */
+  .pol-why{padding:8px 10px;border-bottom:1px solid var(--line);font-size:var(--t-xs);
+           color:var(--fg-3)}
+
+  /* ── Kalibrierung (Betreiberaktion, docs/loading-state.md §6.1) ─────────── */
+  .btn{font:inherit;font-size:var(--t-xs);background:var(--surface-2);color:var(--fg);
+       border:1px solid var(--line-2);border-radius:6px;padding:3px 9px;cursor:pointer}
+  .btn:hover:not(:disabled){border-color:var(--line-3)}
+  .btn:disabled{color:var(--fg-3);border-color:var(--line);cursor:not-allowed}
+  .calib-panel{margin-top:var(--s3);padding:var(--s4);background:var(--surface);
+               border:1px solid var(--line);border-radius:var(--radius);
+               font-size:var(--t-s);color:var(--fg-2)}
+  .calib-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .calib-line{margin-top:4px;font-size:var(--t-xs);color:var(--fg-3)}
+  .calib-panel table{margin-top:8px;font-size:var(--t-xs)}
+  .calib-panel code{color:var(--fg-2)}
+  .note{margin-top:8px;font-size:var(--t-xs);color:var(--fg-3)}
+  .ok{color:var(--ok)} .bad{color:var(--down)} .warn{color:var(--warn)} .info{color:var(--load)}
+
+  /* ── Replikation (issue #13): Quell-/Zielwahl im Betriebsblock ──────────── */
+  /* Eine Zeile, die umbricht statt zu scrollen: auf einem schmalen Fenster
+     stehen die vier Felder untereinander, die Rückfrage bleibt dieselbe. */
+  .repl-form{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}
+  .repl-field{display:flex;flex-direction:column;gap:2px;font-size:var(--t-xs);
+              color:var(--fg-3)}
+  .repl-field select{font:inherit;font-size:var(--t-xs);background:var(--surface-2);
+                     color:var(--fg);border:1px solid var(--line-2);border-radius:6px;
+                     padding:3px 6px;max-width:260px}
+  /* Das Kästchen hat keinen eigenen Kasten wie ein Auswahlfeld. Es bekommt
+     dessen Höhe (25 px) und sitzt darin mittig — sonst steht sein Label tiefer
+     als die der drei Auswahlfelder daneben (#42). */
+  .repl-check{display:flex;align-items:center;height:25px}
+  .repl-field input[type=checkbox]{margin:0}
+  .repl-actions{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+
+  /* ── Knoten (issue #71) ─────────────────────────────────────────────────── */
+  /* Dieselbe Feldform wie im Replikationsformular, nur eine Zeile höher: die
+     drei Felder stehen in der Shell, damit der 2-s-Patch sie nie anfasst. Die
+     Zeilen der Knotenliste und der Funde brechen auf schmalen Fenstern um,
+     statt waagerecht zu scrollen — der Knopf wandert dann in die nächste
+     Zeile und bleibt am rechten Rand (`margin-left:auto`). */
+  .node-form{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;
+             margin-top:var(--s3)}
+  /* `min-width` in Zeichen, nicht in Pixeln: ein Feld, das unter ~14 Zeichen
+     schrumpft, zeigt seinen Wert nicht mehr (gemessen bei 375 px: der
+     Standort-Auswahl blieben 51 px). Lieber eine Zeile mehr als ein Feld, in
+     dem nichts steht — die Zeile bricht um, sobald sie nicht mehr passt. */
+  .node-field{display:flex;flex-direction:column;gap:2px;font-size:var(--t-xs);
+              color:var(--fg-3);min-width:14ch;flex:0 1 auto}
+  .node-field input,.node-field select{font:inherit;font-size:var(--t-xs);
+        background:var(--surface-2);color:var(--fg);border:1px solid var(--line-2);
+        border-radius:6px;padding:3px 6px;max-width:280px}
+  .node-field input{width:24ch}
+  .node-field input[type=number]{width:8ch}
+  .node-field input:focus-visible,.node-field select:focus-visible{
+        outline:2px solid var(--ok-bright);outline-offset:1px}
+  .node-field input:disabled,.node-field select:disabled{
+        color:var(--fg-3);border-color:var(--line);cursor:not-allowed}
+  .node-facts{margin-top:6px}
+  .node-row{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+            padding:5px 0;border-top:1px solid var(--line);font-size:var(--t-xs)}
+  .node-row:first-child{border-top:0}
+  .node-name{color:var(--fg);font-weight:600}
+  .node-addr{color:var(--fg-2);font-family:var(--mono);overflow-wrap:anywhere}
+  .node-src,.node-inflight{color:var(--fg-3)}
+  .node-remove{margin-left:auto}
+  .node-dialog{margin-top:var(--s4);padding:var(--s4);background:var(--surface);
+               border:1px solid var(--warn-bd);border-radius:8px}
+  .node-msg{margin-top:var(--s3);font-size:var(--t-xs)}
+
+  /* ── Neustart (Betreiberaktion, issue #25) ──────────────────────────────── */
+  /* Ein Knopf, ein Zustand, ein Grund. Der Rahmen trägt den Betreiber-Ton
+     `--maint` wie die Abschnittstitel — dieselbe Aussage wie Wartung, nur eine
+     Ebene höher: der Prozess, nicht ein Knoten. Der Grund, warum der Knopf aus
+     ist, steht als Satz darunter und nicht nur im Tooltip: ein abgeschalteter
+     Knopf ohne Begründung ist eine Sackgasse. */
+  .restart-row{display:flex;align-items:baseline;gap:var(--s3);flex-wrap:wrap}
+  .restart-btn{border-color:var(--maint-bd)}
+  .restart-btn:hover:not(:disabled){border-color:var(--maint)}
+  .restart-state{display:flex;align-items:baseline;gap:0 10px;flex-wrap:wrap;
+                 font-size:var(--t-xs);color:var(--fg-3)}
+  .restart-pending{color:var(--warn);font-weight:600}
+  .restart-why{margin-top:6px;font-size:var(--t-xs);color:var(--fg-3)}
+  .restart-why.bad{color:var(--down)}
+
+  /* ── Betrieb: Kalibrierung und Parameter, eingeklappt ───────────────────── */
+  /* Nicht Teil der FA-22-Übersicht (design §9): Nachschlagewerk und eine
+     Betreiberaktion, die man erst braucht, wenn man sie braucht. */
+  .ops-block{padding-top:var(--s4)}
+  .ops-block + .ops-block{margin-top:var(--s4);border-top:1px solid var(--line)}
+  .ops-block .block-head{margin-bottom:var(--s2)}
+  .ops-block .hint{margin-bottom:var(--s3)}
+
+  /* Die Klappzeile der nicht geladenen Modelle (design §6: Inhalte
+     zusammenklappen ist eine Inhaltsentscheidung für #2). */
+  .divider-row.toggle{cursor:pointer}
+  .divider-row.toggle:hover td{background:var(--surface-3);color:var(--fg-2)}
+  /* Das Dreieck ist die Bedienung, nicht die Beschriftung: es steht VORN, ist
+     größer als der Zeilentext und hellt beim Überfahren auf. Vorher stand es als
+     ▸ am Zeilenende, und die Zeile las sich wie eine Bildunterschrift — der
+     Betreiber hielt die zwanzig nicht geladenen Modelle für verschwunden
+     (gemeldet 19.11.). Die Größe folgt der Lehre aus #19: ein Klappdreieck, das
+     man suchen muss, ist kein Klappdreieck. */
+  .divider-row.toggle .tw{display:inline-block;min-width:1.15em;margin-right:.25em;
+                          font-size:var(--t-l);line-height:1;color:var(--fg-2)}
+  .divider-row.toggle:hover .tw{color:var(--fg)}
+
+  /* ── Parameter: Nachschlagewerk, nicht Übersicht — eingeklappt ──────────── */
+  details.params{margin-top:var(--s6);padding-top:var(--s4);border-top:1px solid var(--line)}
+  /* Klappzeile des Betriebsblocks. Das Dreieck ist der einzige Weg in den Block
+     und war mit 13 px gegen eine 20-px-Überschrift zu klein (#19): es steht
+     jetzt bei 44 px, also gut dreimal die Stufe `--t-s` (39–52 px verlangt).
+     Es bekommt eine eigene Box (`flex:0 0 auto`, eigenes `line-height`), damit
+     die Zeile nicht auseinanderläuft; klickbar bleibt die ganze Zeile, weil das
+     `summary` selbst die Zeile ist. Farbe wie Nummer und Titel: `--maint`. */
+  details.params summary{cursor:pointer;list-style:none;display:flex;align-items:center;
+                         gap:var(--s3);font-size:var(--t-xl);font-weight:600;color:var(--maint)}
+  details.params summary::-webkit-details-marker{display:none}
+  details.params summary::before{content:"▸";color:var(--maint);font-size:44px;line-height:1;
+                                 flex:0 0 auto;align-self:center}
+  details.params[open] summary::before{content:"▾"}
+  details.params[open] summary{margin-bottom:var(--s3)}
+  details.params .hint{font-size:var(--t-xs);font-weight:400;color:var(--fg-3)}
+  details.params table{margin-top:var(--s3);font-size:var(--t-xs)}
+  details.params thead th{padding:6px 10px}
+  details.params td{padding:4px 10px}
+  details.params td:first-child{color:var(--fg-3);white-space:nowrap}
+  details.params td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+  /* Der Parameterblock (#78): drei Spalten hinter den zwei Bezeichnern — Wert
+     in Kraft · Herkunft · Zurücksetzen. Die Breiten stehen im `colgroup` (die
+     Tabelle läuft mit `table-layout:fixed`), die Zellen brechen um, statt die
+     Tabelle zu schieben: `overflow-wrap` ist die Zusage, dass kein Wort breiter
+     ist als seine Spalte — nachgemessen in tests/test_dashboard.py. */
+  details.params .ptable col.c-scope{width:96px}
+  details.params .ptable col.c-param{width:280px}
+  details.params .ptable col.c-source{width:150px}
+  details.params .ptable col.c-reset{width:132px}
+  details.params .ptable th,details.params .ptable td{overflow-wrap:break-word}
+  details.params .ptable td.pv{text-align:right}
+  details.params .ptable td.pv .pval{margin-right:8px;font-variant-numeric:tabular-nums}
+  /* Ein Feld, kein Dialog: die Zahl steht im Wert der Zelle, das Feld daneben
+     trägt denselben Wert in der Schreibweise der Sprache. */
+  details.params .pedit{font:inherit;font-size:var(--t-xs);width:82px;padding:1px 6px;
+                        background:var(--surface-3);color:var(--fg);
+                        border:1px solid var(--line-2);border-radius:6px;
+                        font-variant-numeric:tabular-nums;text-align:right}
+  details.params select.pedit{width:96px;text-align:left}
+  details.params .pedit:focus{outline:none;border-color:var(--accent)}
+  details.params .pedit:disabled{color:var(--fg-3);border-color:var(--line);
+                                 cursor:not-allowed}
+  details.params .pwhy{display:block;color:var(--fg-3);font-size:var(--t-xs)}
+  details.params .perr{display:block;color:var(--down);font-size:var(--t-xs)}
+  details.params .psrc{color:var(--fg-3);font-size:var(--t-xs)}
+  /* „am Feld gesetzt" ist die eine Zelle, die eine Betreiberentscheidung zeigt:
+     sie trägt die Farbe der Betreiberaktionen (`--maint`), nicht die der Datei. */
+  details.params .psrc.page{display:inline-block;padding:0 7px;border-radius:999px;
+                            color:var(--maint);background:var(--maint-bg);
+                            border:1px solid var(--maint-bd)}
+  details.params .pbtn{padding:1px 8px}
+  .params-why{margin:0 0 var(--s2);font-size:var(--t-xs);color:var(--fg-3)}
+  /* Schmal (≤ 1100 px): die vier festen Spalten geben nach, damit die
+     Wertspalte ihr Feld noch halten kann. Die Tabelle scrollt nicht — sie
+     bricht um; ein Feld ist 92 px breit und lässt sich nicht schrumpfen. */
+  @media (max-width:1100px){
+    details.params .ptable col.c-scope{width:72px}
+    details.params .ptable col.c-param{width:168px}
+    details.params .ptable col.c-source{width:108px}
+    details.params .ptable col.c-reset{width:128px}
+  }
+  /* Zwei Verteilungsblöcke stehen nebeneinander, solange jeder seine 380 px
+     bekommt; unter 900 px stapeln sie (#73). Eine Media-Query und keine
+     Mindestbreite allein, damit die Grenze dieselbe ist wie die der Kennzahlen
+     darunter. */
+  /* Der Thread-Tab hat seit #80 zwei Spalten. Unter 1200 px wird eine Spalte
+     daraus: bei 1200 px sind das zwei Spalten zu ~570 px, darunter bliebe vom
+     Schlüssel, zwei Chips und der Modellzeile zu wenig übrig, als dass zwei
+     Spalten mehr Information trügen als eine. */
+  @media (max-width:1200px){
+    #threads{column-count:1}
+  }
+  @media (max-width:1180px){
+    .kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+  }
+  @media (max-width:1100px){
+    .fleet{grid-template-columns:minmax(0,1fr)}
+    .legend{grid-template-columns:repeat(4,minmax(0,1fr))}
+  }
+  @media (max-width:900px){
+    .wrap{padding:var(--s5) var(--s4) 48px}
+    /* 2.1 untereinander: auf einem Telefon sind zwei Spalten zwei halbe Spalten. */
+    #load .load-split{grid-template-columns:minmax(0,1fr)}
+    #load .load-side{padding-top:0}
+    /* 2 Verteilung untereinander: ein Block je Modell, in einer Spalte. */
+    #dist{grid-template-columns:minmax(0,1fr)}
+    /* Die Spalte nimmt die volle Breite: `max-content` (siehe oben) würde den
+       Block hier auf die Breite seines Inhalts schrumpfen — bei 900 px gemessen
+       516 px statt 853 px. Die graue Fläche kann nicht zurückkommen, weil der
+       einzige Block die Zeile füllt. */
+    #dist{width:auto}
+    .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .legend{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s3) var(--s4)}
+    .masthead{flex-direction:column;gap:var(--s3)}
+    .snapshot{text-align:left}
+    .lang{justify-content:flex-start}
+  }
+  @media (max-width:820px){
+    table{font-size:var(--t-xs)}
+    tbody td{padding:5px 6px}
+    thead th{padding:8px 6px}
+    /* Acht Spalten (#101) müssen auch hier ohne waagerechten Balken passen: bei
+       741 px Fenster sind es 692 px Panel. Die festen Breiten geben nach — der
+       Status behält 92 px für „Κατάσταση" bei 12 px, die Dauer 112 —, und die
+       Modellspalte lebt vom Rest. Die sid-Spalte bricht hier um, statt
+       abzuschneiden: `gwk_a69118d#6684d451` ist 144,5 px breit und in 104 px
+       nur als Auslassung zu haben — und das `#fp8` ist genau die Information,
+       die die Spalte trägt (#92). Dieselbe Regel wie beim Modellnamen. */
+    .log col.c-time{width:78px}
+    .log col.c-sid{width:104px}
+    .log col.c-node{width:92px}
+    .log col.c-reason{width:84px}
+    .log col.c-prompt{width:62px}
+    .log col.c-dur{width:112px}
+    .log col.c-status{width:90px}
+    /* Die Großbuchstaben der Spaltenköpfe tragen auf 1440 px eine Sperrung von
+       0,075 em; in acht Spalten auf 692 px kostet sie den Kopfzeilen den Platz,
+       den sie zum Passen brauchen (gemessen: „ДЛИТЕЛЬНОСТЬ" 105 px gesperrt,
+       93 px ungesperrt). Der Kopf bleibt versal, die Sperrung fällt. */
+    .log .th-main{letter-spacing:0}
+    .log .sid{white-space:normal;overflow:visible;overflow-wrap:anywhere;line-height:1.3}
+    /* Dasselbe für das Grund-Token: „model_pinned" ist 79 px breit und in 72 px
+       nur als Auslassung zu haben; umgebrochen bleibt es lesbar, und der Chip
+       trägt seinen Tooltip weiter. */
+    .log .chip{white-space:normal;overflow-wrap:anywhere}
+    .log{overflow-x:auto}
+    .log thead th{position:static}
+    /* Auf schmalen Fenstern bricht der Modellname um, statt abgeschnitten zu werden:
+       ein halber Modellname ist keine Information. */
+    .model-cell,.model-line{white-space:normal;overflow:visible;overflow-wrap:anywhere;line-height:1.3}
+    /* Das Spaltenraster der Modelltabelle bleibt stehen — die Modellspalte gibt
+       die Breite ab, die Unterzeilen bleiben in ihren Spalten. Die zwei
+       Prozent-Spalten geben 4 px ab (58 statt 62), die Spalte der Abweichung
+       bleibt bei 96: ihr Kopf braucht 92. Die Requests-Spalte schrumpft auf
+       56 px (eine vierstellige Zahl braucht 34) und ihr Kopf bricht um, statt
+       aus dem Block zu laufen — auf 400 px ist für „POŽADAVKY" in einer Zeile
+       kein Platz, und ein abgeschnittener Kopf wäre keine Beschriftung (#91). */
+    .dist-row,.dist-cols{grid-template-columns:52px minmax(0,1fr) 56px 58px 58px 96px}
+    .dist-cols .dc b{white-space:normal}
+  }
+  @media (max-width:600px){
+    /* Drei Rasterspalten tragen hier keine drei Stücke mehr: bei 400 px bekäme
+       der Schlüssel 39 px (gemessen) und wäre nur noch eine Auslassung. Die
+       beiden Beschriftungen rücken deshalb in eine zweite Zeile, der Schlüssel
+       hat die erste für sich (210 px statt 39 px bei 400 px). */
+    .th-top{grid-template-columns:minmax(0,1fr) auto;row-gap:var(--s2)}
+    .th-top > .chip:not(:last-child){grid-column:1;grid-row:2}
+    .th-top > .chip:last-child{grid-column:2;grid-row:2}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none!important}
+    /* #18: wer Bewegung abbestellt hat, soll die Phase trotzdem sehen — also
+       kein Blinken, sondern die stehende hellere Färbung. Ohne diese drei Regeln
+       wäre die Information für genau die Leser weg, für die sie gedacht ist. */
+    .dot[data-phase="pp"]{animation:none!important;background:var(--warn-bright);
+                          box-shadow:0 0 0 3px rgba(232,163,61,.34)}
+    .dot[data-phase="tg"]{animation:none!important;background:var(--ok-bright);
+                          box-shadow:0 0 0 3px rgba(87,166,57,.34)}
+    [data-state="healthy"][data-phase] .glyph{animation:none!important;
+                          background:var(--ok-bright);box-shadow:0 0 0 3px rgba(87,166,57,.34)}
+  }

@@ -1,0 +1,12 @@
+# Convenience file for the deployment path, which needs no build backend:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# The authoritative dependency list is [project] in pyproject.toml — keep the
+# two in step when a runtime dependency changes.
+fastapi>=0.110
+uvicorn>=0.27
+httpx>=0.27
+PyYAML>=6.0
+
+# only for the tests (pyproject.toml: [project.optional-dependencies].dev)
+pytest>=8.0
+pytest-asyncio>=0.23
