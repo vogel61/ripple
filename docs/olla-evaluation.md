@@ -2,8 +2,8 @@
 
 **Date:** 14 November 2026
 **Test object:** `thushan/olla` v0.1.0 and v0.0.29 (Apache-2.0, Go)
-**Setup:** Olla as a local process (127.0.0.1) in front of M5-alpha (`localhost:8000`) and
-M3-beta (`192.0.2.12:8000`), both with `type: omlx`.
+**Setup:** Olla as a local process (127.0.0.1) in front of alpha (`localhost:8000`) and
+beta (`192.0.2.12:8000`), both with `type: omlx`.
 **Question:** Does Olla meet the requirements specification — in particular the weighted distribution 3:2?
 
 ---
@@ -54,7 +54,7 @@ Both release zips (`olla_v0.1.0_macos_arm64.zip`, `olla_v0.0.29_macos_arm64.zip`
 contain **no `config/profiles/` directory**. Start therefore fails:
 
 ```
-failed to load endpoints from config: invalid endpoint config for "M5-alpha":
+failed to load endpoints from config: invalid endpoint config for "alpha":
 unsupported endpoint type: omlx, supported types: [llamacpp lm-studio ollama auto]
 ```
 
@@ -215,7 +215,7 @@ Olla itself does not use it.
 | NZ-6 no auth gateway | fulfilled (key is passed through) |
 
 **On the dashboard (FA-22):** The Models tab shows `MODEL | PARAMS | QUANT | SIZE |
-ENDPOINTS | LAST SEEN`. The host column is present (`M3-beta / M5-alpha`), but
+ENDPOINTS | LAST SEEN`. The host column is present (`beta / alpha`), but
 `PARAMS`, `QUANT` and `SIZE` are consistently set to `—`, and there is **no
 display of which models are currently loaded**. Exactly that is the "Active Models"
 section of the oMLX dashboard that should be rebuilt. Olla shows
@@ -225,7 +225,7 @@ availability, not residency.
 
 ## 9. Recommendation
 
-1. **In-house build remains right.** The core of Richard's model — threads stay where
+1. **In-house build remains right.** The core of the operator's model — threads stay where
    they are, new threads are distributed by deficit until 3:2 is reached — is
    not representable in Olla. Not a configuration problem, a design gap.
 2. **Adopt from Olla:**
@@ -249,8 +249,8 @@ availability, not residency.
 ## 10. Appendix: measurement environment
 
 - Olla v0.1.0 and v0.0.29, macOS arm64, ports 40114–40121, loopback
-- M5-alpha: Mac Studio M5 Ultra, 512 GB, `localhost:8000`, ceiling 487,7 GB
-- M3-beta: M3 Ultra, 512 GB, `192.0.2.12:8000`, ceiling 491,3 GB
+- alpha: Mac Studio M5 Ultra, 512 GB, `localhost:8000`, ceiling 487,7 GB
+- beta: M3 Ultra, 512 GB, `192.0.2.12:8000`, ceiling 491,3 GB
 - Residency during the measurements: DeepSeek-V4.1 + Qwen3.5-9B + MarkItDown on both
 - Initial state restored after the tests (M5: DeepSeek + 9B + MarkItDown,
   M3: unchanged), all test processes terminated

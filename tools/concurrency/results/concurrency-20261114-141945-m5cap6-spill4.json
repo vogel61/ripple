@@ -1,0 +1,269 @@
+{
+  "label": "m5cap6-spill4",
+  "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+  "base": "http://localhost:8010/v1",
+  "prompt_tokens_target": 8500,
+  "max_tokens": 128,
+  "started": "2026-11-14T14:17:58",
+  "levels": [
+    {
+      "concurrency": 3,
+      "wall_s": 11.75,
+      "req_s": 0.255,
+      "tok_s": 32.7,
+      "processed_tokens": 28068,
+      "processed_tok_s": 2389.6,
+      "completion_tokens": 384,
+      "errors": [],
+      "hosts": {
+        "beta": {
+          "count": 1,
+          "mean_latency": 11.75,
+          "max_latency": 11.75,
+          "completion_tokens": 128,
+          "prompt_tokens": 9228,
+          "processed_tok_s": 796.5
+        },
+        "alpha": {
+          "count": 2,
+          "mean_latency": 8.1,
+          "max_latency": 8.46,
+          "completion_tokens": 256,
+          "prompt_tokens": 18456,
+          "processed_tok_s": 1593.1
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 11.75
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 8.46
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 7.73
+        }
+      ]
+    },
+    {
+      "concurrency": 6,
+      "wall_s": 34.44,
+      "req_s": 0.174,
+      "tok_s": 22.3,
+      "processed_tokens": 56136,
+      "processed_tok_s": 1630.0,
+      "completion_tokens": 768,
+      "errors": [],
+      "hosts": {
+        "beta": {
+          "count": 3,
+          "mean_latency": 33.91,
+          "max_latency": 34.44,
+          "completion_tokens": 384,
+          "prompt_tokens": 27684,
+          "processed_tok_s": 815.0
+        },
+        "alpha": {
+          "count": 3,
+          "mean_latency": 11.15,
+          "max_latency": 11.42,
+          "completion_tokens": 384,
+          "prompt_tokens": 27684,
+          "processed_tok_s": 815.0
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 34.38
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 34.44
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 32.91
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 11.23
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 11.42
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9228,
+          "completion_tokens": 128,
+          "latency": 10.79
+        }
+      ]
+    },
+    {
+      "concurrency": 9,
+      "wall_s": 45.22,
+      "req_s": 0.199,
+      "tok_s": 25.5,
+      "processed_tokens": 84222,
+      "processed_tok_s": 1862.7,
+      "completion_tokens": 1152,
+      "errors": [],
+      "hosts": {
+        "beta": {
+          "count": 4,
+          "mean_latency": 44.16,
+          "max_latency": 45.21,
+          "completion_tokens": 512,
+          "prompt_tokens": 36920,
+          "processed_tok_s": 827.9
+        },
+        "alpha": {
+          "count": 5,
+          "mean_latency": 17.48,
+          "max_latency": 17.77,
+          "completion_tokens": 640,
+          "prompt_tokens": 46150,
+          "processed_tok_s": 1034.8
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 45.0
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 42.0
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 17.77
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 45.21
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 17.14
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 44.42
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 17.14
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 17.6
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 17.76
+        }
+      ]
+    }
+  ],
+  "config": {
+    "alpha": {
+      "max_inflight": 6,
+      "spill_threshold": 4,
+      "inflight": 0
+    },
+    "beta": {
+      "max_inflight": 6,
+      "spill_threshold": 3,
+      "inflight": 0
+    }
+  },
+  "finished": "2026-11-14T14:19:45",
+  "config_after": {
+    "alpha": {
+      "max_inflight": 6,
+      "spill_threshold": 4,
+      "inflight": 0
+    },
+    "beta": {
+      "max_inflight": 6,
+      "spill_threshold": 3,
+      "inflight": 0
+    }
+  }
+}

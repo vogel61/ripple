@@ -47,7 +47,7 @@ def write_config(tmp_path: Path, *, placement: dict[str, Any] | None = None,
         "listen_host": "127.0.0.1",
         "listen_port": closed_port(),
         "log_level": "warning",
-        "hosts": hosts or [{"name": "M5-alpha", "addresses": ["http://127.0.0.1:8000"],
+        "hosts": hosts or [{"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
                             "weight": 1}],
         "discovery": {"interval_seconds": 3600.0, "timeout_seconds": 2.0},
         "placement": plc,
@@ -73,7 +73,7 @@ def config_with(tmp_path: Path, path: str, value: Any) -> Path:
     """
     parts = path.split(".")
     if parts[0] == "hosts":
-        host: dict[str, Any] = {"name": "M5-alpha",
+        host: dict[str, Any] = {"name": "alpha",
                                 "addresses": ["http://127.0.0.1:8000"], "weight": 1}
         host[parts[-1]] = value
         return write_config(tmp_path, hosts=[host])
@@ -213,7 +213,7 @@ def test_the_allow_list_is_exactly_the_twelve_policy_paths():
 def test_every_editable_field_accepts_a_value_and_lands_in_the_right_place(
         tmp_path, pattern):
     cfg = load_config(write_config(tmp_path))
-    path = pattern.replace("*", "M5-alpha")
+    path = pattern.replace("*", "alpha")
     value = VALID_VALUES[pattern]
 
     effective = policy_value(cfg, path, value)
@@ -223,7 +223,7 @@ def test_every_editable_field_accepts_a_value_and_lands_in_the_right_place(
     # …and it is the live object that changed, not a copy: the registry holds
     # `cfg.affinity` and every HostRuntime holds its HostConfig.
     if pattern.startswith("hosts."):
-        assert getattr(cfg.host("M5-alpha"), pattern.split(".")[-1]) == value
+        assert getattr(cfg.host("alpha"), pattern.split(".")[-1]) == value
     elif pattern.startswith("affinity."):
         assert getattr(cfg.affinity, pattern.split(".")[-1]) == value
 
@@ -232,8 +232,8 @@ def test_every_editable_field_accepts_a_value_and_lands_in_the_right_place(
 # the page and the start-up log say the same thing, so the assertion is string
 # equality with what `load_config` raises for the same value in the file.
 REFUSED: list[tuple[str, Any]] = [
-    ("hosts.M5-alpha.weight", -1),
-    ("hosts.M5-alpha.spill_threshold", 99),
+    ("hosts.alpha.weight", -1),
+    ("hosts.alpha.spill_threshold", 99),
     ("affinity.ttl_seconds", 0),
     ("affinity.match_threshold", 1.5),
     ("affinity.ephemeral_window_seconds", -1),
@@ -264,16 +264,16 @@ def test_a_boolean_field_wants_a_real_boolean(tmp_path):
     """
     cfg = load_config(write_config(tmp_path))
     with pytest.raises(ConfigError) as err:
-        policy_value(cfg, "hosts.M5-alpha.prefer_resident", "false")
+        policy_value(cfg, "hosts.alpha.prefer_resident", "false")
     assert "must be true or false" in str(err.value)
-    assert policy_value(cfg, "hosts.M5-alpha.prefer_resident", True) is True
+    assert policy_value(cfg, "hosts.alpha.prefer_resident", True) is True
 
 
 @pytest.mark.parametrize("path", [
     "listen_port", "listen_host", "log_file", "log_level",
     "auth.admin_key", "auth.enabled",
-    "hosts.M5-alpha.api_key", "hosts.M5-alpha.addresses", "hosts.M5-alpha.node_id",
-    "hosts.M5-alpha.max_threads", "hosts.M5-alpha.models",
+    "hosts.alpha.api_key", "hosts.alpha.addresses", "hosts.alpha.node_id",
+    "hosts.alpha.max_threads", "hosts.alpha.models",
     "affinity.header", "placement.binding_strategy", "placement.loader",
     "nonsense.path",
 ])
@@ -286,8 +286,8 @@ def test_a_path_outside_the_allow_list_is_refused_with_a_reason(path):
 
 
 def test_the_refusal_names_identity_and_transport_as_such():
-    assert "credential" in policy_refusal("hosts.M5-alpha.api_key")
-    assert "identity" in policy_refusal("hosts.M5-alpha.node_id")
+    assert "credential" in policy_refusal("hosts.alpha.api_key")
+    assert "identity" in policy_refusal("hosts.alpha.node_id")
     assert "start-up" in policy_refusal("listen_port")
     assert "orphan" in policy_refusal("affinity.header")
 
@@ -304,24 +304,24 @@ def test_a_policy_override_round_trips_through_the_file(tmp_path):
 
     for dotted, value in (("affinity.ttl_seconds", 900),
                           ("placement.rebind.max_per_hour", 6),
-                          ("hosts.M5-alpha.weight", 2.0)):
+                          ("hosts.alpha.weight", 2.0)):
         overlay.set_path(dotted, policy_value(cfg, dotted, value))
     save_overlay(overlay)
 
     raw = yaml.safe_load((tmp_path / "runtime.yaml").read_text(encoding="utf-8"))
     assert raw["policy"] == {"affinity": {"ttl_seconds": 900},
                              "placement": {"rebind": {"max_per_hour": 6}}}
-    assert raw["hosts"]["overrides"] == {"M5-alpha": {"weight": 2.0}}
+    assert raw["hosts"]["overrides"] == {"alpha": {"weight": 2.0}}
 
     # A restart: the same file, a fresh Config, the overlay merged over it.
     fresh = load_config(path)
     assert apply_overlay(fresh, load_overlay(tmp_path / "runtime.yaml")) == []
     assert fresh.affinity.ttl_seconds == 900
     assert fresh.placement.rebind.max_per_hour == 6
-    assert fresh.host("M5-alpha").weight == 2.0
+    assert fresh.host("alpha").weight == 2.0
     assert fresh.overrides == {"affinity.ttl_seconds": 900,
                                "placement.rebind.max_per_hour": 6,
-                               "hosts.M5-alpha.weight": 2.0}
+                               "hosts.alpha.weight": 2.0}
     assert path.read_bytes() == before
 
 
@@ -378,20 +378,20 @@ def test_a_fleet_file_from_70_is_read_once_and_the_next_save_uses_runtime(
     legacy = tmp_path / "fleet.yaml"
     legacy.write_text(yaml.safe_dump({
         "hosts": {"M5-beta": {"addresses": ["http://127.0.0.1:8001"]}},
-        "overrides": {"M5-alpha": {"weight": 3.0}},
+        "overrides": {"alpha": {"weight": 3.0}},
     }), encoding="utf-8")
 
     with caplog.at_level(logging.WARNING, logger="ripple.config"):
         overlay = load_overlay(cfg.fleet.file)
     assert list(overlay.hosts) == ["M5-beta"]
-    assert overlay.overrides == {"M5-alpha": {"weight": 3.0}}
+    assert overlay.overrides == {"alpha": {"weight": 3.0}}
     assert sum("overlay_legacy_file" in r.getMessage() for r in caplog.records) == 1
     assert not (tmp_path / "runtime.yaml").exists()
 
     save_overlay(overlay)
     assert (tmp_path / "runtime.yaml").is_file()
     assert legacy.is_file()                     # read, never rewritten
-    assert load_overlay(cfg.fleet.file).overrides == {"M5-alpha": {"weight": 3.0}}
+    assert load_overlay(cfg.fleet.file).overrides == {"alpha": {"weight": 3.0}}
 
 
 def test_the_config_view_says_what_is_editable_and_what_is_overridden(tmp_path):

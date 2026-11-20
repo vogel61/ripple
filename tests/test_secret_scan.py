@@ -57,7 +57,7 @@ def test_ordinary_text_and_placeholders_are_clean():
     text = "\n".join([
         "admin_key: \"CHANGE-ME\"",
         "api_key: ${OMLX_API_KEY}",
-        "node_id: 0d7114d5-bbbf-483a-b3d9-d5e62afe9507",
+        "node_id: 11111111-1111-4111-8111-111111111111",
         "sha256 3f786850e387550fdab836ed7e6dc881de23001b",
         "cd ~/Projects/ripple && ./deploy/start-ripple.command",
     ])

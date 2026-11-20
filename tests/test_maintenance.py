@@ -32,7 +32,7 @@ def test_a_test_config_never_points_at_the_operator_s_state_files():
     exactly like the calibration curve and the model policy. Without this a test
     that sets a window writes `~/.ripple/maintenance.yaml` and the next start of
     the service keeps a production node out of the pool."""
-    cfg = make_config([host_config("M5-alpha", "http://192.0.2.11:8000")])
+    cfg = make_config([host_config("alpha", "http://192.0.2.11:8000")])
     stores = {
         "calibration_file": cfg.placement.loading.calibration_file,
         "model_policy_file": cfg.placement.model_policy_file,

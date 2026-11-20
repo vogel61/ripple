@@ -156,13 +156,13 @@ def _healthz() -> dict:
             "since": 1_763_290_000.0, "window_seconds": 7200.0,
             "sampled_seconds": 7140.0,
             "hosts": [
-                {"name": "M5-alpha", "requests": 310, "errors": 2,
+                {"name": "alpha", "requests": 310, "errors": 2,
                  "prompt_tokens": 1_234_567, "completion_tokens": 45_678,
                  "prefill_seconds": 1234.5, "generation_seconds": 4567.8,
                  "client_seconds": 6000.5, "requests_without_usage": 3,
                  "idle": 3000.0, "loading": 240.0, "prefill": 1200.0,
                  "decode": 2500.0, "mixed": 200.0, "sampled_seconds": 7140.0},
-                {"name": "M3-beta", "requests": 103, "errors": 0,
+                {"name": "beta", "requests": 103, "errors": 0,
                  "prompt_tokens": 234_567, "completion_tokens": 12_345,
                  "prefill_seconds": 4567.8, "generation_seconds": 1234.5,
                  "client_seconds": 7000.2, "requests_without_usage": 0,
@@ -178,9 +178,9 @@ def _healthz() -> dict:
             "cross": {
                 "range": "today",
                 "hosts": [
-                    {"name": "M5-alpha", "requests": 431, "prefill_seconds": 1400.0,
+                    {"name": "alpha", "requests": 431, "prefill_seconds": 1400.0,
                      "generation_seconds": 4700.0},
-                    {"name": "M3-beta", "requests": 98, "prefill_seconds": 4500.0,
+                    {"name": "beta", "requests": 98, "prefill_seconds": 4500.0,
                      "generation_seconds": 1200.0},
                 ],
                 "total": {"requests": 529, "prefill_seconds": 5900.0,
@@ -201,12 +201,12 @@ def _healthz() -> dict:
         "requests_window_seconds": 900.0,
         "threads": {
             "active": 1,
-            "target": {"M5-alpha": 0.6, "M3-beta": 0.4},
-            "target_share": {"M5-alpha": 0.6, "M3-beta": 0.4},
-            "actual_share": {"M5-alpha": 1.0, "M3-beta": 0.0},
+            "target": {"alpha": 0.6, "beta": 0.4},
+            "target_share": {"alpha": 0.6, "beta": 0.4},
+            "actual_share": {"alpha": 1.0, "beta": 0.0},
             "registry": [{
-                "key": "4b17eecc4cf0a8a5", "model": DEEPSEEK, "host": "M5-alpha",
-                "source": "new", "kind": "interactive", "key_name": "mustafa",
+                "key": "4b17eecc4cf0a8a5", "model": DEEPSEEK, "host": "alpha",
+                "source": "new", "kind": "interactive", "key_name": "alice",
                 "turns": 67, "ttl_seconds": 1800, "idle_seconds": 112.4,
             }],
         },
@@ -217,7 +217,7 @@ def _healthz() -> dict:
                                  "per_thread_cooldown_seconds": 300,
                                  "rebinds_last_hour": 0}},
         "hosts": [
-            _host("M5-alpha", role="entry", site="WD", address="192.0.2.11:8000",
+            _host("alpha", role="entry", site="SA", address="192.0.2.11:8000",
                   ceiling=M5_CEILING, used=M5_USED, measured=M5_MEASURED,
                   weight=3.0, target_share=0.6, thread_slots=1, requests_total=310,
                   models_loaded=[DEEPSEEK, "MarkItDown"], models_available=23,
@@ -230,7 +230,7 @@ def _healthz() -> dict:
                   requests_by_model={DEEPSEEK: 127},
                   metrics={DEEPSEEK: {"tg_tps": 69.6, "tg_samples": 309,
                                       "measured_at": 1_763_000_000.0}}),
-            _host("M3-beta", role="worker", site="WD", address="192.0.2.12:8000",
+            _host("beta", role="worker", site="SA", address="192.0.2.12:8000",
                   ceiling=M3_CEILING, used=M3_USED, measured=M3_MEASURED,
                   weight=2.0, target_share=0.4, requests_total=103,
                   models_loaded=[DEEPSEEK, "MarkItDown", "Qwen3.5-9B-oQ4e-mtp"],
@@ -243,13 +243,13 @@ def _healthz() -> dict:
         ],
         "models": [
             {"id": DEEPSEEK, "lock": False, "lock_reason": None, "hosts": [
-                {"host": "M3-beta", "available": True, "loaded": True,
+                {"host": "beta", "available": True, "loaded": True,
                  "estimated_size": 453_635_361_950,
                  "actual_size": 431_961_763_456, "context_len": 524288,
                  "vision": True, "threads": 0, "inflight": 0, "tg_tps": 17.5,
                  "allowed": True, "policy": None, "dispatch": True, "phase": None,
                  "lock": False},
-                {"host": "M5-alpha", "available": True, "loaded": True,
+                {"host": "alpha", "available": True, "loaded": True,
                  "estimated_size": 453_635_361_950,
                  "actual_size": M5_MEASURED, "context_len": 524288,
                  "vision": True, "threads": 1, "inflight": 0, "tg_tps": 69.6,
@@ -260,7 +260,7 @@ def _healthz() -> dict:
                 # Cold load: not resident yet, but the request that caused the
                 # load is already waiting for its first token — the dot is empty
                 # *and* in prefill (issue #18).
-                {"host": "M5-alpha", "available": True, "loaded": False,
+                {"host": "alpha", "available": True, "loaded": False,
                  "estimated_size": 448_940_510_278, "actual_size": None,
                  "context_len": 288768, "vision": False, "threads": 0,
                  "inflight": 0, "tg_tps": None, "allowed": True,
@@ -271,19 +271,19 @@ def _healthz() -> dict:
             # `allowed: false` on every node, `actual_size: 0`, `tg_tps: null` —
             # the shape the live fleet sends. It must never get a row in `2`.
             {"id": "MarkItDown", "lock": False, "lock_reason": None, "hosts": [
-                {"host": "M3-beta", "available": True, "loaded": True,
+                {"host": "beta", "available": True, "loaded": True,
                  "estimated_size": 0, "actual_size": 0, "context_len": None,
                  "vision": False, "threads": 0, "inflight": 0, "tg_tps": None,
                  "allowed": False, "policy": None, "dispatch": False, "phase": None,
                  "lock": False},
-                {"host": "M5-alpha", "available": True, "loaded": True,
+                {"host": "alpha", "available": True, "loaded": True,
                  "estimated_size": 0, "actual_size": 0, "context_len": None,
                  "vision": False, "threads": 0, "inflight": 0, "tg_tps": None,
                  "allowed": False, "policy": None, "dispatch": False, "phase": "pp",
                  "lock": False},
             ]},
             {"id": "Qwen3.5-9B-oQ4e-mtp", "lock": False, "lock_reason": None, "hosts": [
-                {"host": "M3-beta", "available": True, "loaded": True,
+                {"host": "beta", "available": True, "loaded": True,
                  "estimated_size": 6_542_399_089, "actual_size": 10_111_095_848,
                  "context_len": 262144, "vision": True, "threads": 0,
                  "inflight": 0, "tg_tps": None, "allowed": True,
@@ -299,21 +299,21 @@ def _stats() -> dict:
         "errors_total": 0, "http_503_total": 0, "http_507_total": 0,
         "threads_new": 5, "thread_hits": 212, "threads_evicted": 0,
         "threads_rebound": 1,
-        "by_host": {"M5-alpha": {"requests": 310, "errors": 0},
-                    "M3-beta": {"requests": 103, "errors": 0}},
+        "by_host": {"alpha": {"requests": 310, "errors": 0},
+                    "beta": {"requests": 103, "errors": 0}},
         "by_model": {DEEPSEEK: {"requests": 412, "errors": 0},
                      "Qwen3.8-Flash-Next-oQ4e-mtp": {"requests": 1, "errors": 0}},
         "decisions": [
             # the first one carries `ts` (epoch seconds, what /stats really
             # sends); the others only `time`, so the fallback stays covered
             {"ts": 1763292000, "time": "13:29:36", "model": DEEPSEEK,
-             "host": "M5-alpha",
+             "host": "alpha",
              "reason": "ephemeral", "prompt_chars": 101, "duration_ms": 212.1,
              "status": 200},
-            {"time": "13:30:31", "model": DEEPSEEK, "host": "M5-alpha",
+            {"time": "13:30:31", "model": DEEPSEEK, "host": "alpha",
              "reason": "thread", "prompt_chars": 1219, "duration_ms": 230.0,
              "status": 200},
-            {"time": "13:36:17", "model": DEEPSEEK, "host": "M3-beta",
+            {"time": "13:36:17", "model": DEEPSEEK, "host": "beta",
              "reason": "ephemeral", "prompt_chars": 160, "duration_ms": 351.9,
              "status": 200},
         ],
@@ -341,11 +341,11 @@ def _config() -> dict:
                       "unhealthy_after": 3},
         # Named locations (issue #67): the node preview offers them as the site
         # of a node it is about to add (#71).
-        "sites": [{"id": "wd", "name": "Wien", "networks": ["192.0.2.0/24"]},
-                  {"id": "tr", "name": "Traiskirchen", "networks": ["10.11.20.0/24"]}],
+        "sites": [{"id": "sa", "name": "site-a", "networks": ["192.0.2.0/24"]},
+                  {"id": "sb", "name": "site-b", "networks": ["198.51.100.0/24"]}],
         "proxy": {"retry_other_node": True, "request_log": False,
                   "connect_timeout_seconds": 10},
-        "hosts": [{"name": "M5-alpha", "weight": 3.0, "share": 0.6,
+        "hosts": [{"name": "alpha", "weight": 3.0, "share": 0.6,
                    "max_inflight": 6, "max_threads": 20, "spill_threshold": 4,
                    "hard_threshold": 0.95, "prefer_resident": True,
                    # The calibrated capability (#30): the second half of the
@@ -365,13 +365,13 @@ UNTIL = "2026-11-15T14:30:00+01:00"
 def _maintenance() -> dict:
     return {
         "maintenance": {
-            "window": {"node": "M5-alpha", "since": "2026-11-15T14:00:00+01:00",
+            "window": {"node": "alpha", "since": "2026-11-15T14:00:00+01:00",
                        "until": UNTIL, "minutes_left": 12.4,
                        "by": "dashboard", "note": ""},
             "inflight": 2,
         },
         "drained": {
-            "window": {"node": "M5-alpha", "since": "2026-11-15T14:00:00+01:00",
+            "window": {"node": "alpha", "since": "2026-11-15T14:00:00+01:00",
                        "until": None, "minutes_left": None,
                        "by": "operator", "note": "kernel update"},
             "inflight": 0,
@@ -383,16 +383,16 @@ def _maintenance() -> dict:
 # One pair `disabled` on the entry host and one `hidden` on the worker: the two
 # levels the table has to show, each in the row it belongs to. The stub copies
 # them into /healthz the way the backend does (`policy`, `dispatch: false`).
-POLICY = {"M5-alpha": {DEEPSEEK: "disabled"}, "M3-beta": {DEEPSEEK: "hidden"}}
+POLICY = {"alpha": {DEEPSEEK: "disabled"}, "beta": {DEEPSEEK: "hidden"}}
 
 # The replication panel's two states (issue #13): a plan the operator has to
 # confirm, and the job report afterwards. The numbers are the acceptance figures
 # (111,6 GB onto a target with 6,3 TB free).
 REPLICATION = {
     "plan": {
-        "source": "M5-alpha", "target": "M3-beta",
+        "source": "alpha", "target": "beta",
         "model": "Qwen3.8-Flash-Next-oQ4e-mtp",
-        "source_path": "/Volumes/GLM4TB/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
+        "source_path": "/Volumes/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
         "relative": "Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
         "target_root": "/Users/operator/.omlx/models",
         "target_path": "/Users/operator/.omlx/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp",
@@ -455,15 +455,15 @@ NODE_PREVIEW = {
     "ceiling_bytes": 525_360_213_856, "used_bytes": 453_635_361_950,
     "rtt_ms": 7.4, "role": "worker", "weight": 1.0,
     "site": "", "site_name": "", "site_networks": [],
-    "site_derived": "wd", "site_derived_name": "Wien",
+    "site_derived": "sa", "site_derived_name": "site-a",
     "site_mismatch": False, "site_unconfirmed": False,
     "models_error": None, "step": None, "warnings": [],
 }
 # The operator declares a site the address does not belong to: a warning in the
 # preview, not a refusal.
 NODE_PREVIEW_MISMATCH = dict(
-    NODE_PREVIEW, site="tr", site_name="Traiskirchen", site_mismatch=True,
-    warnings=["site mismatch: declared Traiskirchen, the address is in Wien"])
+    NODE_PREVIEW, site="sb", site_name="site-b", site_mismatch=True,
+    warnings=["site mismatch: declared site-b, the address is in site-a"])
 # The node answers, its model list does not (oMLX 401 without a key).
 NODE_PREVIEW_PARTIAL = dict(
     NODE_PREVIEW, models=[], model_count=0, step="models",
@@ -477,36 +477,36 @@ DISCOVERY = {
     "found": [
         {"address": NODE_ADDRESS, "name": "as5-m4", "node_id": "as5-m4",
          "models": [DEEPSEEK], "model_count": 1, "latency_ms": 7.4, "admin": True,
-         "site_derived": "wd", "site_derived_name": "Wien", "known": False,
+         "site_derived": "sa", "site_derived_name": "site-a", "known": False,
          "known_nodes": []},
         # Already in the fleet: offered, but not a second time.
-        {"address": "http://192.0.2.11:8000", "name": "M5-alpha", "node_id": "m5",
+        {"address": "http://192.0.2.11:8000", "name": "alpha", "node_id": "m5",
          "models": [DEEPSEEK], "model_count": 1, "latency_ms": 3.1, "admin": True,
-         "site_derived": "wd", "site_derived_name": "Wien", "known": True,
-         "known_nodes": ["M5-alpha"]},
+         "site_derived": "sa", "site_derived_name": "site-a", "known": True,
+         "known_nodes": ["alpha"]},
     ],
 }
 DRAIN_TIMEOUT = {"error": {
-    "code": "drain_timeout", "node": "M3-beta", "source": "overlay",
+    "code": "drain_timeout", "node": "beta", "source": "overlay",
     "inflight": 2, "models": [{"model": DEEPSEEK, "inflight": 1}],
     "waited_seconds": 5.0, "deadline_seconds": 5, "draining": True,
     "enabled": False, "in_pool": False,
-    "message": ("M3-beta still has 2 request(s) in flight after 5.0s (deadline 5s): "
+    "message": ("beta still has 2 request(s) in flight after 5.0s (deadline 5s): "
                 + DEEPSEEK + "×1. The node is disabled and stays in the fleet, out of "
                 "the pool; nothing was removed."),
 }}
 CONFIG_HOST = {"error": {
     "code": "config_host",
-    "message": ("M5-alpha is declared in config.yaml and cannot be deleted at "
+    "message": ("alpha is declared in config.yaml and cannot be deleted at "
                 "runtime — the file is the baseline. Disable it instead: "
-                "POST /admin/nodes/M5-alpha/disable"),
+                "POST /admin/nodes/alpha/disable"),
 }}
 
 
 # -- the parameter block's payload (issue #78) ------------------------------
 # The twelve paths an operator may set at the page, exactly as the contract
 # names them. `hosts.*.weight` is a family: it covers every host row, and the
-# concrete path of `M5-alpha` is `hosts.M5-alpha.weight`.
+# concrete path of `alpha` is `hosts.alpha.weight`.
 CONFIG_EDITABLE = [
     "hosts.*.weight", "hosts.*.spill_threshold", "hosts.*.prefer_resident",
     "affinity.ttl_seconds", "affinity.match_threshold", "affinity.ephemeral_window_seconds",
@@ -518,11 +518,11 @@ CONFIG_EDITABLE = [
 # so the test compares against this string and not against a translation.
 TTL_INVALID = ("affinity.ttl_seconds must be between 60 and 86400 — got -5")
 WEIGHT_CONFIRM = {
-    "error": "confirm_required", "path": "hosts.M5-alpha.weight",
+    "error": "confirm_required", "path": "hosts.alpha.weight",
     "threads_that_would_move": 3,
-    "message": "3 threads hold M5-alpha; the new weight applies to new threads only",
+    "message": "3 threads hold alpha; the new weight applies to new threads only",
 }
-WEIGHT_SET = {"path": "hosts.M5-alpha.weight", "value": 2.5, "source": "overlay",
+WEIGHT_SET = {"path": "hosts.alpha.weight", "value": 2.5, "source": "overlay",
               "effective": 2.5}
 TTL_SET = {"path": "affinity.ttl_seconds", "value": 900, "source": "overlay",
            "effective": 900}
@@ -531,13 +531,13 @@ TTL_SET = {"path": "affinity.ttl_seconds", "value": 900, "source": "overlay",
 def _config_live() -> dict:
     """`/config` with the two additive keys of #78.
 
-    One value is already set at the page (`hosts.M5-alpha.weight: 2.0`), so the
+    One value is already set at the page (`hosts.alpha.weight: 2.0`), so the
     fixture carries both states in one payload: a row with an origin chip and a
     reset control, and rows that still come from `config.yaml`.
     """
     cfg = json.loads(json.dumps(_config()))
     cfg["hosts"][0]["weight"] = 2.0
-    cfg["overrides"] = {"hosts.M5-alpha.weight": 2.0}
+    cfg["overrides"] = {"hosts.alpha.weight": 2.0}
     cfg["editable"] = CONFIG_EDITABLE
     return cfg
 
@@ -568,8 +568,8 @@ def _stub_fixture(**extra) -> dict:
                 "POST admin/nodes?dry_run=true": {"status": 200, "body": NODE_PREVIEW},
                 "POST admin/nodes": {"status": 201, "body": NODE_ADDED},
                 "POST admin/discover": {"status": 200, "body": DISCOVERY},
-                "DELETE admin/nodes/M3-beta": {"status": 409, "body": DRAIN_TIMEOUT},
-                "DELETE admin/nodes/M5-alpha": {"status": 409, "body": CONFIG_HOST},
+                "DELETE admin/nodes/beta": {"status": 409, "body": DRAIN_TIMEOUT},
+                "DELETE admin/nodes/alpha": {"status": 409, "body": CONFIG_HOST},
                 # 6.5 (#78): a refused value carries the loader's message, a
                 # weight that would move threads answers 409 first and 200 on
                 # the confirmed repeat, and a reset is a plain DELETE.
@@ -582,7 +582,7 @@ def _stub_fixture(**extra) -> dict:
                 "DELETE admin/config/affinity.ttl_seconds":
                     {"status": 200, "body": {"path": "affinity.ttl_seconds",
                                              "source": "config.yaml", "effective": 1800}},
-                "PATCH admin/config/hosts.M5-alpha.weight": {"queue": [
+                "PATCH admin/config/hosts.alpha.weight": {"queue": [
                     {"status": 409, "body": WEIGHT_CONFIRM},
                     {"status": 200, "body": WEIGHT_SET},
                 ]},
@@ -1545,7 +1545,7 @@ def test_the_fleet_card_says_nothing_about_a_site_that_is_not_declared(rendered)
 
 
 def test_a_contradicted_site_is_a_hint_on_the_fleet_card(tmp_path):
-    """`site: WD` and an address that belongs to Traiskirchen (issue #67).
+    """`site: SA` and an address that belongs to site-b (issue #67).
 
     The card shows the sentence with both ids — the same fact `ripple doctor`
     turns into one WARN — so a fleet whose labels lie is visible without a
@@ -1553,15 +1553,15 @@ def test_a_contradicted_site_is_a_hint_on_the_fleet_card(tmp_path):
     """
     data = _stub_fixture()
     host = data["healthz"]["hosts"][0]
-    host["site"] = "WD"
-    host["site_derived"] = "TR"
+    host["site"] = "SA"
+    host["site_derived"] = "SB"
     host["site_mismatch"] = True
     out = _run_stub(tmp_path, data)
 
     fleet = out["parts"]["fleet"]
     assert 'class="site-warn"' in fleet
-    assert _en()["fleet.site_mismatch"].replace("{declared}", "WD").replace(
-        "{derived}", "TR") in fleet
+    assert _en()["fleet.site_mismatch"].replace("{declared}", "SA").replace(
+        "{derived}", "SB") in fleet
     # the other card is untouched: one hint per contradicted host, not a banner
     assert fleet.count('class="site-warn"') == 1
 
@@ -1631,14 +1631,14 @@ def test_every_host_block_carries_the_stripe(rendered):
     assert len(rows) == len(_healthz()["threads"]["registry"])
     key, stripe = rows[0]
     assert key == "4b17eecc4cf0a8a5"
-    assert 'data-host="node-M5-alpha"' in stripe          # the host of that thread
+    assert 'data-host="node-alpha"' in stripe             # the host of that thread
 
     # one host, one place in the table — across all four blocks
     places: dict[str, set] = {}
     for entry in _stripes(fleet) + _stripes(dist) + _stripes(threads):
         places.setdefault(entry["host"], set()).add(
             (entry["slot"], entry["tone"], entry["pattern"]))
-    assert set(places) == {"node-M5-alpha", "node-M3-beta"}
+    assert set(places) == {"node-alpha", "node-beta"}
     assert all(len(seen) == 1 for seen in places.values()), places
 
 
@@ -1683,7 +1683,7 @@ def test_two_hosts_stay_apart_without_the_colour_channel(rendered, css):
     can only ever cost the colour, never the identity.
     """
     stripes = {s["host"]: s for s in _stripes(rendered["parts"]["fleet"])}
-    a, b = stripes["node-M5-alpha"], stripes["node-M3-beta"]
+    a, b = stripes["node-alpha"], stripes["node-beta"]
     assert a["pattern"] != b["pattern"]
     assert a["tone"] != b["tone"]
 
@@ -1941,14 +1941,14 @@ def test_a_truncated_model_name_keeps_its_state_in_the_title(rendered):
     the `title` has to carry the state — otherwise hovering a long name loses
     the one fact the badge was there for."""
     blocked = _model_cell_title(rendered["parts"]["models"], "Qwen3.5-9B-oQ4e-mtp",
-                                "M3-beta")
+                                "beta")
     assert blocked == "Qwen3.5-9B-oQ4e-mtp · not routable"
     # ... also when the state comes from the policy store rather than the allow-list
     assert _model_cell_title(rendered["parts"]["models_policy"], DEEPSEEK,
-                             "M5-alpha") == DEEPSEEK + " · not routable"
+                             "alpha") == DEEPSEEK + " · not routable"
     # a routable model keeps the plain name: the title invents no second state
     assert _model_cell_title(rendered["parts"]["models"], "GLM-5.2-oQ4",
-                             "M5-alpha") == "GLM-5.2-oQ4"
+                             "alpha") == "GLM-5.2-oQ4"
 
 
 def test_the_size_slash_is_as_bright_as_the_numbers(js, rendered):
@@ -2013,7 +2013,7 @@ def test_the_tooltip_box_is_one_layer_at_the_body(css, js):
 
 
 def test_the_memory_bar_shows_the_measurement_and_the_estimate_as_a_second_track(rendered):
-    card = _card(rendered["parts"]["fleet"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet"], "alpha")
     fill = float(re.search(r'<span class="fill[^"]*" style="width:([0-9.]+)%"', card)[1])
     est = re.search(r'<span class="est[^"]*" style="left:([0-9.]+)%;width:([0-9.]+)%"', card)
 
@@ -2029,7 +2029,7 @@ def test_the_memory_bar_shows_the_measurement_and_the_estimate_as_a_second_track
 
 
 def test_the_memory_bar_draws_the_ceiling_and_the_hard_threshold(rendered):
-    card = _card(rendered["parts"]["fleet"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet"], "alpha")
     assert '<span class="limit"></span>' in card
     assert float(re.search(r'<span class="hard" style="left:([0-9.]+)%"', card)[1]) == 95.0
     assert float(re.search(r'<span class="danger" style="left:([0-9.]+)%"', card)[1]) == 95.0
@@ -2039,7 +2039,7 @@ def test_the_memory_bar_draws_the_ceiling_and_the_hard_threshold(rendered):
 
 
 def test_the_card_falls_back_to_the_estimate_when_nothing_was_measured(rendered):
-    card = _card(rendered["parts"]["fleet_unmeasured"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet_unmeasured"], "alpha")
     assert "estimated" not in card.split("mem-foot")[0]
     assert "estimate, no measurement" in card
     fill = float(re.search(r'<span class="fill[^"]*" style="width:([0-9.]+)%"', card)[1])
@@ -2190,23 +2190,23 @@ def _healthz_quiet() -> dict:
     h["models"] = [
         # resident on both nodes, routable on both: the case of the issue
         {"id": RESIDENT, "lock": False, "lock_reason": None,
-         "hosts": [_resident("M3-beta"), _resident("M5-alpha")]},
+         "hosts": [_resident("beta"), _resident("alpha")]},
         # resident, but no node dispatches it — never a row
         {"id": "MarkItDown", "lock": False, "lock_reason": None, "hosts": [
-            _resident("M3-beta", estimated_size=0, actual_size=0, context_len=None,
+            _resident("beta", estimated_size=0, actual_size=0, context_len=None,
                       vision=False, allowed=False, dispatch=False),
-            _resident("M5-alpha", estimated_size=0, actual_size=0, context_len=None,
+            _resident("alpha", estimated_size=0, actual_size=0, context_len=None,
                       vision=False, allowed=False, dispatch=False)]},
         # resident and routable on M5, resident but `dispatch: false` on M3: one
         # row, and it is the node that would route to it
         {"id": HALF, "lock": False, "lock_reason": None, "hosts": [
-            _resident("M5-alpha", estimated_size=8_000_000_000,
+            _resident("alpha", estimated_size=8_000_000_000,
                       actual_size=7_500_000_000),
-            _resident("M3-beta", estimated_size=8_000_000_000,
+            _resident("beta", estimated_size=8_000_000_000,
                       actual_size=7_500_000_000, allowed=False, dispatch=False)]},
         # the other 20: available, not resident — out, as before
         *[{"id": mid, "lock": False, "lock_reason": None, "hosts": [
-            _resident("M5-alpha", loaded=False, estimated_size=1_000_000_000,
+            _resident("alpha", loaded=False, estimated_size=1_000_000_000,
                       actual_size=None, context_len=131072, vision=False)]}
           for mid in COLD],
     ]
@@ -2258,7 +2258,7 @@ def test_a_resident_model_without_traffic_keeps_its_row(resident_idle):
     assert "0 of 40 slots" in block
     assert "no slots bound" in block
     rows = re.findall(r'<div class="dist-row">(.*?)</div>', block, re.S)
-    assert [_row_host(r) for r in rows] == ["M5-alpha", "M3-beta"]
+    assert [_row_host(r) for r in rows] == ["alpha", "beta"]
     for row in rows:
         # the sentence from `dist.no_warm_thread`, once per row — the same
         # `threadsHere === 0` branch as #91, which counts the whole fleet
@@ -2294,7 +2294,7 @@ def test_a_node_that_would_not_dispatch_the_model_gets_no_row(resident_idle):
     claim a share that node cannot take."""
     block = _dist_blocks(resident_idle["parts"]["dist"])[HALF]
     hosts = re.findall(r'<span class="dist-host" title="([^"]+)">', block)
-    assert hosts == ["M5-alpha"]
+    assert hosts == ["alpha"]
 
 
 @pytest.fixture(scope="module")
@@ -2305,7 +2305,7 @@ def resident_traffic(tmp_path_factory) -> dict:
     h["hosts"][1]["requests_by_model"] = {RESIDENT: 56}
     s = _stats_quiet()
     s["requests_total"] = 56
-    s["by_host"]["M3-beta"] = {"requests": 56, "errors": 0}
+    s["by_host"]["beta"] = {"requests": 56, "errors": 0}
     return _run_stub(tmp_path_factory.mktemp("dashboard-resident-traffic"),
                      _stub_fixture(healthz=h, stats=s))
 
@@ -2317,7 +2317,7 @@ def test_a_model_with_traffic_in_the_window_keeps_its_number(resident_traffic):
     block = _dist_blocks(resident_traffic["parts"]["dist"])[RESIDENT]
     rows = re.findall(r'<div class="dist-row">(.*?)</div>', block, re.S)
     per_host = {_row_host(r): _row_requests(r) for r in rows}
-    assert per_host == {"M5-alpha": "0", "M3-beta": "56"}
+    assert per_host == {"alpha": "0", "beta": "56"}
 
 
 def test_the_requests_column_counts_per_node_inside_the_window(rendered):
@@ -2327,8 +2327,8 @@ def test_the_requests_column_counts_per_node_inside_the_window(rendered):
     block = _dist_blocks(rendered["parts"]["dist"])[DEEPSEEK]
     rows = re.findall(r'<div class="dist-row">(.*?)</div>', block, re.S)
     assert len(rows) == 2
-    m5 = [r for r in rows if "M5-alpha" in r][0]
-    m3 = [r for r in rows if "M3-beta" in r][0]
+    m5 = [r for r in rows if "alpha" in r][0]
+    m3 = [r for r in rows if "beta" in r][0]
     assert ">127<" in m5 and ">24<" in m3
     assert "/healthz → hosts[].requests_by_model" in m5
 
@@ -2363,29 +2363,29 @@ def test_the_page_never_reads_location(rendered):
 
 
 # -- the maintenance toggle (issue #10) ------------------------------------
-# Richard's request: "eine Maschine schonend aus der Betriebsbereitschaft
+# The operator's request: "eine Maschine schonend aus der Betriebsbereitschaft
 # nehmen, z.B. um Updates reinzuspielen". The page's job is threefold: offer the
 # control (with a key), show the window the backend holds, and say what the
 # operator is waiting for — `draining (n)` or `drained`. Everything it shows is
 # read from /healthz; the calls it makes are the two admin routes.
 def test_the_page_offers_the_three_presets_and_the_end_button(rendered):
-    card = _card(rendered["parts"]["fleet_admin"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet_admin"], "alpha")
     for minutes in (30, 60):
-        assert 'onclick="maintenance(\'M5-alpha\', %d)"' % minutes in card, minutes
-    assert 'onclick="maintenance(\'M5-alpha\', null)"' in card      # ohne Ende
+        assert 'onclick="maintenance(\'alpha\', %d)"' % minutes in card, minutes
+    assert 'onclick="maintenance(\'alpha\', null)"' in card         # ohne Ende
     assert "30 min" in card and "60 min" in card and "no end" in card
     # `beenden` belongs to a window; a node in the pool has nothing to end
     assert "maintenanceClear(" not in card
 
-    windowed = _card(rendered["parts"]["fleet_maintenance"], "M5-alpha")
-    assert 'onclick="maintenanceClear(\'M5-alpha\')"' in windowed
+    windowed = _card(rendered["parts"]["fleet_maintenance"], "alpha")
+    assert 'onclick="maintenanceClear(\'alpha\')"' in windowed
     assert ">end<" in windowed
 
 
 def test_without_an_admin_key_the_control_is_disabled_and_says_why(rendered, js):
     """Same rule as Calibrate: no key in sessionStorage → the button is off and
     the card carries the sentence that explains it, not a dead control."""
-    card = _card(rendered["parts"]["fleet"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet"], "alpha")
     buttons = re.findall(r"<button class=\"btn maint-[a-z]+\"[^>]*>", card)
     assert buttons, "the maintenance control is missing from the card"
     for button in buttons:
@@ -2394,7 +2394,7 @@ def test_without_an_admin_key_the_control_is_disabled_and_says_why(rendered, js)
     assert _en()["key.help"].startswith("Admin key required")   # the text is the catalog's
 
     # ... and with a key the same buttons are live
-    keyed = _card(rendered["parts"]["fleet_admin"], "M5-alpha")
+    keyed = _card(rendered["parts"]["fleet_admin"], "alpha")
     for button in re.findall(r"<button class=\"btn maint-[a-z]+\"[^>]*>", keyed):
         assert "disabled" not in button, button
 
@@ -2402,7 +2402,7 @@ def test_without_an_admin_key_the_control_is_disabled_and_says_why(rendered, js)
 def test_a_window_shows_until_left_and_who_set_it(rendered):
     """The card answers the three questions an operator has: until when, how
     long, and who put the node there."""
-    card = _card(rendered["parts"]["fleet_maintenance"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet_maintenance"], "alpha")
     clock = datetime.fromisoformat(UNTIL).astimezone().strftime("%H:%M")
     assert "until %s" % clock in card
     assert "12 min left" in card                   # minutes_left, 12.4 rounded
@@ -2413,7 +2413,7 @@ def test_a_window_shows_until_left_and_who_set_it(rendered):
 
 
 def test_a_drained_node_says_safe_to_update(rendered):
-    card = _card(rendered["parts"]["fleet_drained"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet_drained"], "alpha")
     assert "drained — safe to update" in card
     assert "still running" not in card
     assert "no end" in card                        # until: null
@@ -2492,7 +2492,7 @@ async def test_without_the_admin_key_the_endpoints_refuse(stub_factory, ripple_f
 
 
 # -- the model policy toggle (issue #11) ------------------------------------
-# Richard: a model unavailable without touching oMLX. Two levels, one per
+# The operator: a model unavailable without touching oMLX. Two levels, one per
 # (model, node) row — `disabled` stops the dispatch to that node, `hidden` also
 # takes the model out of /v1/models once every host hides it. The table is the
 # control, /healthz is what it shows, the admin key is the gate.
@@ -2527,19 +2527,19 @@ def test_a_set_level_shows_up_in_the_row_it_belongs_to(rendered):
     what the row shows — per (model, node), not per model."""
     markup = rendered["parts"]["models_policy"]
 
-    disabled = _row_markup(markup, DEEPSEEK, "M5-alpha")
+    disabled = _row_markup(markup, DEEPSEEK, "alpha")
     assert 'data-level="disabled"' in disabled
     assert '<option value="disabled" selected>' in disabled
     assert '<option value="hidden" selected>' not in disabled
 
-    hidden = _row_markup(markup, DEEPSEEK, "M3-beta")
+    hidden = _row_markup(markup, DEEPSEEK, "beta")
     assert 'data-level="hidden"' in hidden
     assert '<option value="hidden" selected>' in hidden
 
     # a model nobody switched off keeps its default, and `nicht routbar` still
     # follows `dispatch: false` — the badge is not a second, invented state
-    assert 'data-level=""' in _row_markup(markup, "MarkItDown", "M3-beta")
-    assert "not routable" in _row_markup(markup, DEEPSEEK, "M5-alpha")
+    assert 'data-level=""' in _row_markup(markup, "MarkItDown", "beta")
+    assert "not routable" in _row_markup(markup, DEEPSEEK, "alpha")
 
 
 def test_without_the_admin_key_the_policy_field_is_off_and_says_why(rendered):
@@ -2565,7 +2565,7 @@ def test_the_policy_tooltip_names_the_state_and_its_source(rendered):
         for tip in re.findall(r'data-tip="([^"]*)"', rendered["parts"][part]):
             assert "Source:" in tip, (part, tip[:80])
             assert "Source:" in tip, (part, tip[:80])
-    row = _row_markup(rendered["parts"]["models_policy"], DEEPSEEK, "M3-beta")
+    row = _row_markup(rendered["parts"]["models_policy"], DEEPSEEK, "beta")
     assert "Model policy" in row
     assert "set: hidden" in row
 
@@ -2756,7 +2756,7 @@ sandbox.globalThis = sandbox;
   /* `in Betrieb` on the rule without a row: DELETE, then one re-read in the
      tick that follows — and the tick after that is back to three requests. */
   const sel = {value: '', getAttribute: k => ({
-    'data-node': 'M5-alpha', 'data-model': fixture.ghost, 'data-level': 'disabled',
+    'data-node': 'alpha', 'data-model': fixture.ghost, 'data-level': 'disabled',
   })[k]};
   mark = requests.length;
   await api.modelPolicy(sel);
@@ -2793,11 +2793,11 @@ def policy_run(tmp_path_factory) -> dict:
     if NODE is None:
         pytest.skip("node is not installed — the request measurement needs it")
     work = tmp_path_factory.mktemp("policy")
-    nodes = ("M5-alpha", "M3-beta")
+    nodes = ("alpha", "beta")
     fixture = work / "fixture.json"
     fixture.write_text(json.dumps({
         "healthz": _healthz(), "stats": _stats(), "config": _config(), "ghost": GHOST,
-        "policy_before": {f"admin/nodes/{n}/models": _policy_view(n, ghost=(n == "M5-alpha"))
+        "policy_before": {f"admin/nodes/{n}/models": _policy_view(n, ghost=(n == "alpha"))
                           for n in nodes},
         "policy_after": {f"admin/nodes/{n}/models": _policy_view(n, ghost=False)
                          for n in nodes},
@@ -2818,7 +2818,7 @@ def test_a_rule_without_a_table_row_is_listed_with_the_same_control(policy_run):
     panel = policy_run["panel"]
     assert "Rules without a row in the model table" in panel
     assert GHOST in panel
-    assert 'data-node="M5-alpha"' in panel
+    assert 'data-node="alpha"' in panel
     assert 'data-model="%s"' % GHOST in panel
     assert 'data-level="disabled"' in panel
     assert '<option value="">in service</option>' in panel
@@ -2837,8 +2837,8 @@ def test_the_rule_without_a_row_is_read_once_and_not_in_the_two_second_tick(poli
     assert policy_run["load_requests"] == tick          # the page load
     assert policy_run["tick_requests"] == tick          # with a key
     assert policy_run["tick_after_read"] == tick
-    assert policy_run["read_requests"] == ["GET /admin/nodes/M5-alpha/models",
-                                           "GET /admin/nodes/M3-beta/models"]
+    assert policy_run["read_requests"] == ["GET /admin/nodes/alpha/models",
+                                           "GET /admin/nodes/beta/models"]
     # before that read the panel says so instead of pretending the list is empty
     assert "read when <b>Operations</b> is opened" in policy_run["panel_unread"]
 
@@ -2853,10 +2853,10 @@ def test_in_betrieb_on_a_rule_without_a_row_clears_it_and_the_list_follows(polic
     """The way back: the same DELETE the table sends, then the tick re-reads the
     admin view once — the rule is gone from the panel and the store."""
     assert policy_run["change_requests"] == [
-        "DELETE /admin/nodes/M5-alpha/models/" + GHOST,
+        "DELETE /admin/nodes/alpha/models/" + GHOST,
         "GET /healthz", "GET /stats", "GET /config",     # the tick that follows
-        "GET /admin/nodes/M5-alpha/models",              # ... and its one re-read
-        "GET /admin/nodes/M3-beta/models",
+        "GET /admin/nodes/alpha/models",                 # ... and its one re-read
+        "GET /admin/nodes/beta/models",
     ]
     # the row is gone; the notice above it still names what was cleared
     assert 'data-model="%s"' % GHOST not in policy_run["panel_after_change"]
@@ -3005,7 +3005,7 @@ async def test_the_app_serves_the_page_and_its_two_assets(stub_factory, ripple_f
 def test_the_replication_panel_shows_the_four_things_the_dialog_must_name(rendered):
     """Source, target, size and free space — before anything is copied."""
     markup = rendered["parts"]["replication_plan"]
-    assert "M5-alpha" in markup and "M3-beta" in markup
+    assert "alpha" in markup and "beta" in markup
     assert "Qwen3.8-Flash-Next-oQ4e-mtp" in markup
     assert "111.6 GB" in markup                  # the size to move
     assert "470.3 GB" in markup                  # the free space on the target
@@ -3199,19 +3199,19 @@ def test_the_model_dot_carries_the_phase_it_is_in(rendered):
     working, and the phase's own colour class comes from the same attribute."""
     markup = rendered["parts"]["models"]
 
-    generating = _row_markup(markup, DEEPSEEK, "M5-alpha")
+    generating = _row_markup(markup, DEEPSEEK, "alpha")
     assert 'data-phase="tg"' in generating
-    prefill = _row_markup(markup, "MarkItDown", "M5-alpha")
+    prefill = _row_markup(markup, "MarkItDown", "alpha")
     assert 'data-phase="pp"' in prefill
     # each dot its own phase, on one host, in one table
-    assert "data-phase" not in _row_markup(markup, DEEPSEEK, "M3-beta")
+    assert "data-phase" not in _row_markup(markup, DEEPSEEK, "beta")
 
 
 def test_a_model_that_is_not_working_keeps_the_steady_dot(rendered):
     """Idle is not a phase: the dot is the one it always was, with no
     `data-phase` for the CSS to hang an animation on."""
     markup = rendered["parts"]["models"]
-    idle = _row_markup(markup, DEEPSEEK, "M3-beta")
+    idle = _row_markup(markup, DEEPSEEK, "beta")
     dot = re.search(r'<span class="dot on"([^>]*)>', idle)
     assert dot and "data-phase" not in dot.group(1)
     assert 'title="loaded"' in dot.group(1)
@@ -3221,7 +3221,7 @@ def test_a_model_that_is_cold_loading_shows_the_prefill_on_its_empty_dot(rendere
     """The one case where "not resident" and "a request is waiting" are true at
     once: the model is being loaded by the request that sits in prefill. The dot
     is empty and blinks — the page shows the phase, not only the residency."""
-    row = _row_markup(rendered["parts"]["models_expanded"], "GLM-5.2-oQ4", "M5-alpha")
+    row = _row_markup(rendered["parts"]["models_expanded"], "GLM-5.2-oQ4", "alpha")
     dot = re.search(r'<span class="dot off"([^>]*)>', row)
     assert dot, "the cold-loading model has no dot"
     assert 'data-phase="pp"' in dot.group(1)
@@ -3231,13 +3231,13 @@ def test_a_model_that_is_cold_loading_shows_the_prefill_on_its_empty_dot(rendere
 def test_the_host_health_dot_blinks_only_while_a_model_works(rendered):
     """Acceptance 2, second half: the node dot blinks because at least one model
     on it is active — and the idle node keeps the steady sign."""
-    busy = _card(rendered["parts"]["fleet"], "M5-alpha")
+    busy = _card(rendered["parts"]["fleet"], "alpha")
     chip = re.search(r'<span class="state"[^>]*>', busy)
     assert chip, "the host card has no state chip"
     assert 'data-state="healthy"' in chip.group(0)
     assert 'data-phase="pp"' in chip.group(0)      # the aggregate, from hosts[].phase
 
-    idle = _card(rendered["parts"]["fleet"], "M3-beta")
+    idle = _card(rendered["parts"]["fleet"], "beta")
     chip = re.search(r'<span class="state"[^>]*>', idle)
     assert 'data-state="healthy"' in chip.group(0)
     assert "data-phase" not in chip.group(0)
@@ -3251,18 +3251,18 @@ def test_the_phase_tooltip_names_the_phase_and_its_source(rendered, js):
         assert found, "no match for %r" % pattern
         return html.unescape(found.group(1))
 
-    row = _row_markup(rendered["parts"]["models"], DEEPSEEK, "M5-alpha")
+    row = _row_markup(rendered["parts"]["models"], DEEPSEEK, "alpha")
     title = one(r'class="dot on"[^>]*title="([^"]*)"', row)
     assert "generation (tg)" in title
     assert "Source: /healthz → models[].hosts[].phase" in title
 
-    row = _row_markup(rendered["parts"]["models"], "MarkItDown", "M5-alpha")
+    row = _row_markup(rendered["parts"]["models"], "MarkItDown", "alpha")
     title = one(r'class="dot on"[^>]*title="([^"]*)"', row)
     assert "prefill (pp)" in title
     assert "Source: /healthz → models[].hosts[].phase" in title
 
     # the node's own mark names the aggregate and its field
-    card = _card(rendered["parts"]["fleet"], "M5-alpha")
+    card = _card(rendered["parts"]["fleet"], "alpha")
     chip_tip = one(r'<span class="state"[^>]*data-tip="([^"]*)"', card)
     assert "prefill (pp)" in chip_tip
     assert "Source: /healthz → hosts[].phase" in chip_tip
@@ -3485,7 +3485,7 @@ def lock_run(tmp_path_factory) -> dict:
     # One more model, with a slash in its id: `{model:path}` is exactly for it.
     health["models"].append({
         "id": LOCK_SLASH, "lock": False, "lock_reason": None,
-        "hosts": [{"host": "M5-alpha", "available": True, "loaded": True,
+        "hosts": [{"host": "alpha", "available": True, "loaded": True,
                    "estimated_size": 111_609_397_878, "actual_size": None,
                    "context_len": 262144, "vision": False, "threads": 0,
                    "inflight": 0, "tg_tps": None, "allowed": True,
@@ -3568,7 +3568,7 @@ def test_the_model_row_carries_a_padlock_above_the_name(rendered):
     # carries the state of a truncated name (#19)
     blocked = _model_cell_by_name(markup, "Qwen3.5-9B-oQ4e-mtp")
     assert '<span class="badge">not routable</span>' in blocked
-    assert "not routable" in _model_cell_title(markup, "Qwen3.5-9B-oQ4e-mtp", "M3-beta")
+    assert "not routable" in _model_cell_title(markup, "Qwen3.5-9B-oQ4e-mtp", "beta")
 
 
 def test_the_padlock_is_open_in_green_and_closed_in_red(css):
@@ -3619,7 +3619,7 @@ def test_the_lock_tooltip_names_the_state_and_its_source(lock_run):
     locked_cell = _model_cell(lock_run["models_locked"], DEEPSEEK)
     tip = html.unescape(re.search(r'class="model-lock tip"[^>]*data-tip="([^"]*)"', locked_cell)[1])
     assert "set: closed" in tip
-    assert "in effect on M3-beta, M5-alpha" in tip     # both hosts hold it, sorted
+    assert "in effect on alpha, beta" in tip           # both hosts hold it, sorted
     assert "503 model_locked" in tip                   # what the state does
     assert "Source: /healthz → models[].lock" in tip
 
@@ -3952,7 +3952,7 @@ function panel() {
   out.panel_unsupervised = api.renderRestart(unsup);
   const drain = healthz();
   drain.restart = {supervised: true, supervisor: 'ai.ripple', reason: null,
-                   inflight: 2, hosts: ['M5-alpha'], pending: false,
+                   inflight: 2, hosts: ['alpha'], pending: false,
                    delay_seconds: 1.0};
   out.panel_drain = api.renderRestart(drain);
   out.render_requests = requests.slice();
@@ -3996,7 +3996,7 @@ function panel() {
 
   /* The drain: 409, then the second question. Declined first — one POST, no
      second one, and the panel says it did not restart. */
-  svc.inflight = 1; svc.hosts = ['M5-alpha']; svc.pending = false;
+  svc.inflight = 1; svc.hosts = ['alpha']; svc.pending = false;
   svc.post = '202';
   await api.tick();
   requests.length = 0; asked.length = 0;
@@ -4008,7 +4008,7 @@ function panel() {
   requests.length = 0; asked.length = 0;
 
   /* ... and accepted: exactly one more POST, with the acknowledgement. */
-  svc.inflight = 1; svc.hosts = ['M5-alpha']; svc.pending = false;
+  svc.inflight = 1; svc.hosts = ['alpha']; svc.pending = false;
   svc.uptime = 10569.3; svc.commit = '1374730'; svc.up = true; probes = 0;
   answers = [true, true];
   await api.restartNow();
@@ -4190,13 +4190,13 @@ def test_a_drain_needs_the_second_confirmation(restart_run):
     assert restart_run["drain_declined_requests"] == ["POST /admin/restart"]
     # the first question already names the drain — /healthz carried the number
     first = restart_run["asked_drain"][0]
-    assert "1 request(s) are in flight on M5-alpha" in first
+    assert "1 request(s) are in flight on alpha" in first
     assert "cancelling this question leaves them running" in first
     assert "{busy}" not in first
     assert len(restart_run["asked_drain"]) == 2
     second = restart_run["asked_drain"][1]
     assert "Restart anyway?" in second
-    assert "1 request(s) are still in flight on M5-alpha" in second
+    assert "1 request(s) are still in flight on alpha" in second
     assert "the session this page was opened from" in second
     assert "Repeat with force=1" in second                 # the service's own words
     assert "not restarted" in restart_run["drain_declined_notice"]
@@ -4232,7 +4232,7 @@ def test_the_restart_panel_names_its_sources(restart_run):
             assert "Source:" in tip, (name, tip[:80])
             assert "/healthz → restart" in tip, (name, tip[:80])
     drain = restart_run["panel_drain"]
-    assert "2 request(s) in flight on M5-alpha" in drain
+    assert "2 request(s) in flight on alpha" in drain
     assert "1.0 s" in drain
     assert "started by launchd job ai.ripple" in drain
     # the label and the German sentence live in the catalogs, not in the code
@@ -4363,8 +4363,8 @@ REASONS = {
         _restart_block("query_failed", {"label": "ai.ripple"},
                        QUERY_FAILED_REASON.format(label="ai.ripple")),
         {"label": "ai.ripple", "ppid": None, "pid": None}),
-    "inflight": (_restart_block("inflight", {"n": 2, "hosts": "M5-alpha"},
-                               "2 request(s) are still in flight (M5-alpha) — the "
+    "inflight": (_restart_block("inflight", {"n": 2, "hosts": "alpha"},
+                               "2 request(s) are still in flight (alpha) — the "
                                "one that is streaming right now ends with the "
                                "process. Repeat with force=1 to restart anyway."),
                  {"label": None, "ppid": None, "pid": None}),
@@ -4429,7 +4429,7 @@ def test_the_drain_cause_is_a_sentence_with_the_fleet_numbers(reasons_run):
         cat = _catalog(lang)
         why = reasons_run[lang]["inflight"]["why"]
         assert why["text"] == cat["restart.reason.inflight"].replace(
-            "{n}", "2").replace("{hosts}", "M5-alpha")
+            "{n}", "2").replace("{hosts}", "alpha")
         assert "{" not in why["text"]
         # the 409 sentence stays the tooltip: it names the streaming session
         assert "streaming" in why["tip"]
@@ -4586,7 +4586,7 @@ def _tps_view(live: float | None) -> dict:
         if m["id"] != TPS_MODEL:
             continue
         for x in m["hosts"]:
-            if x["host"] == "M5-alpha":
+            if x["host"] == "alpha":
                 x["tg_tps"] = live
     return h
 
@@ -4594,7 +4594,7 @@ def _tps_view(live: float | None) -> dict:
 def _tps_config(capability: float | None) -> dict:
     c = json.loads(json.dumps(_config()))
     for host in c["hosts"]:
-        if host["name"] == "M5-alpha":
+        if host["name"] == "alpha":
             host["tg_tps"] = capability
     return c
 
@@ -4624,7 +4624,7 @@ def tps_run(tmp_path_factory) -> dict:
 
 def _tps_cell(markup: str) -> tuple[str, str]:
     """(text, tooltip) of the tok/s cell of the one (model, node) row."""
-    row = _row_markup(markup, TPS_MODEL, "M5-alpha")
+    row = _row_markup(markup, TPS_MODEL, "alpha")
     cells = re.findall(r'<td class="num">(.*?)</td>', row, re.S)
     assert cells, row[:400]
     found = re.search(r'<span class="tip" data-tip="([^"]*)">(.*?)</span>$',
@@ -4795,7 +4795,7 @@ sandbox.globalThis = sandbox;
 
 def _thread_row(**extra) -> dict:
     """One `/healthz → threads.registry[]` row, as the backend writes it."""
-    row = {"key": "4b17eecc4cf0a8a5", "model": DEEPSEEK, "host": "M5-alpha",
+    row = {"key": "4b17eecc4cf0a8a5", "model": DEEPSEEK, "host": "alpha",
            "source": "new", "kind": "interactive", "turns": 67,
            "ttl_seconds": 1800, "idle_seconds": 112.4}
     row.update(extra)
@@ -4831,7 +4831,7 @@ def test_the_thread_shows_the_key_that_holds_it(rendered):
     """Block 4 names the client key next to `kind · source`: the question
     "who holds 6 of the 20 slots" is answered on the page, not by grep."""
     threads = rendered["parts"]["threads"]
-    assert ">key mustafa<" in threads
+    assert ">key alice<" in threads
     # the chip carries its source, like every other field of the block
     assert "threads.registry[].key_name" in threads
     assert _en()["threads.key"] == "key {name}"
@@ -4855,15 +4855,15 @@ def test_a_thread_without_a_key_says_so_instead_of_leaving_a_gap(tmp_path):
 
 def test_the_key_chip_is_translated_not_hardcoded(tmp_path):
     """The name is data, the sentence around it is a catalog entry: the German
-    page says `Schlüssel mustafa` and `ohne Schlüssel`."""
+    page says `Schlüssel alice` and `ohne Schlüssel`."""
     run = _render_thread_chips(
         tmp_path,
-        named=[_thread_row(key_name="mustafa")],
+        named=[_thread_row(key_name="alice")],
         anon=[_thread_row(key_name=None)],
     )
-    assert ">Schlüssel mustafa<" in run["de"]["named"]
+    assert ">Schlüssel alice<" in run["de"]["named"]
     assert ">ohne Schlüssel<" in run["de"]["anon"]
-    assert ">key mustafa<" in run["en"]["named"]
+    assert ">key alice<" in run["en"]["named"]
     assert ">no key<" in run["en"]["anon"]
 
 
@@ -4988,7 +4988,7 @@ def test_every_node_gets_a_bar_and_the_total_a_third(rendered):
     """One bar per node plus the sum — the numbers moved into the bar, the block
     keeps the same three rows it had as a table."""
     rows = _load_rows(rendered["parts"]["load"])
-    assert [row["name"] for row in rows] == ["M5-alpha", "M3-beta", _en()["load.total"]]
+    assert [row["name"] for row in rows] == ["alpha", "beta", _en()["load.total"]]
     assert [row["total"] for row in rows] == [False, False, True]
 
 
@@ -4999,7 +4999,7 @@ def test_the_five_states_are_a_partition_of_the_window(rendered):
 
 
 def test_a_state_with_no_time_gets_no_segment(rendered):
-    """M3-beta never loaded a model: `loading` is 0.0. A zero-width stripe would
+    """beta never loaded a model: `loading` is 0.0. A zero-width stripe would
     look like a measurement, so the segment is left out entirely."""
     m3 = _load_rows(rendered["parts"]["load"])[1]
     assert len(m3["widths"]) == 4          # idle, prefill, decode, mixed — no loading
@@ -5020,7 +5020,7 @@ def test_each_segment_names_its_state_with_duration_and_percentage(rendered):
 
 
 def test_the_bar_says_which_state_dominates_without_a_hover(rendered):
-    """The lead beside the bar: M5-alpha is 3000 of 7140 s idle = 42 %."""
+    """The lead beside the bar: alpha is 3000 of 7140 s idle = 42 %."""
     m5 = _load_rows(rendered["parts"]["load"])[0]
     assert m5["lead"].startswith("42.0 %"), m5["lead"]
     assert _en()["load.idle"] in m5["lead"]
@@ -5041,7 +5041,7 @@ def test_the_legend_names_the_five_states(rendered):
 
 def test_the_bar_can_leave_idle_out_and_then_speaks_of_load_only(rendered):
     """The toggle (#39): with idle hidden the segments are shares of the time
-    under load, not of the whole window — M5-alpha has 7140 s sampled, 3000 s
+    under load, not of the whole window — alpha has 7140 s sampled, 3000 s
     idle, so 4140 s are left and decode's 2500 s are 60,4 % of them."""
     shown = _load_rows(rendered["parts"]["load"])[0]
     hidden = _load_rows(rendered["parts"]["load_idle_hidden"])[0]
@@ -5354,7 +5354,7 @@ def test_the_preview_shows_the_four_facts_and_the_derived_site(rendered):
     assert DEEPSEEK in preview
     assert "453.6 / 525.4 GB" in preview          # used / ceiling, one decimal
     assert "7.4 ms" in preview
-    assert "Wien" in preview
+    assert "site-a" in preview
     # every number carries its source, the way the page does it everywhere
     assert "POST /admin/nodes?dry_run=true" in preview
     assert _en()["nodes.node_id"] in preview
@@ -5374,7 +5374,7 @@ def test_the_defaults_are_equal_weight_the_derived_site_and_worker(rendered):
     """The three decisions routing hangs off, with the measured defaults: the
     site is the one the address falls into, the role is `worker`."""
     draft = _nodes(rendered)["draft"]
-    assert draft == {"name": "192.0.2.40", "weight": "1", "site": "wd",
+    assert draft == {"name": "192.0.2.40", "weight": "1", "site": "sa",
                      "role": "worker"}
 
 
@@ -5417,7 +5417,7 @@ def test_the_confirmation_sends_what_the_fields_hold(rendered):
     assert body["address"] == NODE_ADDRESS
     assert body["name"] == "B-umbenannt"
     assert body["weight"] == 2.5
-    assert body["site"] == "wd"
+    assert body["site"] == "sa"
     assert body["role"] == "worker"
     assert nodes["draft_name"] == "B-umbenannt"
     # the card is gone afterwards and the message names what was added
@@ -5443,7 +5443,7 @@ def test_the_sweep_lists_what_answered_and_marks_what_is_known(rendered):
     assert NODE_ADDRESS in found
     assert "as5-m4" in found
     assert "7.4 ms" in found
-    assert _en()["nodes.known"].replace("{nodes}", "M5-alpha") in found
+    assert _en()["nodes.known"].replace("{nodes}", "alpha") in found
     # exactly one of the two candidates is disabled: the known one
     buttons = re.findall(r"<button[^>]*>(?:[^<]*)</button>", found)
     assert len(buttons) == 2
@@ -5461,7 +5461,7 @@ def test_the_drain_dialog_names_what_is_in_flight_and_how_long_it_waits(rendered
     count, the models, the deadline and the three ways out."""
     drain = _nodes(rendered)["drain"]
     en = _en()
-    assert en["nodes.drain_title"].replace("{name}", "M3-beta") in drain
+    assert en["nodes.drain_title"].replace("{name}", "beta") in drain
     assert en["nodes.drain_inflight"].replace("{n}", "2") in drain
     assert DEEPSEEK + " ×1" in drain
     assert en["nodes.drain_wait"].replace("{v}", "5") in drain
@@ -5478,7 +5478,7 @@ def test_a_drain_that_runs_out_of_time_removes_nothing(rendered):
     nodes = _nodes(rendered)
     msg = nodes["drain_timeout_msg"]
     assert _en()["nodes.drain_timeout"].split("{msg}")[0].strip() in msg
-    assert "M3-beta still has 2 request(s) in flight" in msg
+    assert "beta still has 2 request(s) in flight" in msg
     after = nodes["drain_after_timeout"]
     assert _en()["nodes.drain_inflight"].replace("{n}", "2") in after
     assert _en()["nodes.drain_confirm"] in after      # still open, still asking
@@ -5488,7 +5488,7 @@ def test_a_drain_that_finishes_closes_the_dialog(rendered):
     nodes = _nodes(rendered)
     en = _en()
     assert en["nodes.removed"].split("{name}")[0].strip() in nodes["drain_removed_msg"]
-    assert "M3-beta" in nodes["drain_removed_msg"]
+    assert "beta" in nodes["drain_removed_msg"]
     assert "1.25" in nodes["drain_removed_msg"]       # waited_seconds
     assert nodes["drain_closed"] is True
 
@@ -5507,9 +5507,9 @@ def test_the_node_list_offers_remove_only_for_overlay_nodes(rendered):
     `title` — the 409 is not something the operator should have to provoke."""
     markup = _nodes(rendered)["list"]
     rows = re.findall(r'<div class="node-row" data-key="node-([^"]+)">(.*?)</div>', markup, re.S)
-    assert [name for name, _ in rows] == ["M5-alpha", "M3-beta"]
-    config_row = dict(rows)["M5-alpha"]
-    overlay_row = dict(rows)["M3-beta"]
+    assert [name for name, _ in rows] == ["alpha", "beta"]
+    config_row = dict(rows)["alpha"]
+    overlay_row = dict(rows)["beta"]
     assert " disabled" in config_row
     assert 'title="' + _en()["nodes.remove_config"] + '"' in config_row
     assert " disabled" not in overlay_row
@@ -5533,7 +5533,7 @@ def test_a_contradicted_site_is_a_warning_in_the_preview(rendered):
     the node can still be added — a site is a location, not a routing rule."""
     markup = _nodes(rendered)["preview_mismatch"]
     assert _en()["nodes.site_mismatch"].replace(
-        "{declared}", "Traiskirchen").replace("{derived}", "Wien") in markup
+        "{declared}", "site-b").replace("{derived}", "site-a") in markup
     assert " disabled" not in markup          # the add button stays live
 
 
@@ -5605,7 +5605,7 @@ def _series_healthz() -> dict:
     h = json.loads(json.dumps(_healthz()))
     h["hosts"][0]["series"] = [_series_entry(), OTHER_ENTRY]
     h["hosts"][1]["series"] = []
-    third = _host("M4-gamma", role="worker", site="TR", address="192.0.2.40:8000",
+    third = _host("M4-gamma", role="worker", site="SB", address="192.0.2.40:8000",
                   ceiling=M5_CEILING, used=M5_USED, measured=M5_MEASURED)
     h["hosts"].append(third)
     return h
@@ -5743,13 +5743,13 @@ sandbox.globalThis = sandbox;
       tail2: api.sparkReadout(api.seriesGeom(fixture.tail), 2),
       lone0: api.sparkReadout(api.seriesGeom(fixture.lone), 0),
     },
-    hover_card: (api.sparkHoverSet('M5-alpha', 4), api.sparkline(fixture.card)),
+    hover_card: (api.sparkHoverSet('alpha', 4), api.sparkline(fixture.card)),
     hover_state: api.sparkHover,
     /* the pointer is on one card, not on the tab */
     hover_other: api.sparkline(fixture.pick),
     plain_card: (api.sparkHoverClear(), api.sparkline(fixture.card)),
-    hover_none: (api.sparkHoverSet('M5-alpha', 2),
-                 api.sparkline({name: 'M5-alpha', series: [], metrics: {}})),
+    hover_none: (api.sparkHoverSet('alpha', 2),
+                 api.sparkline({name: 'alpha', series: [], metrics: {}})),
   };
   /* kein Zeiger für die Läufe unten: die Sprache wechselt, nicht der Bucket */
   api.sparkHoverClear();
@@ -5771,12 +5771,12 @@ def series_run(tmp_path_factory) -> dict:
     if NODE is None:
         pytest.skip("node is not installed — the renderer is JavaScript")
     work = tmp_path_factory.mktemp("series")
-    card = _host("M5-alpha", role="entry", site="WD", address="192.0.2.11:8000",
+    card = _host("alpha", role="entry", site="SA", address="192.0.2.11:8000",
                  ceiling=M5_CEILING, used=M5_USED, measured=M5_MEASURED,
                  metrics={DEEPSEEK: {"tg_tps": 30.5, "tg_samples": 309,
                                      "measured_at": FROZEN}},
                  series=[_series_entry()])
-    pick = _host("M3-beta", role="worker", site="WD", address="192.0.2.12:8000",
+    pick = _host("beta", role="worker", site="SA", address="192.0.2.12:8000",
                  ceiling=M3_CEILING, used=M3_USED, measured=M3_MEASURED,
                  metrics={DEEPSEEK: {"tg_tps": 12.0, "tg_samples": 400,
                                      "measured_at": FROZEN}},
@@ -6031,13 +6031,13 @@ def test_a_card_without_samples_keeps_its_frame_and_says_so(series_run):
         assert '<span class="spark-win">' in markup, key
 
     cards = _cards(series_run["fleet"])
-    assert 'class="spark"' in cards["M5-alpha"]          # with a series
-    assert 'class="spark"' in cards["M3-beta"]           # `series: []`
+    assert 'class="spark"' in cards["alpha"]             # with a series
+    assert 'class="spark"' in cards["beta"]              # `series: []`
     assert 'class="spark"' in cards["M4-gamma"]          # no key at all (legacy)
     assert series_run["fleet"].count("<svg") == 3
     # exactly the two without samples carry the line of text
     assert series_run["fleet"].count('class="spark-empty"') == 2
-    assert 'class="spark-empty"' not in cards["M5-alpha"]
+    assert 'class="spark-empty"' not in cards["alpha"]
     # one sample is a point, not a line — and it is marked, not left blank
     assert 'class="spark"' in series_run["one"]
     assert 'class="spark-dot total"' in series_run["one"]
@@ -6284,27 +6284,27 @@ sandbox.globalThis = sandbox;
 
   const h = JSON.parse(JSON.stringify(fixture.healthz));
   api.apply('fleet', api.renderFleet(h));
-  const before = read('M5-alpha');
+  const before = read('alpha');
   const svg0 = before.svg;
 
   /* The pointer rests on bucket 4 — the bucket without a probe (#96), which
      the line crosses and the readout therefore bridges (#105). Then a tick
      whose numbers moved: `apply()` patches the card, it does not rebuild it.
      The crosshair has to be there afterwards, on the same <svg>. */
-  api.sparkHoverSet('M5-alpha', 4);
+  api.sparkHoverSet('alpha', 4);
   h.hosts[0].series[0].total[6] = 999.9;
   api.apply('fleet', api.renderFleet(h));
-  const patched = read('M5-alpha');
+  const patched = read('alpha');
 
   /* One bucket further, same mechanism. */
-  api.sparkHoverSet('M5-alpha', 6);
+  api.sparkHoverSet('alpha', 6);
   api.apply('fleet', api.renderFleet(h));
-  const moved = read('M5-alpha');
+  const moved = read('alpha');
 
   /* The pointer leaves: the legend comes back, nothing of the readout stays. */
   api.sparkHoverClear();
   api.apply('fleet', api.renderFleet(h));
-  const cleared = read('M5-alpha');
+  const cleared = read('alpha');
 
   process.stdout.write(JSON.stringify({
     before: {cross: before.cross, values: before.values, keys: before.keys},
@@ -6385,7 +6385,7 @@ def test_the_readout_follows_the_line_across_one_empty_bucket(series_run):
 
     # the words are the two ids of the legend, not new ones
     assert series_run["hover_card"].count('class="spark-key"') == 2
-    assert series_run["hover_state"] == {"key": "M5-alpha", "i": 4}
+    assert series_run["hover_state"] == {"key": "alpha", "i": 4}
     # the pointer is on one card: the other card keeps its legend
     assert 'class="spark-v"' not in series_run["hover_other"]
     assert 'class="spark-cross"' not in series_run["hover_other"]
@@ -6636,7 +6636,7 @@ def test_the_relative_load_stands_next_to_the_weight_as_a_number(rel_loads):
     Wörter nicht in jeder der 16 Sprachen unterzubringen (griechisch 171 px bei
     150 px). Das Wort steht im Tooltip der Zelle — der Test prüft beides, damit
     „ohne Wort" nicht heißt „ohne Erklärung"."""
-    card = _cards(rel_loads["measured"])["M5-alpha"]
+    card = _cards(rel_loads["measured"])["alpha"]
     found = re.search(r'<div class="metric-sub">target 60 % · '
                       r'<span class="rel">([^<]*)</span></div>', card)
     assert found, card[card.index("metric-sub"):][:240]
@@ -6650,7 +6650,7 @@ def test_a_missing_measurement_is_a_dash_and_never_zero(rel_loads):
     trägt den Satz im `data-tip`, damit das `—` nicht als 0 gelesen wird — und
     zwar im selben Layer wie jeder andere Tooltip, nicht als `title`."""
     for key in ("null", "missing"):
-        card = _cards(rel_loads[key])["M5-alpha"]
+        card = _cards(rel_loads[key])["alpha"]
         assert re.search(r'<span class="rel none" data-tip="not measured  Source: '
                          r'/healthz → hosts\[\]\.relative_load">—</span>', card), key
         assert 'title="not measured"' not in card, key
@@ -6658,7 +6658,7 @@ def test_a_missing_measurement_is_a_dash_and_never_zero(rel_loads):
         # Last-Element prüfen, nicht auf die Zeichenkette
         assert ">0 %<" not in card, key
     # eine gemessene Null ist dagegen eine Zahl wie jede andere
-    assert '<span class="rel">0 %</span>' in _cards(rel_loads["zero"])["M5-alpha"]
+    assert '<span class="rel">0 %</span>' in _cards(rel_loads["zero"])["alpha"]
 
 
 def test_the_load_grows_no_block_on_the_card(rel_loads):
@@ -6671,8 +6671,8 @@ def test_the_load_grows_no_block_on_the_card(rel_loads):
     def without(card: str) -> str:
         return re.sub(r' · <span class="rel[^"]*"[^>]*>[^<]*</span>', '', card)
 
-    measured = _cards(rel_loads["measured"])["M5-alpha"]
-    missing = _cards(rel_loads["missing"])["M5-alpha"]
+    measured = _cards(rel_loads["measured"])["alpha"]
+    missing = _cards(rel_loads["missing"])["alpha"]
     assert measured.count("<div") == missing.count("<div")
     assert without(measured) == without(missing)
 
@@ -6685,7 +6685,7 @@ def test_the_load_stays_inside_the_one_line_of_the_sub(css, rel_loads):
     assert "text-overflow:ellipsis" in sub
     rel = re.search(r"\.metric-sub \.rel\{([^}]*)\}", css)[1]
     assert "display:block" not in rel and "display:flex" not in rel
-    card = _cards(rel_loads["measured"])["M5-alpha"]
+    card = _cards(rel_loads["measured"])["alpha"]
     assert "<br" not in card
     assert card.count('class="metric-sub"') == 5
 
@@ -6752,7 +6752,7 @@ def test_the_age_of_the_measurement_is_read_in_its_unit(ages):
     expected = {"now": "just now", "minute": "1 min ago",
                 "day": "1 d ago", "sentinel": "370 d ago"}
     for key, text in expected.items():
-        card = _cards(ages[key])["M5-alpha"]
+        card = _cards(ages[key])["alpha"]
         assert _tps_sub(card) == text, key
         # keine rohen Sekunden mehr, in keiner Schreibweise des Tausenderpunkts
         for raw in ("86,400", "86400", "32,018,569", "32018569", "370.6"):
@@ -6767,7 +6767,7 @@ def test_the_sample_count_moved_into_the_tooltip_of_the_cell(ages):
     Zelle; eine passt überall. Der Tip ist derselbe Layer wie jeder andere
     (`data-tip`), kein zweites `title`.
     """
-    card = _cards(ages["day"])["M5-alpha"]
+    card = _cards(ages["day"])["alpha"]
     sub = _tps_sub(card)
     assert "sample" not in sub and "Proben" not in sub, sub
     assert not re.search(r"\d", sub.replace("1 d ago", "")), sub
@@ -6782,7 +6782,7 @@ def test_the_sample_count_moved_into_the_tooltip_of_the_cell(ages):
 # `cached_tokens` der letzten Antwort gegen ihren Prompt. Geprüft wird, was
 # gerendert wird — `689 / 694` und `99 % cached` —, nicht dass ein Feld existiert.
 CACHE_USAGE = {
-    "host": "M5-alpha", "samples": 3, "last_at": FROZEN,
+    "host": "alpha", "samples": 3, "last_at": FROZEN,
     "last": {"cached_tokens": 689, "prompt_tokens": 694,
              "prompt_tokens_per_second": 17.38,
              "generation_tokens_per_second": 70.12,
@@ -6807,7 +6807,7 @@ def cache_cards(tmp_path_factory) -> dict:
     """Vier Karten: warm, kalter Prefix, Server meldet nichts, halbe Messung."""
     cold = dict(CACHE_USAGE)
     cold["last"] = dict(CACHE_USAGE["last"], cached_tokens=0)
-    partial = {"host": "M5-alpha", "samples": 1, "last_at": FROZEN,
+    partial = {"host": "alpha", "samples": 1, "last_at": FROZEN,
                "last": {"cached_tokens": 5}, "mean": {}}
 
     def run(name: str, usage) -> dict:
@@ -6825,7 +6825,7 @@ def test_the_cache_column_shows_the_last_answer_against_its_prompt(cache_cards):
     derselben Antwort — nicht die mittlere Quote, denn die Frage lautet „hat der
     Cache bei *dieser* Anfrage getragen".
     """
-    card = cache_cards["warm"]["M5-alpha"]
+    card = cache_cards["warm"]["alpha"]
 
     assert 'class="metric-val num">689<span class="den"> / 694</span>' in card
     assert '<div class="metric-sub">99 % cached</div>' in card
@@ -6838,23 +6838,23 @@ def test_a_cold_prefix_is_a_zero_and_a_silent_server_is_a_dash(cache_cards):
     eine halbe Messung (nur `cached_tokens`, kein Prompt) zeigt die Zahl ohne
     Nenner und „no measurement" in der Unterzeile.
     """
-    cold = cache_cards["cold"]["M5-alpha"]
+    cold = cache_cards["cold"]["alpha"]
     assert 'class="metric-val num">0<span class="den"> / 694</span>' in cold
     assert '<div class="metric-sub">0 % cached</div>' in cold
 
-    card = cache_cards["none"]["M5-alpha"]
+    card = cache_cards["none"]["alpha"]
     assert 'class="metric-val num">—</div>' in card
     assert '<div class="metric-sub">no measurement</div>' in card
 
     # eine halbe Messung zeigt wenigstens, was da ist — ohne Nenner
-    partial = cache_cards["partial"]["M5-alpha"]
+    partial = cache_cards["partial"]["alpha"]
     assert 'class="metric-val num">5</div>' in partial
     assert '<div class="metric-sub">no measurement</div>' in partial
 
 
 def test_the_cache_row_carries_its_rates_and_samples_in_the_tip(cache_cards):
     """Die Raten stehen im Tooltip: die Zeile trägt eine Angabe, nicht vier."""
-    card = cache_cards["warm"]["M5-alpha"]
+    card = cache_cards["warm"]["alpha"]
     tips = re.findall(r'data-tip="([^"]*)"', card)
 
     assert any("3 samples" in tip for tip in tips), tips
@@ -6960,7 +6960,7 @@ def test_only_an_overridden_row_says_where_it_comes_from_and_offers_reset(params
     _head, rows = _params_cells(block)
     marked = [row for row in rows if 'class="psrc page"' in row[3]]
     assert len(marked) == 1, [row[0] for row in marked]
-    assert "M5-alpha" in marked[0][0] and "weight" in marked[0][1]
+    assert "alpha" in marked[0][0] and "weight" in marked[0][1]
     assert en["params.src_page"] in marked[0][3]
     assert 'class="btn pbtn"' in marked[0][4]
     # every other row: the file, and no control
@@ -6981,7 +6981,7 @@ def test_a_path_outside_editable_gets_no_input(params_run):
     fields = [row for row in rows if "pedit" in row[2]]
     assert len(fields) == 12, len(fields)
     for path in CONFIG_EDITABLE:
-        concrete = path.replace("*", "M5-alpha") if path.startswith("hosts.") else path
+        concrete = path.replace("*", "alpha") if path.startswith("hosts.") else path
         assert any('data-path="%s"' % concrete in row[2] for row in fields), path
     # a row that is not editable keeps its value and no field
     for label in ("binding strategy", "connect timeout", "prefill rate (cost model)"):
@@ -7061,7 +7061,7 @@ def test_a_weight_change_names_the_threads_and_applies_only_on_confirm(params_ru
     assert '"confirm":true' in run["confirmed_calls"][1]
     assert run["confirmed"]["applied"] is True
     for call in run["confirmed_calls"]:
-        assert call.startswith("admin/config/hosts.M5-alpha.weight "), call
+        assert call.startswith("admin/config/hosts.alpha.weight "), call
 
 
 def test_reset_is_a_delete_without_a_body(params_run):
@@ -7303,15 +7303,15 @@ def _run_log(work: pathlib.Path, fixture: dict) -> dict:
 # Three turns of one conversation, one turn of a second, and one decision
 # without a thread at all — oldest first, the way `/stats` sends them.
 SID_TURNS = [
-    {"time": "13:29:36", "model": DEEPSEEK, "host": "M5-alpha", "reason": "thread",
+    {"time": "13:29:36", "model": DEEPSEEK, "host": "alpha", "reason": "thread",
      "prompt_chars": 101, "duration_ms": 212.1, "status": 200,
      "thread": "sid:gwk_5cfba83bf2320dd5"},
-    {"time": "13:30:31", "model": DEEPSEEK, "host": "M3-beta", "reason": "ephemeral",
+    {"time": "13:30:31", "model": DEEPSEEK, "host": "beta", "reason": "ephemeral",
      "prompt_chars": 1219, "duration_ms": 230.0, "status": 200, "thread": None},
-    {"time": "13:36:17", "model": DEEPSEEK, "host": "M5-alpha", "reason": "thread",
+    {"time": "13:36:17", "model": DEEPSEEK, "host": "alpha", "reason": "thread",
      "prompt_chars": 160, "duration_ms": 351.9, "status": 500,
      "thread": "sid:gwk_5cfba83bf2320dd5"},
-    {"time": "13:40:02", "model": DEEPSEEK, "host": "M3-beta", "reason": "rebind",
+    {"time": "13:40:02", "model": DEEPSEEK, "host": "beta", "reason": "rebind",
      "prompt_chars": 42, "duration_ms": 99.5, "status": 200,
      "thread": "sid:local-1c0777d01fe8a5"},
 ]
@@ -7329,8 +7329,8 @@ def log_run(tmp_path_factory) -> dict:
             {"sid": "GWK_5CF", "reason": "", "host": ""},      # case-insensitive fragment
             {"sid": "sid:local", "reason": "", "host": ""},    # the prefix may be typed too
             {"sid": "", "reason": "thread", "host": ""},
-            {"sid": "", "reason": "", "host": "M3-beta"},
-            {"sid": "gwk", "reason": "thread", "host": "M5-alpha"},
+            {"sid": "", "reason": "", "host": "beta"},
+            {"sid": "gwk", "reason": "thread", "host": "alpha"},
             {"sid": "gwk", "reason": "rebind", "host": ""},    # two filters, no row
             {"sid": "zzz", "reason": "", "host": ""},          # no row at all
             {"sid": "", "reason": "", "host": ""},             # back to everything
@@ -7392,8 +7392,8 @@ def test_the_footer_counts_the_visible_rows_and_names_the_buffer(log_run):
     p90 and error count describe the two rows on screen, and the ring buffer's
     total follows as "of 4" — an operator reading `2` next to `4` must not think
     the page lost two decisions."""
-    step = log_run["steps"][4]                       # sid=gwk, reason=thread, M5-alpha
-    assert step["filter"] == {"sid": "gwk", "reason": "thread", "host": "M5-alpha"}
+    step = log_run["steps"][4]                       # sid=gwk, reason=thread, alpha
+    assert step["filter"] == {"sid": "gwk", "reason": "thread", "host": "alpha"}
     foot = step["markup"].split('class="log-foot"')[1]
     assert "<b>2</b>" in foot, foot[:300]
     # the buffer's total follows the visible count: "· of 4", no new id for it
@@ -7416,7 +7416,7 @@ def test_the_three_filters_narrow_the_table(log_run):
     assert rows(steps[0]["markup"]) == ["13:36:17", "13:29:36"]      # GWK_5CF
     assert rows(steps[1]["markup"]) == ["13:40:02"]                  # sid:local
     assert rows(steps[2]["markup"]) == ["13:36:17", "13:29:36"]      # reason=thread
-    assert rows(steps[3]["markup"]) == ["13:40:02", "13:30:31"]      # host=M3-beta
+    assert rows(steps[3]["markup"]) == ["13:40:02", "13:30:31"]      # host=beta
     assert rows(steps[4]["markup"]) == ["13:36:17", "13:29:36"]      # all three
     assert rows(steps[5]["markup"]) == []                            # gwk AND rebind
     assert rows(steps[6]["markup"]) == []                            # nothing at all
@@ -7443,7 +7443,7 @@ def test_the_selects_offer_what_the_buffer_holds_and_an_all_option(log_run):
     catalog's word, and it is the first option."""
     all_word = log_run["filter_all"]
     for markup, wanted in ((log_run["reasons"], ["thread", "ephemeral", "rebind"]),
-                           (log_run["hosts"], ["M5-alpha", "M3-beta"])):
+                           (log_run["hosts"], ["alpha", "beta"])):
         assert markup.startswith('<option value="">' + all_word + "</option>"), markup
         for value in wanted:
             assert '<option value="%s">%s</option>' % (value, value) in markup, value

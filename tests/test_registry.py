@@ -29,7 +29,7 @@ def _registry(**aff: Any) -> ThreadRegistry:
     return ThreadRegistry(AffinityConfig(**aff))
 
 
-def _thread(reg: ThreadRegistry, key: str, *, host: str = "M5-alpha",
+def _thread(reg: ThreadRegistry, key: str, *, host: str = "alpha",
             model: str = "m1", turns: int = 1, prompt_tokens: int = 0,
             kind: str = "interactive", active: int = 0,
             last_rebind: float = 0.0, idle: float = 0.0,
@@ -101,8 +101,8 @@ def test_a_thread_with_a_request_in_flight_is_not_a_candidate():
     reg = _registry()
     busy = _thread(reg, "sid:busy", active=1, prompt_tokens=100)
     idle = _thread(reg, "sid:idle", prompt_tokens=200)
-    assert reg.idle_threads("M5-alpha") == [idle]
-    assert busy not in reg.idle_threads("M5-alpha")
+    assert reg.idle_threads("alpha") == [idle]
+    assert busy not in reg.idle_threads("alpha")
 
 
 def test_a_batch_thread_is_not_a_candidate():
@@ -110,7 +110,7 @@ def test_a_batch_thread_is_not_a_candidate():
     reg = _registry()
     _thread(reg, "sid:batch", kind="batch", prompt_tokens=100)
     human = _thread(reg, "sid:human", prompt_tokens=200)
-    assert reg.idle_threads("M5-alpha") == [human]
+    assert reg.idle_threads("alpha") == [human]
 
 
 def test_an_expired_thread_is_not_a_candidate():
@@ -118,7 +118,7 @@ def test_an_expired_thread_is_not_a_candidate():
     reg = _registry(ttl_seconds=60)
     _thread(reg, "sid:dead", prompt_tokens=100, idle=600)
     alive = _thread(reg, "sid:alive", prompt_tokens=200, idle=1)
-    assert reg.idle_threads("M5-alpha") == [alive]
+    assert reg.idle_threads("alpha") == [alive]
 
 
 def test_a_thread_inside_the_cooldown_is_not_a_candidate():
@@ -127,7 +127,7 @@ def test_a_thread_inside_the_cooldown_is_not_a_candidate():
     now = time.time()
     _thread(reg, "sid:fresh", prompt_tokens=100, last_rebind=now - 30)
     cool = _thread(reg, "sid:cool", prompt_tokens=200, last_rebind=now - 900)
-    got = reg.idle_threads("M5-alpha", now=now, cooldown_seconds=600)
+    got = reg.idle_threads("alpha", now=now, cooldown_seconds=600)
     assert got == [cool]
 
 
@@ -135,23 +135,23 @@ def test_a_thread_never_moved_has_no_cooldown():
     """`last_rebind == 0` means "never moved", not "moved in 1970"."""
     reg = _registry()
     t = _thread(reg, "sid:new", prompt_tokens=100)
-    assert reg.idle_threads("M5-alpha", cooldown_seconds=600) == [t]
+    assert reg.idle_threads("alpha", cooldown_seconds=600) == [t]
 
 
 def test_only_threads_of_the_named_host():
     reg = _registry()
-    _thread(reg, "sid:a", host="M5-alpha", prompt_tokens=100)
-    other = _thread(reg, "sid:b", host="M3-beta", prompt_tokens=50)
-    assert reg.idle_threads("M3-beta") == [other]
-    assert [t.key for t in reg.idle_threads("M5-alpha")] == ["sid:a"]
+    _thread(reg, "sid:a", host="alpha", prompt_tokens=100)
+    other = _thread(reg, "sid:b", host="beta", prompt_tokens=50)
+    assert reg.idle_threads("beta") == [other]
+    assert [t.key for t in reg.idle_threads("alpha")] == ["sid:a"]
 
 
 def test_a_thread_without_a_slot_is_not_a_candidate():
     """An ephemeral thread holds nothing, so there is nothing to give up."""
     reg = _registry()
-    reg.register(key="sid:e", model="m1", host="M5-alpha", text="x",
+    reg.register(key="sid:e", model="m1", host="alpha", text="x",
                  holds_slot=False, source="header", prompt_tokens=100)
-    assert reg.idle_threads("M5-alpha") == []
+    assert reg.idle_threads("alpha") == []
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ def test_a_short_prompt_with_few_turns_comes_before_a_long_one():
     reg = _registry()
     _thread(reg, "sid:long", turns=500, prompt_tokens=60_000)
     _thread(reg, "sid:short", turns=3, prompt_tokens=900)
-    assert [t.key for t in reg.idle_threads("M5-alpha")] == ["sid:short", "sid:long"]
+    assert [t.key for t in reg.idle_threads("alpha")] == ["sid:short", "sid:long"]
 
 
 def test_turns_do_not_decide_the_price():
@@ -174,7 +174,7 @@ def test_turns_do_not_decide_the_price():
     reg = _registry()
     _thread(reg, "sid:many-turns-small", turns=200, prompt_tokens=1_000)
     _thread(reg, "sid:few-turns-big", turns=2, prompt_tokens=40_000)
-    assert [t.key for t in reg.idle_threads("M5-alpha")] == [
+    assert [t.key for t in reg.idle_threads("alpha")] == [
         "sid:many-turns-small", "sid:few-turns-big"]
 
 
@@ -185,12 +185,12 @@ def test_equal_size_breaks_the_tie_on_turns_then_created():
     _thread(reg, "sid:old-many", turns=9, prompt_tokens=5_000, created=base)
     _thread(reg, "sid:new-few", turns=2, prompt_tokens=5_000, created=base + 10)
     _thread(reg, "sid:new-many", turns=9, prompt_tokens=5_000, created=base + 20)
-    got = [t.key for t in reg.idle_threads("M5-alpha")]
+    got = [t.key for t in reg.idle_threads("alpha")]
     assert got == ["sid:new-few", "sid:old-many", "sid:new-many"]
 
     # A second scan of an unchanged fleet gives the same list — the point of
     # the tie-break (a list that reorders looks like a move).
-    assert [t.key for t in reg.idle_threads("M5-alpha")] == got
+    assert [t.key for t in reg.idle_threads("alpha")] == got
 
 
 def test_an_unknown_size_sorts_last_not_first():
@@ -202,7 +202,7 @@ def test_an_unknown_size_sorts_last_not_first():
     reg = _registry()
     _thread(reg, "sid:unknown", prompt_tokens=0)
     _thread(reg, "sid:priced", prompt_tokens=50_000)
-    assert [t.key for t in reg.idle_threads("M5-alpha")] == ["sid:priced", "sid:unknown"]
+    assert [t.key for t in reg.idle_threads("alpha")] == ["sid:priced", "sid:unknown"]
 
 
 # ---------------------------------------------------------------------------
@@ -211,8 +211,8 @@ def test_an_unknown_size_sorts_last_not_first():
 def _two_hosts(stub_factory) -> list:
     a = stub_factory(models=[stub_model_loaded("m1")])
     b = stub_factory(models=[stub_model_loaded("m1")])
-    return [host_config("M5-alpha", a.url, node_id=a.state.node_id, weight=3.0),
-            host_config("M3-beta", b.url, node_id=b.state.node_id, weight=2.0)]
+    return [host_config("alpha", a.url, node_id=a.state.node_id, weight=3.0),
+            host_config("beta", b.url, node_id=b.state.node_id, weight=2.0)]
 
 
 def _turn(system: str | None) -> dict:

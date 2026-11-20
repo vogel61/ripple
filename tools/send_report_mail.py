@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sendet den Olla-Testbericht an Richard und verifiziert die Zustellung per IMAP."""
+"""Sendet den Olla-Testbericht an den Betreiber und verifiziert die Zustellung per IMAP."""
 import email, imaplib, os, re, smtplib, ssl, sys, time
 from email.message import EmailMessage
 from email.header import decode_header
@@ -18,11 +18,11 @@ def pw_for(addr):
     return m.group(1)
 
 
-FROM = "o.stein@inforatio.at"
-TO = "r.vogel@inforatio.at"
+FROM = "user@example.com"
+TO = "recipient@example.com"
 SUBJECT = "Olla-Test fertig: 3:2 ist damit nicht machbar (Bericht im Repo)"
 
-BODY = """Hallo Richard,
+BODY = """Hallo,
 
 ich bin mit dem Olla-Test durch. Kurzfassung: Olla ist sauber gebaut, aber die
 3:2-Verteilung bekommst Du damit nicht - nicht wegen falscher Konfiguration,
@@ -121,7 +121,7 @@ msg.set_content(BODY)
 
 pw_from = pw_for(FROM)
 ctx = ssl.create_default_context()
-with smtplib.SMTP("mail.inforatio.at", 587, timeout=60) as s:
+with smtplib.SMTP("mail.example.com", 587, timeout=60) as s:
     s.starttls(context=ctx)
     s.login(FROM, pw_from)
     s.send_message(msg)
@@ -131,7 +131,7 @@ time.sleep(4)
 
 # --- IMAP-Readback -------------------------------------------------------
 pw_to = pw_for(TO)
-M = imaplib.IMAP4_SSL("mail.inforatio.at", 993)
+M = imaplib.IMAP4_SSL("mail.example.com", 993)
 M.login(TO, pw_to)
 M.select("INBOX")
 typ, data = M.search(None, 'SUBJECT', f'"{SUBJECT[:40]}"')

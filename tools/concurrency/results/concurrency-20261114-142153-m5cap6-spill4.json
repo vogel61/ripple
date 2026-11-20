@@ -1,0 +1,162 @@
+{
+  "label": "m5cap6-spill4",
+  "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+  "base": "http://localhost:8010/v1",
+  "prompt_tokens_target": 8500,
+  "max_tokens": 128,
+  "started": "2026-11-14T14:21:14",
+  "levels": [
+    {
+      "concurrency": 12,
+      "wall_s": 34.03,
+      "req_s": 0.353,
+      "tok_s": 11.3,
+      "processed_tokens": 28074,
+      "processed_tok_s": 825.0,
+      "completion_tokens": 384,
+      "errors": [
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+        "503 {\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co"
+      ],
+      "hosts": {
+        "beta": {
+          "count": 3,
+          "mean_latency": 33.56,
+          "max_latency": 34.03,
+          "completion_tokens": 384,
+          "prompt_tokens": 27690,
+          "processed_tok_s": 825.0
+        },
+        "unrouted(503)": {
+          "count": 9,
+          "mean_latency": 0.01,
+          "max_latency": 0.01,
+          "completion_tokens": 0,
+          "prompt_tokens": 0,
+          "processed_tok_s": 0.0
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 32.72
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 34.03
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9230,
+          "completion_tokens": 128,
+          "latency": 33.92
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        },
+        {
+          "status": 503,
+          "host": null,
+          "reason": null,
+          "error": "{\"error\":{\"message\":\"no host can take 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp' without evicting a running thread \u2014 alpha: no_slot (12/12 slots); beta: no_slot (12/12 slots)\",\"type\":\"ripple_error\",\"co",
+          "latency": 0.01
+        }
+      ]
+    }
+  ],
+  "config": {
+    "alpha": {
+      "max_inflight": 6,
+      "spill_threshold": 4,
+      "inflight": 0
+    },
+    "beta": {
+      "max_inflight": 6,
+      "spill_threshold": 3,
+      "inflight": 0
+    }
+  },
+  "finished": "2026-11-14T14:21:53",
+  "config_after": {
+    "alpha": {
+      "max_inflight": 6,
+      "spill_threshold": 4,
+      "inflight": 0
+    },
+    "beta": {
+      "max_inflight": 6,
+      "spill_threshold": 3,
+      "inflight": 0
+    }
+  }
+}

@@ -42,20 +42,20 @@ REQ = ("2026-11-14 19:10:00 INFO    ripple.request: model=DeepSeek-V4.1-Flash-10
 
 RIPPLE = "\n".join([
     # every line twice: what the two handlers produced before the fix
-    REQ.format(host="M5-alpha", reason="thread", thread="26311548f7805f9c", ms="267.4"),
-    REQ.format(host="M5-alpha", reason="thread", thread="26311548f7805f9c", ms="267.4"),
-    REQ.format(host="M5-alpha", reason="thread", thread="26311548f7805f9c", ms="132.6"),
-    REQ.format(host="M5-alpha", reason="thread", thread="26311548f7805f9c", ms="132.6"),
-    REQ.format(host="M3-beta", reason="ephemeral", thread="-", ms="7922.4"),
-    REQ.format(host="M3-beta", reason="ephemeral", thread="-", ms="7922.4"),
+    REQ.format(host="alpha", reason="thread", thread="26311548f7805f9c", ms="267.4"),
+    REQ.format(host="alpha", reason="thread", thread="26311548f7805f9c", ms="267.4"),
+    REQ.format(host="alpha", reason="thread", thread="26311548f7805f9c", ms="132.6"),
+    REQ.format(host="alpha", reason="thread", thread="26311548f7805f9c", ms="132.6"),
+    REQ.format(host="beta", reason="ephemeral", thread="-", ms="7922.4"),
+    REQ.format(host="beta", reason="ephemeral", thread="-", ms="7922.4"),
     "2026-11-14 18:28:04 WARNING ripple: rebind thread=26311548f7805f9c "
-    "from=M3-beta to=M5-alpha gain=2.6s cost=0.8s (1 moves in the last hour)",
+    "from=beta to=alpha gain=2.6s cost=0.8s (1 moves in the last hour)",
     "2026-11-14 18:28:04 WARNING ripple: rebind thread=26311548f7805f9c "
-    "from=M3-beta to=M5-alpha gain=2.6s cost=0.8s (1 moves in the last hour)",
+    "from=beta to=alpha gain=2.6s cost=0.8s (1 moves in the last hour)",
     "2026-11-14 19:41:17 WARNING ripple: rebind thread=26311548f7805f9c "
-    "from=M5-alpha to=M3-beta gain=4.0s cost=1.1s (2 moves in the last hour)",
+    "from=alpha to=beta gain=4.0s cost=1.1s (2 moves in the last hour)",
     "2026-11-14 19:41:17 WARNING ripple: rebind thread=26311548f7805f9c "
-    "from=M5-alpha to=M3-beta gain=4.0s cost=1.1s (2 moves in the last hour)",
+    "from=alpha to=beta gain=4.0s cost=1.1s (2 moves in the last hour)",
     "2026-11-14 19:55:02 INFO    ripple: promote thread=abc123 batch->interactive",
     "2026-11-14 19:55:02 INFO    ripple: promote thread=abc123 batch->interactive",
 ])
@@ -147,7 +147,7 @@ def test_ripple_lines_are_deduplicated() -> None:
 
 
 def test_identical_lines_at_different_seconds_are_kept() -> None:
-    line = REQ.format(host="M5-alpha", reason="thread", thread="t", ms="10.0")
+    line = REQ.format(host="alpha", reason="thread", thread="t", ms="10.0")
     later = line.replace("19:10:00", "19:10:01")
     log = lr.parse_ripple(line + "\n" + later + "\n" + line + "\n")
     assert len(log.requests) == 2
@@ -157,7 +157,7 @@ def test_identical_lines_at_different_seconds_are_kept() -> None:
 def test_movements_one_pair_in_each_direction_and_one_promotion() -> None:
     mv = lr.movements_summary(lr.parse_ripple(RIPPLE).movements)
     assert mv["rebind_count"] == 2
-    assert mv["directions"] == {"M3-beta -> M5-alpha": 1, "M5-alpha -> M3-beta": 1}
+    assert mv["directions"] == {"beta -> alpha": 1, "alpha -> beta": 1}
     assert mv["promotions"] == 1
     assert mv["promotion_threads"] == ["abc123"]
     gains = sorted(r["gain_s"] for r in mv["rebinds"])
@@ -166,9 +166,9 @@ def test_movements_one_pair_in_each_direction_and_one_promotion() -> None:
 
 def test_ripple_requests_per_host_and_mean_duration() -> None:
     by_host = lr.ripple_by_host(lr.parse_ripple(RIPPLE).requests)
-    assert by_host["M5-alpha"]["requests"] == 2
-    assert by_host["M5-alpha"]["mean_duration_ms"] == pytest.approx(200.0)
-    assert by_host["M3-beta"]["mean_duration_ms"] == pytest.approx(7922.4)
+    assert by_host["alpha"]["requests"] == 2
+    assert by_host["alpha"]["mean_duration_ms"] == pytest.approx(200.0)
+    assert by_host["beta"]["mean_duration_ms"] == pytest.approx(7922.4)
 
 
 # --------------------------------------------------------------------------- #
@@ -238,9 +238,9 @@ class _Host:
 def test_local_host_is_read_locally_and_remote_over_ssh(monkeypatch) -> None:
     monkeypatch.setattr(lr, "local_addresses", lambda: {"127.0.0.1", "192.0.2.11"})
     start, end = NOW - timedelta(hours=24), NOW
-    local = lr.build_source(_Host("M5-alpha", "http://192.0.2.11:8000"), start, end,
+    local = lr.build_source(_Host("alpha", "http://192.0.2.11:8000"), start, end,
                             no_remote=False)
-    remote = lr.build_source(_Host("M3-beta", "http://192.0.2.12:8000"), start, end,
+    remote = lr.build_source(_Host("beta", "http://192.0.2.12:8000"), start, end,
                              no_remote=False)
     assert local.kind == "local"
     assert local.paths[0] == str(Path.home() / ".omlx/logs/server.log")
@@ -253,7 +253,7 @@ def test_local_host_is_read_locally_and_remote_over_ssh(monkeypatch) -> None:
 def test_no_m3_skips_remote_hosts_without_touching_them(monkeypatch) -> None:
     monkeypatch.setattr(lr, "local_addresses", lambda: {"127.0.0.1"})
     start, end = NOW - timedelta(hours=24), NOW
-    src = lr.build_source(_Host("M3-beta", "http://192.0.2.12:8000"), start, end,
+    src = lr.build_source(_Host("beta", "http://192.0.2.12:8000"), start, end,
                           no_remote=True)
     assert src.kind == "skip"
     assert "no-m3" in src.display
@@ -261,8 +261,8 @@ def test_no_m3_skips_remote_hosts_without_touching_them(monkeypatch) -> None:
 
 def test_unreachable_host_is_marked_not_fatal() -> None:
     """The M5 part must still print; the M3 is 'unreachable', exit stays 0."""
-    m5 = lr.Source(host="M5-alpha", kind="local", target="-", paths=["/x"], display="local")
-    m3 = lr.Source(host="M3-beta", kind="ssh", target="192.0.2.12",
+    m5 = lr.Source(host="alpha", kind="local", target="-", paths=["/x"], display="local")
+    m3 = lr.Source(host="beta", kind="ssh", target="192.0.2.12",
                    paths=["$HOME/.omlx/logs/server.log"], display="ssh 192.0.2.12")
 
     def fetcher(src: lr.Source, since: datetime) -> lr.Fetch:
@@ -276,7 +276,7 @@ def test_unreachable_host_is_marked_not_fatal() -> None:
     assert loads[1].records == []
 
     text = lr.render(NOW - timedelta(hours=1), NOW, loads, lr.parse_ripple(RIPPLE), ["log"])
-    assert "M5-alpha" in text
+    assert "alpha" in text
     assert "unreachable" in text and "192.0.2.12" in text
     assert "not a fleet total" in text
 
@@ -298,9 +298,9 @@ def _write_config(tmp_path: Path) -> Path:
     path.write_text(
         "listen_port: 8010\n"
         "hosts:\n"
-        "  - name: M5-alpha\n"
+        "  - name: alpha\n"
         "    addresses: [http://192.0.2.11:8000]\n"
-        "  - name: M3-beta\n"
+        "  - name: beta\n"
         "    addresses: [http://192.0.2.12:8000]\n", encoding="utf-8")
     return path
 
@@ -312,7 +312,7 @@ def test_cli_renders_a_report_and_exits_zero(tmp_path: Path, monkeypatch,
     log.write_text(RIPPLE, encoding="utf-8")
 
     def fake_load(sources, since, until, *, fetcher=lr.fetch_source):
-        return [lr.HostLoad(name="M5-alpha", records=lr.parse_omlx(OVERLAP),
+        return [lr.HostLoad(name="alpha", records=lr.parse_omlx(OVERLAP),
                             source="local /x/server.log")]
 
     monkeypatch.setattr(lr, "load_hosts", fake_load)
@@ -322,12 +322,12 @@ def test_cli_renders_a_report_and_exits_zero(tmp_path: Path, monkeypatch,
     # fixture by more than a day and the test goes red for a reason that has
     # nothing to do with the code.
     rc = lr.main(["--config", str(cfg), "--ripple-log", str(log),
-                  "--since", "2026-11-14T00:00", "--hosts", "M5-alpha"])
+                  "--since", "2026-11-14T00:00", "--hosts", "alpha"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "RIPPLE load report" in out and "per host" in out
     assert "hourly busy seconds" in out
-    assert "M3-beta -> M5-alpha" in out
+    assert "beta -> alpha" in out
 
 
 def test_cli_json_is_machine_readable(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -336,13 +336,13 @@ def test_cli_json_is_machine_readable(tmp_path: Path, monkeypatch, capsys) -> No
     log = tmp_path / "ripple.log"
     log.write_text(RIPPLE, encoding="utf-8")
     monkeypatch.setattr(lr, "load_hosts", lambda *a, **k: [
-        lr.HostLoad(name="M5-alpha", records=lr.parse_omlx(OVERLAP), source="local")])
+        lr.HostLoad(name="alpha", records=lr.parse_omlx(OVERLAP), source="local")])
     monkeypatch.setattr(lr, "local_addresses", lambda: {"127.0.0.1"})
     rc = lr.main(["--config", str(cfg), "--ripple-log", str(log), "--json",
-                  "--since", "2026-11-14T00:00", "--hosts", "M5-alpha"])
+                  "--since", "2026-11-14T00:00", "--hosts", "alpha"])
     payload = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert payload["hosts"]["M5-alpha"]["requests"] == 2
+    assert payload["hosts"]["alpha"]["requests"] == 2
     assert payload["movements"]["rebind_count"] == 2
     assert payload["window"]["seconds"] > 0
     assert payload["sources"]
@@ -354,10 +354,10 @@ def test_cli_exits_three_when_nothing_parsed(tmp_path: Path, monkeypatch,
     empty = tmp_path / "empty.log"
     empty.write_text("", encoding="utf-8")
     monkeypatch.setattr(lr, "load_hosts", lambda *a, **k: [
-        lr.HostLoad(name="M5-alpha", error="ssh exit 255: unreachable", source="local")])
+        lr.HostLoad(name="alpha", error="ssh exit 255: unreachable", source="local")])
     monkeypatch.setattr(lr, "local_addresses", lambda: {"127.0.0.1"})
     rc = lr.main(["--config", str(cfg), "--ripple-log", str(empty),
-                  "--hosts", "M5-alpha"])
+                  "--hosts", "alpha"])
     capsys.readouterr()
     assert rc == 3
 

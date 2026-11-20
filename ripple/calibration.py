@@ -31,7 +31,7 @@ import yaml
 
 log = logging.getLogger("ripple.calibration")
 
-# The AS-5 night run, 15.11.2026 01:00–01:03 on M3-beta (docs/loading-state.md §3).
+# The AS-5 night run, 15.11.2026 01:00–01:03 on beta (docs/loading-state.md §3).
 DEFAULT_SAMPLES: list[tuple[float, float]] = [(111.6, 24.7), (453.6, 131.0)]
 DEFAULT_SOURCE = "m3u-conservative"
 

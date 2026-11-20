@@ -42,7 +42,7 @@ def _cfg(tmp_path, hosts, *, samples: int = 2, max_seconds: float = 30.0):
     `replace` and not a fresh `PlacementConfig`: the latter would silently undo
     the `/tmp` redirects `make_config` applies to the operator's real stores
     (maintenance, model policy). Measured on 16.11.2026 — the maintenance window
-    the operator had set on `M3-beta` in `~/.ripple/maintenance.yaml` leaked into
+    the operator had set on `beta` in `~/.ripple/maintenance.yaml` leaked into
     this file and made `test_the_curve_follows_the_node_id_not_the_host_name`
     answer 409.
     """
@@ -419,7 +419,7 @@ async def test_a_node_out_of_the_pool_refuses(stub_factory, ripple_factory, tmp_
 # ---------------------------------------------------------------------------
 async def test_a_monotonic_loading_started_at_falls_back_to_the_load_call(
         stub_factory, ripple_factory, tmp_path):
-    # Measured live on M3-beta: oMLX reports a monotonic clock value there
+    # Measured live on beta: oMLX reports a monotonic clock value there
     # (158021.3 s after boot) and keeps it constant while the load runs. Read as
     # epoch it is ~57 years in the past, so a naive measurement stores ~1.8e9
     # seconds and the whole curve becomes worthless. `/load` blocks until the
@@ -470,7 +470,7 @@ async def test_a_model_the_node_cannot_load_is_skipped_not_fatal(
 
 async def test_the_entry_model_preference_must_not_destroy_the_spread(
         stub_factory, ripple_factory, tmp_path):
-    # Live finding, 15.11.2026: on M3-beta the only small model (6,5 GB) was
+    # Live finding, 15.11.2026: on beta the only small model (6,5 GB) was
     # resident on the entry host, so "do not load the operator's model" dropped it
     # and left 111,6 vs 159,2 GB — a 1,4× range, which says nothing about the
     # slope and made calibration impossible. The preference applies only while a
@@ -505,9 +505,9 @@ async def test_the_curve_follows_the_node_id_not_the_host_name(
                              StubModel(id="big", estimated_size=BIG)],
                      load_simulates=True, load_delay=0.05)
     first = await ripple_factory(_cfg(tmp_path, [
-        host_config("M3-beta", a.url, node_id=a.state.node_id)]))
-    assert (await _post(first, "M3-beta")).status_code == 202
-    job = await _wait_done(first, "M3-beta")
+        host_config("beta", a.url, node_id=a.state.node_id)]))
+    assert (await _post(first, "beta")).status_code == 202
+    job = await _wait_done(first, "beta")
     assert job["state"] == "done", job
 
     # the same machine under a new name: nothing else in the config changed
@@ -551,7 +551,7 @@ async def test_an_unhealthy_node_is_not_calibrated(stub_factory, ripple_factory,
 # ---------------------------------------------------------------------------
 async def test_a_fully_resident_node_is_calibrated_and_left_as_it_was(
         stub_factory, ripple_factory, tmp_path):
-    """Live finding, 15.11.2026, `docs/loading-state-live-2026-11-15.md` §10.
+    """Live finding, 15.11.2026, from the loading-state live run.
 
     The M5's allow-list holds exactly two models and both are normally resident,
     so the plan had nothing to load and answered

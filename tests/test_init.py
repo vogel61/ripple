@@ -160,9 +160,9 @@ def test_refusal_happens_before_the_first_question(tmp_path, capsys):
 def test_name_overrides_a_single_node_and_is_refused_for_two(tmp_path, capsys):
     port = closed_port()
     assert main(_argv(tmp_path, port, "--host", "http://127.0.0.1:1",
-                      "--name", "M3-beta", "--no-check")) == 0
+                      "--name", "beta", "--no-check")) == 0
     assert [h.name for h in load_config(_config_path(tmp_path)).hosts] == \
-        ["M3-beta"]
+        ["beta"]
 
     other = tmp_path / "two"
     other.mkdir()

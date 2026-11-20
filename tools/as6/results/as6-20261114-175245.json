@@ -1,0 +1,14 @@
+{
+  "model": "Qwen3.5-9B-oQ4e-mtp",
+  "results": [
+    {
+      "host": "alpha",
+      "error": "HTTPStatusError: Client error '401 Unauthorized' for url 'http://192.0.2.151:8000/v1/models/status'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401"
+    },
+    {
+      "host": "beta",
+      "error": "HTTPStatusError: Client error '401 Unauthorized' for url 'http://192.0.2.9:8000/v1/models/status'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401"
+    }
+  ],
+  "dry_run": true
+}

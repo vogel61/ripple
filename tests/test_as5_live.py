@@ -23,8 +23,8 @@ from tools import as5_live  # noqa: E402
 from tools.as5_live import (EXIT_FAILED, EXIT_M5_TOUCHED, EXIT_OK,  # noqa: E402
                             EXIT_PREFLIGHT, EXIT_SERVED, Options, Resp, Runner)
 
-KEEP = "M5-alpha"
-WORK = "M3-beta"
+KEEP = "alpha"
+WORK = "beta"
 HEAVY = as5_live.HEAVY_DEFAULT
 PROBE = as5_live.PROBE_DEFAULT
 GB = 1e9
@@ -576,8 +576,8 @@ def test_a_transient_no_healthy_host_is_waited_out_and_retried(tmp_path):
     assert text.count("chat[as5b #2] model=") == 2
     assert "HTTP 503 no_healthy_host" in text
     # the wait is visible: unhealthy polls, then healthy, then the retry
-    assert "wait: M3-beta healthy=false" in text
-    assert "wait: M3-beta healthy=true" in text
+    assert "wait: beta healthy=false" in text
+    assert "wait: beta healthy=true" in text
     assert "back in the pool after" in text
     assert "retry 1/3" in text
     # and the retried request is the one that counted
@@ -599,7 +599,7 @@ def test_a_host_that_never_recovers_in_the_window_fails_with_exit_1(tmp_path):
     assert "healthy=False" in runner.abort_message
 
     text = (tmp_path / "logs" / "test.log").read_text()
-    polls = text.count("wait: M3-beta healthy=false")
+    polls = text.count("wait: beta healthy=false")
     assert 1 <= polls <= 15, f"the wait must be bounded, saw {polls} polls"
     # bounded, and it did give up rather than loop: the run finished and the
     # fleet was put back once the pool returned

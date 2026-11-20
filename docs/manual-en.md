@@ -23,16 +23,18 @@ own page will show your own numbers in the same places.
 
 RIPPLE is a window in front of your oMLX nodes, not a part of them. It accepts
 OpenAI-compatible requests, decides which machine should answer each one, forwards
-it there, and shows you what happened; it never loads, unloads, patches or
-configures a model, and it changes nothing in the oMLX installation. What it does
-own is *routing state* — which conversation lives where, which (node, model) pair
-is switched off, which machine is in maintenance — and it keeps that state in its
-own files under `~/.ripple/`, never in oMLX's settings. If RIPPLE is stopped, the
-nodes keep serving on their own ports and a client can be pointed straight at one
-of them; that is the emergency path, and it is one line of configuration. The
-reason the distinction matters is that everything you can do from the dashboard is
-reversible by definition: no click on this page can leave a model missing, a
-setting changed, or a machine in a state you cannot undo.
+it there, and shows you what happened; it issues no load or unload command, never
+patches or configures a model, and it changes nothing in the oMLX installation. It
+can still *cause* a load: a request placed on a node that does not hold the model
+makes oMLX load it, and RIPPLE supervises that load — it just never starts one
+itself. What it does own is *routing state* — which conversation lives where, which
+(node, model) pair is switched off, which machine is in maintenance — and it keeps
+that state in its own files under `~/.ripple/`, never in oMLX's settings. If RIPPLE
+is stopped, the nodes keep serving on their own ports and a client can be pointed
+straight at one of them; that is the emergency path, and it is one line of
+configuration. The reason the distinction matters is that everything you can do
+from the dashboard is reversible by definition: no click on this page can leave a
+model missing, a setting changed, or a machine in a state you cannot undo.
 
 ## 2. Installing in five lines
 
@@ -621,10 +623,12 @@ median and the 90th percentile of their durations, how many ended with an error
 status, and the oldest and the newest of them, in that order.
 
 The reason is a token and the chip carries it unchanged; the tooltip repeats the
-same sentence from the page's catalog (`reason.<token>`). The table names all
-twenty-one tokens that the catalog translates, in the order an operator meets
+same sentence from the page's catalog (`reason.<token>`). The table names the
+twenty-five tokens that can stand in that column, in the order an operator meets
 them: why the request is here, why a thread moved or did not, why it failed, why
-it landed on the second-best node.
+it landed on the second-best node. The catalog translates twenty-one of them;
+`resident`, `cold_load`, `evict_idle` and `model_locked` have no entry yet and
+appear as bare tokens.
 
 | Reason | What it means |
 |---|---|
@@ -646,14 +650,18 @@ it landed on the second-best node.
 | `unknown_model` | No node knows this model. |
 | `model_list_unavailable` | A node's model list could not be read, so whether it carries the model is unknown — usually its admin key. |
 | `slot_evict` | All slots were held by idle threads — the oldest gave up its place. |
+| `cold_load` | The model had to be loaded on this node before it could answer. |
+| `evict_idle` | An idle model was unloaded to make room, then this model was loaded. |
+| `resident` | The model was already loaded on this node. |
 | `conflict` | No node could take the request without evicting a running thread. |
-| `model_pinned` | The model is pinned on this node and must not be evicted. |
+| `model_locked` | A model the operator locked would have been evicted; the request was refused with 503 instead. |
+| `model_pinned` | Only this node offers the model, so the request had to land here. Not the same as a *locked* model — a locked model produces a 503 `model_locked`, not this token. |
 | `degraded_host` | The preferred node was degraded; the request went to the healthy one. |
 
-Four tokens the catalog does not translate can stand in the column: the refusals
-the operator caused — `model_disabled`, `model_hidden`, `model_locked` — and a
-bare `error` when no decision was reached. Their explanation is the request's
-error message, which names the node, the level and the endpoint that undoes it.
+Three further tokens the catalog does not translate can stand in the column: the
+refusals the operator caused — `model_disabled`, `model_hidden` — and a bare
+`error` when no decision was reached. Their explanation is the request's error
+message, which names the node, the level and the endpoint that undoes it.
 
 ### 5.5 The Operations tab
 
@@ -1056,11 +1064,13 @@ x-ripple-thread: sid:8f14e45f
 ```
 
 `x-ripple-host` is the node that answered. `x-ripple-reason` is a short token from
-the same vocabulary as the History tab (`thread`, `new_thread`, `rebind`, `moved`,
-`fallback`, `one_shot`, `ephemeral`, `slot_evict`, `model_pinned`,
-`degraded_host`). `x-ripple-thread` names the slot the request used. Together they
-answer "where did this go, and why" without opening the dashboard — which is what
-makes them useful in a client's log.
+the same vocabulary as the History tab: `resident`, `cold_load`, `evict_idle`,
+`thread`, `new_thread`, `rebind`, `moved`, `fallback`, `one_shot`, `ephemeral`,
+`slot_evict`, `model_pinned`, `degraded_host`. Three of them — `resident`,
+`cold_load`, `evict_idle` — have no entry in the dashboard catalog yet and appear
+as bare tokens; their meaning is in the table in §5.4. `x-ripple-thread` names the
+slot the request used. Together they answer "where did this go, and why" without
+opening the dashboard — which is what makes them useful in a client's log.
 
 ## 8. Troubleshooting
 
@@ -1122,11 +1132,32 @@ restarted for this; a `503` here is a "not yet", not a "never".
 **Symptom.** The first request for a model takes minutes, or the client times out
 while nothing seems to happen.
 
-**Cause.** The model was not resident on the chosen node, so oMLX is loading it.
-The proxy has no read timeout — deliberately, because a long generation must be
-allowed to finish — so the client waits for as long as the load takes. The fleet
-card shows a loading line with the model, its size and an estimated remaining
-time; `/stats` counts the event in `cold_load`.
+**Cause.** The model was not resident on the chosen node, so oMLX is loading it. That
+happens on two paths and both look the same from the client: `cold_load` (nothing had to
+be evicted, or nothing could be forecast) and `evict_idle` (an idle model was unloaded
+first — the normal case on a node that holds one big resident model). `/stats` counts
+both in `cold_load`: the counter is incremented from the placement tier, before the
+reason is read. `evict_idle` is the **subset** of those loads — the ones that first had
+to make room — so it is counted in addition and never exceeds `cold_load`. A load that
+evicted an idle model therefore moves both counters.
+
+**What the client sees.** Nothing at all: the connection stays open, no headers are sent,
+and the proxy has no read timeout — deliberately, because a long generation must be
+allowed to finish. The first byte is the answer, 65–135 s later. A client with its own
+60 s timeout gives up while the load continues; the retry lands on the same node and
+queues behind the same load.
+
+**What it costs.** The whole model, whatever the request size: a 485-token prompt can
+pull 453 GB. There is no minimum prompt size and no exemption for one-shot requests.
+The fleet card shows a loading line with the model, its size and an estimated remaining
+time — an estimate from the node's calibration, which can be short.
+
+**Was it checked?** If the node reports `residency` and a memory ceiling, RIPPLE
+forecast the load and refused it when a locked, pinned or running model would have been
+evicted (503 `model_locked` / `conflict`). If it reports neither — or the guard is off —
+the load was allowed **unchecked**, and oMLX evicted by its own LRU. The response token
+is `cold_load` in both cases; the request log line carries the difference in `decision=`
+(`no_eviction_forecast`, `size_unknown`, `no_ceiling`).
 
 **What to do.** Wait, and watch the loading line rather than retrying: a retry does
 not speed the load up and may put a second request on the same node. If the
@@ -1192,7 +1223,7 @@ capabilities, memory ceiling and usage — so the new version appears within one
 in the log with both values:
 
 ```
-version host=M3-beta old=0.8.0rc1 new=0.8.0
+version host=beta old=0.8.0rc1 new=0.8.0
 ```
 
 If the version still does not follow, the node is not making a transition: it
@@ -1316,8 +1347,8 @@ that sends `X-Session-Id` or none (the fingerprint works, §7.2), and the weight
 Placement, affinity and the TTL do the rest.
 
 **A worked example.** Five people, one conversation each, open at the same time:
-five threads, target shares 60 / 40 from the 3 : 2 weights, so three on M5-alpha
-and two on M3-beta. Ten conversations give six and four. Against
+five threads, target shares 60 / 40 from the 3 : 2 weights, so three on alpha
+and two on beta. Ten conversations give six and four. Against
 `max_threads: 20` per host that is 15 % and 10 % of the slots — a team of this
 size never touches the ceiling.
 
@@ -1362,10 +1393,10 @@ cold prefill of its own context, which it paid before as well.
 
 **What that looked like, before and after #92.** Four spawns of one session, at
 the same time: **one** thread, `turns=272`, `active=3`, all three streams on
-M3-beta while M5-alpha — weight 3, same model resident — sat at `inflight 0`. The
+beta while alpha — weight 3, same model resident — sat at `inflight 0`. The
 fleet delivered the M3's aggregate and the M5's 62.5 tok/s single-stream capacity
 went unused. After #92 the same shape gives **four** threads on **two** hosts:
-`sid:test4`, `#afafa107` and `#5c8fb4aa` on M5-alpha, `#7fdb7237` on M3-beta.
+`sid:test4`, `#afafa107` and `#5c8fb4aa` on alpha, `#7fdb7237` on beta.
 
 **How to cut, in practice.** One file per child. Four children on four files are
 four threads, placed by deficit, and both hosts work at once. The cut is the hard
@@ -1399,8 +1430,9 @@ a cache, and a price on every arriving turn. A move shows as
 
 **Pinned** is the same thread after it has spent its moves. Not an error state and
 no operator action: the guard that keeps a conversation from paying prefills in a
-loop. Note the near-namesake — `model_pinned` is a model locked against eviction
-on a node (§5.3), a property of the machine, not of the conversation.
+loop. Note the near-namesake — `model_pinned` is not a pin and not a lock: it is the
+reason a request had to go to the one node that offers the model. A model locked
+against eviction (§5.3) produces `model_locked` and a 503 instead.
 
 **Why two users with identical hardware report different experiences.** The first
 runs one long conversation with tool calls: one thread, one node, and after two

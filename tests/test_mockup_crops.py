@@ -122,7 +122,7 @@ def _payloads() -> str:
 
 def test_the_payloads_carry_no_production_identifier():
     blob = _payloads()
-    for word in ("M5-alpha", "M3-beta", "DeepSeek", "Qwen", "MarkItDown", "GLM",
+    for word in ("alpha", "beta", "DeepSeek", "Qwen", "MarkItDown", "GLM",
                  "10.11.12", "10.30.1", "192.168.77"):
         assert word not in blob, "%r is a production identifier" % word
     # …and the addresses that are there are documentation addresses.

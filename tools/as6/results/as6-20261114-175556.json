@@ -1,0 +1,242 @@
+{
+  "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+  "results": [
+    {
+      "host": "alpha",
+      "address": "http://192.0.2.151:8000",
+      "weight": 3.0,
+      "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+      "estimated_size": 453635361950,
+      "runs": 10,
+      "valid_runs": 10,
+      "invalid_runs": 0,
+      "prompt_tokens_measured": 8058,
+      "tg_tps_median": 55.9,
+      "tg_tps_min": 34.6,
+      "tg_tps_max": 61.8,
+      "ttft_median_s": 1.985,
+      "samples": [
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 3.48,
+          "total_s": 15.04,
+          "wall_s": 15.049,
+          "decode_s": 11.56,
+          "tg_tps": 34.6
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 2.97,
+          "total_s": 12.24,
+          "wall_s": 12.27,
+          "decode_s": 9.27,
+          "tg_tps": 43.1
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 1.91,
+          "total_s": 8.87,
+          "wall_s": 8.889,
+          "decode_s": 6.96,
+          "tg_tps": 57.5
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 1.89,
+          "total_s": 9.1,
+          "wall_s": 9.114,
+          "decode_s": 7.21,
+          "tg_tps": 55.5
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 2.01,
+          "total_s": 8.6,
+          "wall_s": 8.625,
+          "decode_s": 6.59,
+          "tg_tps": 60.7
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 1.96,
+          "total_s": 8.71,
+          "wall_s": 8.731,
+          "decode_s": 6.75,
+          "tg_tps": 59.3
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 1.92,
+          "total_s": 9.22,
+          "wall_s": 9.233,
+          "decode_s": 7.3,
+          "tg_tps": 54.8
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 1.96,
+          "total_s": 8.43,
+          "wall_s": 8.446,
+          "decode_s": 6.47,
+          "tg_tps": 61.8
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 2.06,
+          "total_s": 9.16,
+          "wall_s": 9.174,
+          "decode_s": 7.1,
+          "tg_tps": 56.3
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 2.05,
+          "total_s": 9.6,
+          "wall_s": 9.613,
+          "decode_s": 7.55,
+          "tg_tps": 53.0
+        }
+      ],
+      "dry_run": false
+    },
+    {
+      "host": "beta",
+      "address": "http://192.0.2.9:8000",
+      "weight": 2.0,
+      "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+      "estimated_size": 453635361950,
+      "runs": 10,
+      "valid_runs": 10,
+      "invalid_runs": 0,
+      "prompt_tokens_measured": 8058,
+      "tg_tps_median": 42.8,
+      "tg_tps_min": 41.1,
+      "tg_tps_max": 48.4,
+      "ttft_median_s": 7.365,
+      "samples": [
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.34,
+          "total_s": 16.45,
+          "wall_s": 16.577,
+          "decode_s": 9.11,
+          "tg_tps": 43.9
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.34,
+          "total_s": 15.61,
+          "wall_s": 15.637,
+          "decode_s": 8.27,
+          "tg_tps": 48.4
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.28,
+          "total_s": 16.7,
+          "wall_s": 16.728,
+          "decode_s": 9.42,
+          "tg_tps": 42.5
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.32,
+          "total_s": 17.06,
+          "wall_s": 17.089,
+          "decode_s": 9.74,
+          "tg_tps": 41.1
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.34,
+          "total_s": 16.61,
+          "wall_s": 16.631,
+          "decode_s": 9.27,
+          "tg_tps": 43.1
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.39,
+          "total_s": 16.73,
+          "wall_s": 16.754,
+          "decode_s": 9.34,
+          "tg_tps": 42.8
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.43,
+          "total_s": 15.91,
+          "wall_s": 15.937,
+          "decode_s": 8.48,
+          "tg_tps": 47.2
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.52,
+          "total_s": 17.01,
+          "wall_s": 17.045,
+          "decode_s": 9.49,
+          "tg_tps": 42.1
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.46,
+          "total_s": 17.0,
+          "wall_s": 17.035,
+          "decode_s": 9.54,
+          "tg_tps": 41.9
+        },
+        {
+          "valid": true,
+          "completion_tokens": 400,
+          "prompt_tokens": 8058,
+          "ttft_s": 7.42,
+          "total_s": 16.76,
+          "wall_s": 16.794,
+          "decode_s": 9.34,
+          "tg_tps": 42.8
+        }
+      ],
+      "dry_run": false
+    }
+  ],
+  "dry_run": false
+}

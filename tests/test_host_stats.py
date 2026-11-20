@@ -199,7 +199,7 @@ def test_a_test_config_never_points_at_the_operator_ledger():
     """Same rule as the maintenance windows and the model policy: a test must not
     read or write `~/.ripple/host_stats.json`. The live file is the operator's
     measured history — a test would inherit a fleet that is not its own."""
-    cfg = make_config([host_config("M5-alpha", "http://192.0.2.11:8000")])
+    cfg = make_config([host_config("alpha", "http://192.0.2.11:8000")])
     assert not str(cfg.stats.file).startswith(str(Path.home()))
     assert str(cfg.stats.file).startswith(tempfile.gettempdir())
     # …and nothing is written at all unless a test asks for the file.

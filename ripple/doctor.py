@@ -532,8 +532,8 @@ def _site_checks(cfg: Config, probes: List[NodeProbe]) -> List[Check]:
     * the address is inside the declared site's networks — OK, and the line says
       which network confirmed it;
     * the address is inside *another* site's networks — one WARN naming both
-      sites. This is the case of the M5 that declares `WD` and is reached over
-      `198.51.100.49`, which belongs to the Traiskirchen site;
+      sites. This is the case of the M5 that declares `SA` and is reached over
+      `198.51.100.49`, which belongs to the site-b site;
     * the address is in no network at all — one WARN naming the site and its
       networks. The claim is not contradicted, it is unconfirmed, and the
       operator usually forgot a network.

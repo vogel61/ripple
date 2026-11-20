@@ -360,7 +360,7 @@ async def test_an_evict_idle_load_is_supervised_like_a_cold_one(stub_factory,
     `evict_idle`. That is still a load of 100+ GB, and its probes have to be
     suspended *before* the request goes out. Reading only `cold_load` left one
     probe interval unprotected: the first production cold load after deployment
-    (15.11.2026, Qwen3.8 on M3-beta, 28,2 s) was an `evict_idle` and went
+    (15.11.2026, Qwen3.8 on beta, 28,2 s) was an `evict_idle` and went
     unsupervised for ~14 s.
     """
     a = stub_factory(models=[_deepseek(loaded=True, last_access=1.0), _qwen()])

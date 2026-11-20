@@ -156,7 +156,7 @@ async def test_the_degraded_counter_counts_decisions_not_requests(
 
 async def test_a_monotonic_loading_started_at_is_not_read_as_an_epoch(
         stub_factory, ripple_factory):
-    # M3-beta reports a monotonic clock value in `loading_started_at` (158021.3 s
+    # beta reports a monotonic clock value in `loading_started_at` (158021.3 s
     # after boot, constant during the load). Read as an epoch it says the load
     # began 57 years ago, which would clamp the ETA to the 10 s floor for a
     # 111 GB load — the operator would see "almost done" for minutes.

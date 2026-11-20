@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "Oliver Stein", email = "o.stein@inforatio.at" }]
+authors = [{ name = "Oliver Stein", email = "user@example.com" }]
 keywords = ["llm", "proxy", "placement", "omlx", "fastapi"]
 classifiers = [
     "Development Status :: 4 - Beta",

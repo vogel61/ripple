@@ -1,6 +1,6 @@
 # Model policy — switching a (host, model) pair off
 
-Richard wants to make a model unavailable **without touching oMLX**. Two
+The operator wants to make a model unavailable **without touching oMLX**. Two
 different wishes hide behind that sentence, and they are two levels of one
 operator state:
 
@@ -122,7 +122,7 @@ It is deliberately not a policy level:
 
 A request whose only way onto a host would evict a locked model is answered
 `503` with reason `model_locked`. Here for `Qwen3.8-Flash-Next-oQ4e-mtp` while
-`M3-beta` is in maintenance, so `M5` is the only host left:
+`beta` is in maintenance, so `M5` is the only host left:
 
 ```
 model 'Qwen3.8-Flash-Next-oQ4e-mtp' needs memory that is held by a locked model

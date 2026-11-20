@@ -115,21 +115,21 @@ def test_fit_of_a_single_sample_has_no_regression():
 def test_save_and_load_roundtrip_is_keyed_by_node_id(tmp_path):
     path = tmp_path / "sub" / "calibration.yaml"
     cal = Calibration()
-    record(cal, "e19d4c08-e64f-4641-98eb-19721a27d449",
+    record(cal, "22222222-2222-4222-8222-222222222222",
            [(111.6, 24.7), (453.6, 131.0)], by="dashboard",
            when="2026-11-15T07:20:00+01:00", models=["big", "small"])
     save(path, cal)
 
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert raw["version"] == 1
-    assert list(raw["nodes"]) == ["e19d4c08-e64f-4641-98eb-19721a27d449"]
+    assert list(raw["nodes"]) == ["22222222-2222-4222-8222-222222222222"]
     assert raw["defaults"]["source"] == "m3u-conservative"
-    assert raw["nodes"]["e19d4c08-e64f-4641-98eb-19721a27d449"]["models"] == ["big", "small"]
+    assert raw["nodes"]["22222222-2222-4222-8222-222222222222"]["models"] == ["big", "small"]
 
     again = load(path)
-    assert samples_for(again, "e19d4c08-e64f-4641-98eb-19721a27d449") == \
+    assert samples_for(again, "22222222-2222-4222-8222-222222222222") == \
         [(111.6, 24.7), (453.6, 131.0)]
-    assert source_for(again, "e19d4c08-e64f-4641-98eb-19721a27d449") == "measured"
+    assert source_for(again, "22222222-2222-4222-8222-222222222222") == "measured"
 
 
 def test_the_file_is_written_with_mode_0600(tmp_path):

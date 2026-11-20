@@ -1,0 +1,159 @@
+{
+  "label": "tg-m5",
+  "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+  "base": "http://localhost:8000/v1",
+  "prompt_tokens_target": 400,
+  "max_tokens": 500,
+  "started": "2026-11-14T14:53:08",
+  "levels": [
+    {
+      "concurrency": 1,
+      "wall_s": 8.24,
+      "req_s": 0.121,
+      "tok_s": 60.7,
+      "processed_tokens": 998,
+      "processed_tok_s": 121.1,
+      "completion_tokens": 500,
+      "errors": [],
+      "hosts": {
+        "unrouted(200)": {
+          "count": 1,
+          "mean_latency": 8.24,
+          "max_latency": 8.24,
+          "completion_tokens": 500,
+          "prompt_tokens": 498,
+          "processed_tok_s": 121.1
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 8.24
+        }
+      ]
+    },
+    {
+      "concurrency": 3,
+      "wall_s": 24.59,
+      "req_s": 0.122,
+      "tok_s": 61.0,
+      "processed_tokens": 2994,
+      "processed_tok_s": 121.8,
+      "completion_tokens": 1500,
+      "errors": [],
+      "hosts": {
+        "unrouted(200)": {
+          "count": 3,
+          "mean_latency": 24.54,
+          "max_latency": 24.59,
+          "completion_tokens": 1500,
+          "prompt_tokens": 1494,
+          "processed_tok_s": 121.8
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 24.52
+        },
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 24.52
+        },
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 24.59
+        }
+      ]
+    },
+    {
+      "concurrency": 6,
+      "wall_s": 30.23,
+      "req_s": 0.198,
+      "tok_s": 99.2,
+      "processed_tokens": 5988,
+      "processed_tok_s": 198.0,
+      "completion_tokens": 3000,
+      "errors": [],
+      "hosts": {
+        "unrouted(200)": {
+          "count": 6,
+          "mean_latency": 29.61,
+          "max_latency": 30.23,
+          "completion_tokens": 3000,
+          "prompt_tokens": 2988,
+          "processed_tok_s": 198.0
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 29.84
+        },
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 29.14
+        },
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 29.03
+        },
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 29.84
+        },
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 29.56
+        },
+        {
+          "status": 200,
+          "host": null,
+          "reason": null,
+          "prompt_tokens": 498,
+          "completion_tokens": 500,
+          "latency": 30.23
+        }
+      ]
+    }
+  ],
+  "config": {},
+  "finished": "2026-11-14T14:54:26",
+  "config_after": {}
+}

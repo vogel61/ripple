@@ -2,18 +2,18 @@
 
 **Written:** 15.11.2026, 07:20 — specification for a new session. **Nothing of this
 is implemented yet.**
-**Read first:** `docs/handover.md` (project state), `docs/measurements.md`
+**Read first:** `docs/install.md` (the running system), `docs/measurements.md`
 (throughput numbers), `docs/loading-state.md` (this file).
 
 ## 1. Why
 
 Incident, 14.11.2026 20:30, found by rehearsing `tools/as5_live.py`: a request
-caused a 111,6 GB cold load on M3-beta (24,7 s). RIPPLE's health probe runs every
+caused a 111,6 GB cold load on beta (24,7 s). RIPPLE's health probe runs every
 10 s with a 5 s timeout; one probe landed inside the load, timed out, and
 `ripple/hosts.py::_apply_health()` set `healthy = False` on that **single**
 failure. The next request — one second after the first one had completed — was
 answered `503 no_healthy_host` in 1 ms, although the host was fully back.
-Evidence: `docs/as5-live-2026-11-14-rehearsal-1.md`.
+Evidence: the AS-5 live rehearsal on 14.11.2026.
 
 This hits every client, not just the test tool: trigger a cold load, wait it out,
 send the next request, get an error.
@@ -43,7 +43,7 @@ but ours.
 
 ## 3. Measured facts (verify before changing anything)
 
-From the AS-5 night run, 15.11.2026 01:00–01:03, on M3-beta:
+From the AS-5 night run, 15.11.2026 01:00–01:03, on beta:
 
 | model | size | load time | per GB |
 |---|---|---|---|
@@ -55,7 +55,7 @@ From the AS-5 night run, 15.11.2026 01:00–01:03, on M3-beta:
 gives `b = 0.311 s/GB` and **`a = -10.0 s`** — a *negative* fixed cost, which is
 not physical. The large model is 30 % slower per gigabyte, not faster, so the curve
 is not linear over this range (allocation and materialisation grow with the model).
-Richard's observation of a ~10 s fixed overhead may well be true for **small**
+The operator's observation of a ~10 s fixed overhead may well be true for **small**
 models, where startup dominates — we have no measurement there. Assuming 10 s plus
 0.311 s/GB would predict 39,8 s for the 111,6 GB model, measured were 24,7 s.
 
@@ -157,7 +157,7 @@ defaults:
     - {size_gb: 111.6, seconds: 24.7}
     - {size_gb: 453.6, seconds: 131.0}
 nodes:
-  e19d4c08-e64f-4641-98eb-19721a27d449:
+  22222222-2222-4222-8222-222222222222:
     calibrated_at: '2026-11-15T07:20:00+01:00'
     calibrated_by: dashboard
     source: measured
@@ -241,13 +241,13 @@ Request reason `degraded_host` when a degraded host was chosen — visible in
 
 ## 11. Live verification
 
-`tools/as5_live.py` already triggers a real cold load on M3-beta and is the natural
+`tools/as5_live.py` already triggers a real cold load on beta and is the natural
 harness:
 - Before: the request after the load gets `503 no_healthy_host` (reproduced on
   14.11.2026 20:30).
 - After: same run, no 503; `/healthz` shows `loading` with an ETA during the load;
   `probes_skipped` counts, no health flap.
-- Then calibrate M3-beta for real (it is the node without the operator session) and
+- Then calibrate beta for real (it is the node without the operator session) and
   compare the curve with §3. The third, small sample answers the open question
   whether a fixed overhead exists.
 

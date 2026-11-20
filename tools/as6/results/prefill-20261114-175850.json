@@ -1,0 +1,57 @@
+{
+ "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+ "hosts": [
+  {
+   "host": "alpha",
+   "address": "http://192.0.2.151:8000",
+   "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+   "overhead_s": 0.266,
+   "sizes": [
+    {
+     "target_tokens": 200,
+     "prompt_tokens_median": 380,
+     "pp_tps_median": 2575.9,
+     "pp_tps_min": 2575.9,
+     "pp_tps_max": 2575.9,
+     "valid_runs": 1,
+     "samples": [
+      {
+       "target_tokens": 200,
+       "prompt_tokens": 380,
+       "wall_s": 0.413,
+       "prefill_s": 0.148,
+       "pp_tps": 2575.9
+      }
+     ]
+    }
+   ],
+   "dry_run": true
+  },
+  {
+   "host": "beta",
+   "address": "http://192.0.2.9:8000",
+   "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+   "overhead_s": 0.293,
+   "sizes": [
+    {
+     "target_tokens": 200,
+     "prompt_tokens_median": 386,
+     "pp_tps_median": 718.1,
+     "pp_tps_min": 718.1,
+     "pp_tps_max": 718.1,
+     "valid_runs": 1,
+     "samples": [
+      {
+       "target_tokens": 200,
+       "prompt_tokens": 386,
+       "wall_s": 0.83,
+       "prefill_s": 0.538,
+       "pp_tps": 718.1
+      }
+     ]
+    }
+   ],
+   "dry_run": true
+  }
+ ]
+}

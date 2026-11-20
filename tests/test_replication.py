@@ -38,7 +38,7 @@ ADMIN = bearer("test-admin-key")
 GB = 1_000_000_000
 QWEN = "Qwen3.8-Flash-Next-oQ4e-mtp"
 SOURCE_ROOT = "/Users/operator/.omlx/models"
-TARGET_ROOT = "/Volumes/GLM4TB/models"
+TARGET_ROOT = "/Volumes/models"
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +192,7 @@ def _hosts(a_url: str, b_url: str, *, a_node: str, b_node: str,
                         model_roots=[source_root])),
         host_config("B", b_url, node_id=b_node,
                     replication=ReplicationHostConfig(
-                        address="192.168.77.2", ssh_user="vogel",
+                        address="203.0.113.2", ssh_user="vogel",
                         model_roots=[target_root])),
     ]
 
@@ -218,7 +218,7 @@ def _plan(entry=_MISSING, **overrides):
                  entry=_model() if entry is _MISSING else entry,
                  source_roots=[SOURCE_ROOT], target_roots=[TARGET_ROOT],
                  overwrite=False, free_bytes=2_000 * GB, target_has_model=False,
-                 ssh_ok=True, ssh_error=None, ssh_target="vogel@192.168.77.2",
+                 ssh_ok=True, ssh_error=None, ssh_target="user@203.0.113.2",
                  # A is this machine, B is the remote one (issue #28). No ignored
                  # address here: the warn is a test of its own.
                  local=rep.LocalSide(name="A"),
@@ -232,7 +232,7 @@ def _plan(entry=_MISSING, **overrides):
 # ---------------------------------------------------------------------------
 def test_relative_subpath_keeps_the_layout_and_prefers_the_specific_root():
     found = rep.relative_under(f"{SOURCE_ROOT}/Jundot/{QWEN}",
-                               [SOURCE_ROOT, "/Volumes/GLM4TB/models"])
+                               [SOURCE_ROOT, "/Volumes/models"])
     assert found == (SOURCE_ROOT, f"Jundot/{QWEN}")
     # A root nested inside another one must not shadow the more specific one.
     assert rep.relative_under("/a/b/c/model", ["/a", "/a/b/c"]) == ("/a/b/c", "model")
@@ -356,7 +356,7 @@ def test_a_model_path_outside_the_configured_roots_is_refused():
 
 def test_an_unreachable_target_is_refused_with_the_ssh_error():
     plan = _plan(ssh_ok=False,
-                 ssh_error="ssh: connect to host 192.168.77.2 port 22: "
+                 ssh_error="ssh: connect to host 203.0.113.2 port 22: "
                            "Operation timed out")
     assert not plan.ok
     assert "not reachable over SSH" in " ".join(plan.errors)
@@ -420,7 +420,7 @@ def test_a_home_relative_root_mixed_with_absolute_ones_still_resolves():
     """The real config shape: one home-relative root next to an absolute one."""
     home = os.path.expanduser("~")
     plan = _plan(entry=_model(path=f"{home}/.omlx/models/mlx-works/{QWEN}"),
-                 source_roots=["~/.omlx/models", "/Volumes/GLM4TB/models"])
+                 source_roots=["~/.omlx/models", "/Volumes/models"])
     assert plan.ok, plan.errors
     assert plan.relative == f"mlx-works/{QWEN}"
 
@@ -462,22 +462,22 @@ replication:
   enabled: true
   model_roots: ["~/.omlx/models"]
 hosts:
-  - name: M5-alpha
+  - name: alpha
     addresses: ["http://127.0.0.1:8000"]
-    node_id: e19d4c08-e64f-4641-98eb-19721a27d449
+    node_id: 22222222-2222-4222-8222-222222222222
     replication:
       model_roots: ["~/.omlx/models", "models/relative"]
 """, encoding="utf-8")
     warnings = " | ".join(load_config(path).warnings)
     assert "replication.model_roots: model root '~/.omlx/models' is expanded as" in warnings
-    assert "host M5-alpha: hosts[].replication.model_roots" in warnings
+    assert "host alpha: hosts[].replication.model_roots" in warnings
     assert "'models/relative' is relative" in warnings
     # The absolute spelling stays silent: nothing to warn about.
     path.write_text("""
 hosts:
-  - name: M5-alpha
+  - name: alpha
     addresses: ["http://127.0.0.1:8000"]
-    node_id: e19d4c08-e64f-4641-98eb-19721a27d449
+    node_id: 22222222-2222-4222-8222-222222222222
     replication:
       model_roots: ["/Users/operator/.omlx/models"]
 """, encoding="utf-8")
@@ -666,13 +666,13 @@ async def test_the_argv_follows_the_probe_in_both_directions():
     mac = RecordingTransport(OPENRSYNC_ANSWERS)
     flag = await mac.rsync_progress_flag()
     assert flag == "--progress"
-    argv = mac._rsync_argv(rep.Endpoint("A", ssh_target="vogel@192.0.2.12"),
+    argv = mac._rsync_argv(rep.Endpoint("A", ssh_target="user@192.0.2.12"),
                            rep.Endpoint("B"), "/m/x", "/n/x", progress_flag=flag)
     assert "--progress" in argv and "--info=progress2" not in argv
     # What the copy needs in every case, and the two paths, still quoted: the
     # source is the far side of this copy, so it carries the SSH target.
     assert "-a" in argv and "--partial" in argv and "--stats" in argv
-    assert argv[-2:] == ["vogel@192.0.2.12:/m/x/", "/n/x/"]
+    assert argv[-2:] == ["user@192.0.2.12:/m/x/", "/n/x/"]
 
 
 async def test_a_help_mention_is_believed_when_the_version_form_fails():
@@ -1244,7 +1244,7 @@ async def test_a_destination_that_is_the_root_itself_is_never_moved_into(
                     relative="", target_root=TARGET_ROOT, target_path=TARGET_ROOT,
                     staging_path=rep.staging_for(TARGET_ROOT, ""),
                     size_bytes=111 * GB, required_bytes=int(111 * GB * 1.05),
-                    free_bytes=2_000 * GB, ssh_target="vogel@192.168.77.2")
+                    free_bytes=2_000 * GB, ssh_target="user@203.0.113.2")
     job = rep.new_job(plan)
     await rep.run_job(job=job, plan=plan, transport=fake,
                       source=rep.Endpoint("A"), target=rep.Endpoint("B"))
@@ -1364,28 +1364,28 @@ replication:
   enabled: true
   admin_key: omlx-key
 hosts:
-  - name: M5-alpha
+  - name: alpha
     role: entry
-    node_id: 0d7114d5-bbbf-483a-b3d9-d5e62afe9507
+    node_id: 11111111-1111-4111-8111-111111111111
     addresses:
       - http://192.0.2.11:8000
-      - http://192.168.77.1:8000
+      - http://203.0.113.1:8000
       - http://localhost:8000
     replication:
-      address: vogel@192.168.77.1
+      address: user@203.0.113.1
       ssh_user: vogel
       model_roots:
         - /Users/operator/.omlx/models
-        - /Volumes/GLM4TB/models
-  - name: M3-beta
+        - /Volumes/models
+  - name: beta
     role: worker
-    node_id: e19d4c08-e64f-4641-98eb-19721a27d449
+    node_id: 22222222-2222-4222-8222-222222222222
     addresses:
       - http://192.0.2.12:8000
-      - http://192.168.77.2:8000
+      - http://203.0.113.2:8000
       - http://198.51.100.49:8000
     replication:
-      address: vogel@192.168.77.2
+      address: user@203.0.113.2
       ssh_user: vogel
       model_roots:
         - /Users/operator/.omlx/models
@@ -1427,22 +1427,22 @@ def test_a_loopback_entry_is_the_only_marker_and_nothing_else_is():
     # The node RIPPLE runs on is *not* identified by its routable addresses —
     # that reading is what produced the remote→remote argv in the first place.
     assert not rep.is_loopback_address("http://192.0.2.11:8000")
-    assert not rep.is_loopback_address("http://192.168.77.1:8000")
+    assert not rep.is_loopback_address("http://203.0.113.1:8000")
     assert not rep.is_loopback_address("")
     assert not rep.is_loopback_address(None)
 
 
 def test_the_live_configuration_names_the_entry_host_as_this_machine(tmp_path):
     cfg = _live(tmp_path)
-    assert rep.local_host_name(cfg) == "M5-alpha"
+    assert rep.local_host_name(cfg) == "alpha"
     assert rep.host_is_local(cfg.hosts[0], cfg) is True
     assert rep.host_is_local(cfg.hosts[1], cfg) is False
     # The M5's address is configured and still ignored — visibly, not silently.
     local = rep.local_side(cfg)
-    assert local == rep.LocalSide(name="M5-alpha",
-                                  ignored_address="vogel@192.168.77.1")
+    assert local == rep.LocalSide(name="alpha",
+                                  ignored_address="user@203.0.113.1")
     assert rep.ssh_target_for(cfg.hosts[0], cfg) == ""
-    assert rep.ssh_target_for(cfg.hosts[1], cfg) == "vogel@192.168.77.2"
+    assert rep.ssh_target_for(cfg.hosts[1], cfg) == "user@203.0.113.2"
 
 
 def test_the_forward_copy_has_one_remote_spec_and_one_local_path(tmp_path):
@@ -1451,9 +1451,9 @@ def test_the_forward_copy_has_one_remote_spec_and_one_local_path(tmp_path):
     src = rep.endpoint_for(cfg.hosts[0], cfg)
     tgt = rep.endpoint_for(cfg.hosts[1], cfg)
     assert src.ssh_target == ""                        # this machine: no SSH
-    assert tgt.ssh_target == "vogel@192.168.77.2"
+    assert tgt.ssh_target == "user@203.0.113.2"
 
-    plan = _plan_for(cfg, "M5-alpha", "M3-beta")
+    plan = _plan_for(cfg, "alpha", "beta")
     assert plan.ok, plan.errors
 
     argv = rep.SshTransport(rsync_command="rsync")._rsync_argv(
@@ -1462,10 +1462,10 @@ def test_the_forward_copy_has_one_remote_spec_and_one_local_path(tmp_path):
     remote = [s for s in (src_spec, dst_spec) if ":" in s]
     assert len(remote) == 1 and remote[0] == dst_spec  # rsync takes at most one
     assert src_spec == plan.source_path.rstrip("/") + "/"   # a plain path
-    assert dst_spec.startswith("vogel@192.168.77.2:")
+    assert dst_spec.startswith("user@203.0.113.2:")
 
     warned = " | ".join(plan.warnings)
-    assert "M5-alpha" in warned and "vogel@192.168.77.1" in warned
+    assert "alpha" in warned and "user@203.0.113.1" in warned
     assert "ignored" in warned and "source" in warned
 
 
@@ -1474,10 +1474,10 @@ def test_the_reverse_copy_has_a_local_destination(tmp_path):
     cfg = _live(tmp_path)
     src = rep.endpoint_for(cfg.hosts[1], cfg)
     tgt = rep.endpoint_for(cfg.hosts[0], cfg)
-    assert src.ssh_target == "vogel@192.168.77.2"
+    assert src.ssh_target == "user@203.0.113.2"
     assert tgt.ssh_target == ""                        # this machine: no SSH
 
-    plan = _plan_for(cfg, "M3-beta", "M5-alpha")
+    plan = _plan_for(cfg, "beta", "alpha")
     # An empty ssh_target for the target is not a refusal: it is the local side.
     assert plan.ok, plan.errors
 
@@ -1489,7 +1489,7 @@ def test_the_reverse_copy_has_a_local_destination(tmp_path):
     assert dst_spec == plan.staging_path.rstrip("/") + "/"  # a plain path
 
     warned = " | ".join(plan.warnings)
-    assert "vogel@192.168.77.1" in warned and "ignored" in warned
+    assert "user@203.0.113.1" in warned and "ignored" in warned
     assert "target" in warned
 
 
@@ -1499,7 +1499,7 @@ def test_no_loopback_address_refuses_the_plan_and_names_the_fix(tmp_path):
     assert rep.local_host_name(cfg) == ""
     assert rep.local_side(cfg) == rep.LocalSide()
 
-    plan = _plan_for(cfg, "M5-alpha", "M3-beta")
+    plan = _plan_for(cfg, "alpha", "beta")
     assert plan.ok is False
     errors = " ".join(plan.errors)
     assert "no host is identifiable as this machine" in errors

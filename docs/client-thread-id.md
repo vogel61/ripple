@@ -272,10 +272,10 @@ fingerprint case, because no client sends the header yet:
 
 ```
 $ grep -a "thread_source" ~/Library/Logs/ripple.log | tail -4
-2026-11-15 18:35:36 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=M5-alpha reason=thread client=127.0.0.1 thread=730c1df2e2d76a3f thread_source=fp prompt_chars=224 prompt_tokens=67509 duration_ms=107.7 status=200 note=stream thread
-2026-11-15 18:35:50 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=M3-beta reason=thread client=127.0.0.1 thread=53adb98e8d5d019d thread_source=fp prompt_chars=268 prompt_tokens=64789 duration_ms=242.1 status=200 note=stream thread
-2026-11-15 18:35:52 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=M5-alpha reason=thread client=127.0.0.1 thread=730c1df2e2d76a3f thread_source=fp prompt_chars=224 prompt_tokens=67939 duration_ms=165.4 status=200 note=stream thread
-2026-11-15 18:35:55 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=M5-alpha reason=thread client=127.0.0.1 thread=730c1df2e2d76a3f thread_source=fp prompt_chars=224 prompt_tokens=68239 duration_ms=169.9 status=200 note=stream thread
+2026-11-15 18:35:36 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=alpha reason=thread client=127.0.0.1 thread=730c1df2e2d76a3f thread_source=fp prompt_chars=224 prompt_tokens=67509 duration_ms=107.7 status=200 note=stream thread
+2026-11-15 18:35:50 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=beta reason=thread client=127.0.0.1 thread=53adb98e8d5d019d thread_source=fp prompt_chars=268 prompt_tokens=64789 duration_ms=242.1 status=200 note=stream thread
+2026-11-15 18:35:52 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=alpha reason=thread client=127.0.0.1 thread=730c1df2e2d76a3f thread_source=fp prompt_chars=224 prompt_tokens=67939 duration_ms=165.4 status=200 note=stream thread
+2026-11-15 18:35:55 INFO    ripple.request: model=DeepSeek-V4.1-Flash-1017-oQ4e-mtp host=alpha reason=thread client=127.0.0.1 thread=730c1df2e2d76a3f thread_source=fp prompt_chars=224 prompt_tokens=68239 duration_ms=169.9 status=200 note=stream thread
 ```
 
 Read what it says: two conversations (`prompt_chars` 224 and 268 — different

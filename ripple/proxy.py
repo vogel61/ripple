@@ -425,6 +425,20 @@ def _needs_cold_load(decision) -> bool:
     return False
 
 
+def _evicts_idle(decision) -> bool:
+    """Is this load one that had to unload an idle model first?
+
+    The subset of `_needs_cold_load`, and read from the tier for the same
+    reason: a degraded host carries the reason `degraded_host` while its tier
+    stays `evict_idle`, so counting from `Decision.reason` would silently lose
+    exactly those loads.
+    """
+    for cand in decision.candidates:
+        if cand.host is decision.host:
+            return cand.tier is TIER_EVICT_IDLE
+    return False
+
+
 def _sse_json(event: bytes) -> dict | None:
     """The JSON object of one SSE event, or None for `[DONE]`/non-JSON events."""
     for line in event.split(b"\n"):
@@ -2563,7 +2577,7 @@ class Ripple:
         prompt_tokens = estimate_tokens(prompt_size_text(body))
         self.stats.requests_total += 1
         # FA-14: the placement layer's own note for this request ("prefill bias
-        # M3-beta -0.29", "all hosts at spill_threshold", "evicts idle …"). It is
+        # beta -0.29", "all hosts at spill_threshold", "evicts idle …"). It is
         # the only place a bias-driven decision can be seen as a reason.
         decision_note: str | None = None
         # Set when the placement layer said the model has to be loaded on the host
@@ -2731,7 +2745,12 @@ class Ripple:
                     # that has to load carries the reason `degraded_host`, and the
                     # load it causes is still a load RIPPLE supervised.
                     self.stats.cold_load += 1
-                elif decision.reason == "evict_idle":
+                # `evict_idle` is the *subset* of those loads that had to unload
+                # an idle model first — a separate `if`, not an `elif`: an
+                # `evict_idle` tier is a cold load too, so one request moves both
+                # counters. Counted from the tier again, for the same reason as
+                # above.
+                if _evicts_idle(decision):
                     self.stats.evict_idle += 1
                 if one_shot:
                     reason = "one_shot"

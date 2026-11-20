@@ -81,7 +81,7 @@ def render_keys_page() -> str:
 <section>
   <h2>New key</h2>
   <div class="row">
-    <input id="name" size="18" placeholder="name (e.g. mustafa)">
+    <input id="name" size="18" placeholder="name (e.g. alice)">
     <select id="kind">
       <option value="interactive">interactive</option>
       <option value="batch">batch</option>

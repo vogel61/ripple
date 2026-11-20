@@ -1,0 +1,161 @@
+{
+  "label": "m5cap6-threads20",
+  "model": "DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
+  "base": "http://localhost:8010/v1",
+  "prompt_tokens_target": 8500,
+  "max_tokens": 128,
+  "started": "2026-11-14T14:23:02",
+  "levels": [
+    {
+      "concurrency": 12,
+      "wall_s": 66.75,
+      "req_s": 0.18,
+      "tok_s": 23.0,
+      "processed_tokens": 112284,
+      "processed_tok_s": 1682.2,
+      "completion_tokens": 1536,
+      "errors": [],
+      "hosts": {
+        "alpha": {
+          "count": 6,
+          "mean_latency": 20.3,
+          "max_latency": 20.99,
+          "completion_tokens": 768,
+          "prompt_tokens": 55374,
+          "processed_tok_s": 841.1
+        },
+        "beta": {
+          "count": 6,
+          "mean_latency": 64.94,
+          "max_latency": 66.75,
+          "completion_tokens": 768,
+          "prompt_tokens": 55374,
+          "processed_tok_s": 841.1
+        }
+      },
+      "requests": [
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 19.78
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 60.17
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 20.02
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 19.78
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 66.31
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 20.62
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 64.67
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 20.99
+        },
+        {
+          "status": 200,
+          "host": "alpha",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 20.62
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 65.78
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 65.95
+        },
+        {
+          "status": 200,
+          "host": "beta",
+          "reason": "new_thread",
+          "prompt_tokens": 9229,
+          "completion_tokens": 128,
+          "latency": 66.75
+        }
+      ]
+    }
+  ],
+  "config": {
+    "alpha": {
+      "max_inflight": 6,
+      "spill_threshold": 4,
+      "inflight": 0
+    },
+    "beta": {
+      "max_inflight": 6,
+      "spill_threshold": 3,
+      "inflight": 0
+    }
+  },
+  "finished": "2026-11-14T14:24:14",
+  "config_after": {
+    "alpha": {
+      "max_inflight": 6,
+      "spill_threshold": 4,
+      "inflight": 0
+    },
+    "beta": {
+      "max_inflight": 6,
+      "spill_threshold": 3,
+      "inflight": 0
+    }
+  }
+}

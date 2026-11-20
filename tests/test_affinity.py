@@ -176,9 +176,9 @@ def test_the_snapshot_names_the_key_that_opened_the_thread() -> None:
     """`/healthz → threads.registry[].key_name` answers "who holds the slot"."""
     reg = _registry()
     reg.register(key="sid:abc", model="m1", host="A", text="hello", holds_slot=True,
-                 source="header", key_name="mustafa")
+                 source="header", key_name="alice")
 
-    assert reg.snapshot()[0]["key_name"] == "mustafa"
+    assert reg.snapshot()[0]["key_name"] == "alice"
 
 
 def test_a_thread_opened_without_a_key_carries_no_name() -> None:

@@ -99,7 +99,7 @@ def _model_list_error(exc: Exception) -> str:
 def epoch_seconds(value: object, now: float, horizon: float) -> float | None:
     """oMLX's `loading_started_at` as a usable epoch, or None.
 
-    Measured live on 15.11.2026 on M3-beta: oMLX reports a **monotonic clock
+    Measured live on 15.11.2026 on beta: oMLX reports a **monotonic clock
     value** there (158021.3 s after boot), not a Unix timestamp, and the value
     does not change while a load runs. Read as epoch it is ~57 years in the past,
     which clamps every ETA to the floor and would make a calibration store a

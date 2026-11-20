@@ -286,9 +286,9 @@ def _deficit_of(hosts: list[_Runtime], cfg, registry: ThreadRegistry,
 
 
 def _fleet_3_2() -> tuple[list[_Runtime], object]:
-    """M5-alpha : M3-beta = 3 : 2, the live weights."""
-    hosts = [_Runtime(host_config("M5-alpha", "http://m5:1", weight=3.0)),
-             _Runtime(host_config("M3-beta", "http://m3:1", weight=2.0))]
+    """alpha : beta = 3 : 2, the live weights."""
+    hosts = [_Runtime(host_config("alpha", "http://m5:1", weight=3.0)),
+             _Runtime(host_config("beta", "http://m3:1", weight=2.0))]
     return hosts, make_config([h.cfg for h in hosts])
 
 
@@ -302,39 +302,39 @@ def test_fa2_a_running_generation_counts_as_load_after_its_window_expired() -> N
     hosts, cfg = _fleet_3_2()
     registry = ThreadRegistry(AffinityConfig(ephemeral_window_seconds=60))
     # The entry a 200 s generation left behind: already outside the window.
-    registry._ephemeral[("M3-beta", "m1")] = deque([time.time() - 200])
-    assert registry.ephemeral_count("M3-beta", "m1") == 0
+    registry._ephemeral[("beta", "m1")] = deque([time.time() - 200])
+    assert registry.ephemeral_count("beta", "m1") == 0
 
-    idle = _deficit_of(hosts, cfg, registry, "M3-beta")
+    idle = _deficit_of(hosts, cfg, registry, "beta")
     hosts[1].inflight = 1                     # the generation is still running
-    running = _deficit_of(hosts, cfg, registry, "M3-beta")
+    running = _deficit_of(hosts, cfg, registry, "beta")
 
     # And exactly as a host with one occupied slot scores.
     busy = ThreadRegistry(AffinityConfig())
-    busy.register(key="seed", model="m1", host="M3-beta", text="x",
+    busy.register(key="seed", model="m1", host="beta", text="x",
                   holds_slot=True, source="header")
-    occupied = _deficit_of([hosts[0], _Runtime(hosts[1].cfg, 0)], cfg, busy, "M3-beta")
+    occupied = _deficit_of([hosts[0], _Runtime(hosts[1].cfg, 0)], cfg, busy, "beta")
 
     assert running == pytest.approx(occupied, abs=1e-6)
     assert running < idle - 0.3, "the running generation was invisible"
     # The other host sees it too: the load is in the fleet total.
-    assert _deficit_of(hosts, cfg, registry, "M5-alpha") > _deficit_of(
-        [hosts[0], _Runtime(hosts[1].cfg, 0)], cfg, registry, "M5-alpha")
+    assert _deficit_of(hosts, cfg, registry, "alpha") > _deficit_of(
+        [hosts[0], _Runtime(hosts[1].cfg, 0)], cfg, registry, "alpha")
 
 
 def test_fa2_the_same_work_is_not_counted_twice() -> None:
     """A bound thread with a request in flight stays 1.0 — `max`, not `+`."""
     hosts, cfg = _fleet_3_2()
     registry = ThreadRegistry(AffinityConfig())
-    registry.register(key="seed", model="m1", host="M5-alpha", text="x",
+    registry.register(key="seed", model="m1", host="alpha", text="x",
                       holds_slot=True, source="header")
     thread = registry.threads["seed"]
 
     registry.enter(thread)                    # its request is running
     assert hosts[0].inflight == 0
-    without = _deficit_of(hosts, cfg, registry, "M5-alpha")
+    without = _deficit_of(hosts, cfg, registry, "alpha")
     hosts[0].inflight = 1
-    with_inflight = _deficit_of(hosts, cfg, registry, "M5-alpha")
+    with_inflight = _deficit_of(hosts, cfg, registry, "alpha")
 
     assert with_inflight == without
 
@@ -377,13 +377,13 @@ async def test_fa2_one_conversation_does_not_starve_the_entry_host(
     a.state.delay = 0.5                       # longer than the window below
     b.state.delay = 0.5
     harness = await ripple_factory(make_config([
-        host_config("M5-alpha", a.url, node_id=a.state.node_id, weight=3.0),
-        host_config("M3-beta", b.url, node_id=b.state.node_id, weight=2.0),
+        host_config("alpha", a.url, node_id=a.state.node_id, weight=3.0),
+        host_config("beta", b.url, node_id=b.state.node_id, weight=2.0),
     ], affinity=AffinityConfig(ephemeral_window_seconds=0.3)))
 
     # The operator's own conversation, already bound to the entry host.
     harness.ripple.registry.register(key="sid:operator", model="m1",
-                                     host="M5-alpha", text="the operator's session",
+                                     host="alpha", text="the operator's session",
                                      holds_slot=True, source="header")
 
     hosts = []
@@ -396,8 +396,8 @@ async def test_fa2_one_conversation_does_not_starve_the_entry_host(
         assert resp.headers["x-ripple-reason"] == "new_thread"
         hosts.append(resp.headers["x-ripple-host"])
 
-    assert Counter(hosts)["M5-alpha"] >= 6, hosts     # at least 3 : 2
-    assert Counter(hosts)["M3-beta"] <= 4, hosts
+    assert Counter(hosts)["alpha"] >= 6, hosts        # at least 3 : 2
+    assert Counter(hosts)["beta"] <= 4, hosts
 
 
 async def test_fa2_a_finished_short_request_keeps_counting_for_its_window(

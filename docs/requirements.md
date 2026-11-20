@@ -1,7 +1,7 @@
 # Requirements specification — RIPPLE (Lastenheft)
 
 **Project:** RIPPLE — Router Inference Policy Proxy for LLM Engines
-**Client:** Richard Vogel
+**Client:** the operator
 **Prepared by:** Oliver Stein
 **As of:** 14.11.2026 · Version 0.10 (draft for acceptance; Olla measured,
 vllm-router/SGLang architecture harvested, adapter contract added)
@@ -64,7 +64,7 @@ The M3 is reachable via three paths; the choice is not a matter of taste:
 
 | Path | Address | RTT avg | Jitter | HTTP `/health` |
 |---|---|---|---|---|
-| Thunderbolt 5 (point-to-point) | `192.168.77.2` | 0,60 ms | 0,16 ms | 6 ms |
+| Thunderbolt 5 (point-to-point) | `203.0.113.2` | 0,60 ms | 0,16 ms | 6 ms |
 | LAN wired (M3: 2,5 GbE, M5: 10 GbE) | `192.0.2.12` | 0,71 ms | 0,06 ms | 5 ms |
 | LAN via Wi-Fi | `192.0.2.216` | **38,3 ms** | **67,9 ms** | 15–41 ms |
 
@@ -163,7 +163,7 @@ configuration.
 | `max_inflight` | int | hard upper bound | prevents overload (FA-5) |
 | `spill_threshold` | int | from when full | spillover decision (FA-5) |
 | `models[]` | list | **allow-list** | this host may only serve these models |
-| `warmup[]` | list | models to preload | first spill without 70 s load time (FA-16) |
+| `warmup[]` | list | **accepted, inert** — FA-16 is not implemented; a non-empty list warns at startup | none; the key exists so an old config still parses |
 
 The allow-list is the most important item in this layer: without it a
 request for a 400 GB model can land on a host that is not supposed to hold
@@ -373,8 +373,8 @@ not a configuration switch.
 **The problem.** The affinity key is the *session*. Parallel subagents are
 started inside one session and inherit its key, so four subagents are four
 concurrent streams of one thread — and a thread lives on one node. Measured in
-the request log: `sid:local-cd86633198a05e` with 132 requests on M5-alpha and 87
-on M3-beta, a second thread with 81. The 87 on M3 are a fallback episode, not a
+the request log: `sid:local-cd86633198a05e` with 132 requests on alpha and 87
+on beta, a second thread with 81. The 87 on M3 are a fallback episode, not a
 balance. RIPPLE can therefore only balance **between** sessions; within a
 session parallelism is invisible to the placement, and with one operator and one
 agent session the fleet delivers the throughput of a single machine while the
@@ -466,7 +466,7 @@ will be prefilled in full wherever it lands.
 
 **The measured consequence (19.11.2026, one session — one observation, not a
 benchmark).** Three parallel tasks of one session ran as one thread
-(`turns=100`, `active=3`) on M3-beta while M5-alpha — weight 3, role entry, same
+(`turns=100`, `active=3`) on beta while alpha — weight 3, role entry, same
 model resident — sat at `inflight 0`. The fleet delivered one machine's throughput
 and no gate fired: from the sweep's side nothing was idle.
 
@@ -861,13 +861,20 @@ ceiling.
 | Stage | Condition | Log reason |
 |---|---|---|
 | 1 | Model is **loaded** on the node | `resident` |
-| 2 | Loading evicts nothing (forecast ≤ target) | `cold_load` |
-| 3 | Evicted model is **unused and unpinned** | `evict_idle` |
-| 4 | No node available → **HTTP 503** with conflict details | `conflict` |
+| 2 | No forecast possible (no `residency`, guard off, `size_unknown`, no ceiling) — load allowed **unchecked** | `cold_load`, note `no_eviction_forecast` / `size_unknown` / `no_ceiling` |
+| 3 | Forecast ≤ target — loading evicts nothing | `cold_load` |
+| 4 | Forecast over target, and the models that would go are idle, unpinned and unheld — they are unloaded, then the model loads | `evict_idle` |
+| 5 | Only hosts that would evict a locked model | `model_locked` → 503 |
+| 6 | Only hosts that would evict a pinned model or a model with a running thread | `conflict` → 503 |
 
-Stage 4 is mandatory: the balancer must never silently evict a running
-session just to serve a request. The error message names the
-model, the node and the blocking model including thread count.
+Stages 2 and 4 are both loads: the client waits for a load either way. Stage 2 is the
+one that carries no promise — it is reported with the same `cold_load` token as stage 3.
+
+The refusal stages are mandatory: **where a forecast exists**, the balancer must never
+silently evict a running session to serve a request. Without a forecast (stage 2) it
+cannot tell, and it does not pretend to — the load is allowed and the absence of a
+forecast is recorded in the decision note. The error message names the model, the
+node and the blocking model including thread count.
 **Acceptance:** With DeepSeek loaded on the M5, a Qwen3.8 request is routed 10/10
 to the M3 (log reason `cold_load`), the M5 shows **no**
 `Evicting` line in the log. If both nodes are occupied with DeepSeek, the balancer
@@ -890,24 +897,24 @@ first responding address is used for the lifetime of the process.
 
 ```yaml
 hosts:
-  - name: M5-alpha            # stable identity, key for slots + affinity
+  - name: alpha               # stable identity, key for slots + affinity
     weight: 3
     addresses:                # in probe order
       - http://192.0.2.11:8000
-      - http://192.168.77.1:8000
-  - name: M3-beta
+      - http://203.0.113.1:8000
+  - name: beta
     weight: 2
     addresses:
-      - http://192.0.2.12:8000     # WD, wired
-      - http://192.168.77.2:8000   # TB5
-      - http://198.51.100.49:8000 # TR
+      - http://192.0.2.12:8000     # SA, wired
+      - http://203.0.113.2:8000    # TB5
+      - http://198.51.100.49:8000 # SB
 ```
 
 **A host only counts as resolved once its identity is confirmed.** Reachability
 alone is not enough: `GET /api/cluster/node_id` answers without
 authentication and returns a UUID unique per machine
-(verified 14.11.2026: the M3 answers with `e19d4c08-…` over all three addresses, the M5
-with `0d7114d5-…`). The proxy checks against the expected
+(verified 14.11.2026: the M3 answers with `22222222-…` over all three addresses, the M5
+with `11111111-…`). The proxy checks against the expected
 `node_id` from the configuration. That way neither an address reused via DHCP
 nor a swapped machine can be slipped in.
 
@@ -934,7 +941,7 @@ nor a swapped machine can be slipped in.
    the same, so the two paths agree. A clean restart after an update is too
    short for rule 3 to fire: without this step the version would stay the
    one of the process that is gone. A changed version is logged once with
-   both values (`version host=M3-beta old=0.8.0rc1 new=0.8.0`) and is
+   both values (`version host=beta old=0.8.0rc1 new=0.8.0`) and is
    therefore visible in `/healthz` and on the fleet card within one
    discovery interval.
 
@@ -1073,7 +1080,7 @@ its capabilities.
   actual capability of the M3 has not yet been measured (see AS-6).
 - **RB-7** The balancer is **transport-agnostic**: it speaks HTTP and
   needs no Thunderbolt. The `base_url` per node is freely selectable; for the
-  M3 use the wired path (`192.0.2.12`) or TB5 (`192.168.77.2`),
+  M3 use the wired path (`192.0.2.12`) or TB5 (`203.0.113.2`),
   **not** the Wi-Fi address (`192.0.2.216`, 38 ms RTT).
 - **RB-8** Thunderbolt 5 is not used by the balancer and not required.
   It remains reserved for the oMLX cluster (JACCL) and for copying
@@ -1113,10 +1120,10 @@ its capabilities.
 |---|---|---|
 | R-1 | **Compression breaks the affinity** — after a compaction the first user message does not change, but the context does; with Hermes the beginning is mostly preserved, with heavily rewritten histories it is not | explicit header with Hermes (`extra_headers`), fingerprint only as fallback; node switch is logged |
 | R-2 | **3 : 2 is unmeasured** | AS-6 before fixing it; weights remain configuration |
-| R-3 | **Cold node costs 70 s** | FA-12 (residency) + FA-16 (warmup) |
+| R-3 | **Cold node costs 70 s** | FA-12 (residency) — placement prefers a resident node; FA-16 (warmup) is not implemented |
 | R-4 | **Prefix cache vs. distribution** — every redirect costs prefill | affinity (FA-6), spillover only under real saturation |
 | R-5 | The M5 additionally serves its own agent session; a spillover to the M5 can slow down that session | `max_inflight` of the M5 conservative (initial value 3) |
-| R-6 | Memory guard/eviction on both nodes can evict models | FA-18: the balancer forecasts the eviction itself and locks the node instead of provoking it; loading is never done by the balancer except via `warmup_models` |
+| R-6 | Memory guard/eviction on both nodes can evict models | FA-18: the balancer forecasts the eviction itself and locks the node instead of provoking it; the balancer issues no load command, but a request it places on a cold node makes oMLX load (and, at stage 4, evict) — which is why FA-18 forecasts it |
 | R-7 | Balancer as SPOF | RB-1/RB-2, emergency operation documented |
 | R-8 | **Open:** should the balancer run on the M5 or on a third host? | Proposal: M5, since it is the entry point anyway; direct access in case of failure |
 | R-9 | **Headcount is not load.** The deficit rule counts threads, not work: a thread with 200 k context costs a multiple of a 5 k thread. With 3 large threads on the M5 and 2 small ones on the M3 the real load is not 3:2 | (a) `spill_threshold`/`max_inflight` bound the imbalance; (b) AS-6 measures the real tok/s; (c) **option:** weighting the thread slots by estimated prompt size (`thread_cost_mode: tokens`), as an extension after M3 |
@@ -1136,7 +1143,7 @@ its capabilities.
 
 | M | Content | Done when |
 |---|---|---|
-| M1 | Requirements specification accepted | sign-off by Richard |
+| M1 | Requirements specification accepted | sign-off by the operator |
 | M2 | Balancer with FA-1…FA-15, tests green | `pytest` green, AS-1…AS-5 evidenced |
 | M3 | Commissioning on the M5, measurement AS-6 | weights confirmed or corrected by measurement |
 | M4 | Continuous operation as a launchd service | 7 days without intervention, logs evaluated |
@@ -1159,7 +1166,7 @@ adjusted several times after the measurements from AS-6, and that is possible in
 without a build step.
 
 Alternatives, rejected: **Go** would be nicer operationally (one binary, no
-venv), but the policy would be harder for Richard to read and every adjustment
+venv), but the policy would be harder for the operator to read and every adjustment
 would need a build. **Node** offers no advantage over Python.
 
 ---
@@ -1277,7 +1284,7 @@ the architecture was nevertheless instructive. Three things were incorporated:
   prefixes suffices. What was adopted is the *measure* (match ratio), not the tree.
 
 **The most valuable single finding:** the `Program` layer of `vllm-router`
-independently describes the same model that Richard specified for this balancer
+independently describes the same model that the operator specified for this balancer
 — a long-lived unit with identity, slots per target, idle TTL,
 resumption on the previously bound target, migration only with sufficient
 headroom (`cross_rank_headroom_ratio: 1.2`). That is the best available

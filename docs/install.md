@@ -445,7 +445,7 @@ Every operator store can be moved in the configuration: `placement.maintenance_f
 ```yaml
 hosts:
   overrides:            # a host from config.yaml, changed at the page
-    M5-alpha: {weight: 2.0}
+    alpha: {weight: 2.0}
   nodes:                # a machine added at the page (deletable again)
     M5-beta: {addresses: ["http://192.0.2.40:8000"]}
 policy:                 # routing policy set at the page (issue #78)
@@ -455,7 +455,7 @@ policy:                 # routing policy set at the page (issue #78)
 
 — and is written atomically (`.tmp`, fsync, rename) with mode `0600`, because an overlay node may carry an oMLX key. An override may change only the operator's decisions for a host — `enabled`, `weight`, `site`, `spill_threshold`, `prefer_resident` — never its identity (address, `node_id`, key, backend, limits): a machine the page can redefine is a machine that can silently become another one.
 
-Since issue #78 the routing policy can be set without editing the file at all: `PATCH /admin/config/{dotted.path}` sets one value (for example `affinity.ttl_seconds` or `hosts.M5-alpha.weight`) and `DELETE` on the same path drops the override so the value from `config.yaml` applies again. Both are behind `auth.admin_key` and both go through the loader's own parser, so a value that would be refused at start-up is refused here with the same message. A weight change applies to new threads only — the running ones keep their host until they end — so a change that would place them differently asks for confirmation and names how many threads would move.
+Since issue #78 the routing policy can be set without editing the file at all: `PATCH /admin/config/{dotted.path}` sets one value (for example `affinity.ttl_seconds` or `hosts.alpha.weight`) and `DELETE` on the same path drops the override so the value from `config.yaml` applies again. Both are behind `auth.admin_key` and both go through the loader's own parser, so a value that would be refused at start-up is refused here with the same message. A weight change applies to new threads only — the running ones keep their host until they end — so a change that would place them differently asks for confirmation and names how many threads would move.
 
 A `fleet.yaml` from before the rename is still read, once, with a warning; the first write creates `runtime.yaml`. Nothing else is migrated.
 

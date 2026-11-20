@@ -40,7 +40,7 @@ Usage:
 
     tools/load_report.py                          # last 24 h, both hosts
     tools/load_report.py --since 7d --json
-    tools/load_report.py --since 2026-11-14T13:00 --hosts M5-alpha
+    tools/load_report.py --since 2026-11-14T13:00 --hosts alpha
     tools/load_report.py --no-m3                  # offline, local host only
 
 Exit codes: 0 = something was parsed, 3 = nothing could be parsed, 2 = the

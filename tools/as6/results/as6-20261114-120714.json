@@ -1,0 +1,56 @@
+{
+  "model": "Qwen3.5-9B-oQ4e-mtp",
+  "results": [
+    {
+      "host": "alpha",
+      "address": "http://192.0.2.151:8000",
+      "weight": 3.0,
+      "model": "Qwen3.5-9B-oQ4e-mtp",
+      "estimated_size": 6542399089,
+      "runs": 1,
+      "prompt_tokens_measured": 185,
+      "tg_tps_median": 266.7,
+      "tg_tps_min": 266.7,
+      "tg_tps_max": 266.7,
+      "ttft_median_s": 0.14,
+      "samples": [
+        {
+          "completion_tokens": 16,
+          "prompt_tokens": 185,
+          "ttft_s": 0.14,
+          "total_s": 0.2,
+          "wall_s": 0.208,
+          "decode_s": 0.06,
+          "tg_tps": 266.7
+        }
+      ],
+      "dry_run": true
+    },
+    {
+      "host": "beta",
+      "address": "http://192.0.2.9:8000",
+      "weight": 2.0,
+      "model": "Qwen3.5-9B-oQ4e-mtp",
+      "estimated_size": 6542399089,
+      "runs": 1,
+      "prompt_tokens_measured": 187,
+      "tg_tps_median": 50.0,
+      "tg_tps_min": 50.0,
+      "tg_tps_max": 50.0,
+      "ttft_median_s": 0.33,
+      "samples": [
+        {
+          "completion_tokens": 1,
+          "prompt_tokens": 187,
+          "ttft_s": 0.33,
+          "total_s": 0.35,
+          "wall_s": 0.355,
+          "decode_s": 0.02,
+          "tg_tps": 50.0
+        }
+      ],
+      "dry_run": true
+    }
+  ],
+  "dry_run": true
+}

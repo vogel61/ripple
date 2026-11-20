@@ -21,7 +21,7 @@ gives is what it gets back: a node that serves requests for others accrues
 measured work, and its owner spends that work later on a bigger model or on more
 concurrent agents. RIPPLE stays a balancer: it does not grow a tunnel, a
 currency, or a public identity system. The concrete case that motivates it is a
-nephew's Mac Mini M5 Pro that cannot hold the large models but keeps a
+family member's Mac Mini M5 Pro that cannot hold the large models but keeps a
 Qwen 27B resident — useful to the pool precisely because it is always loaded —
 against the operator's link of 1 Gbit down / 300 Mbit up, with WireGuard or
 Tailscale and no port opened to the internet. The pool therefore exists to trade
@@ -176,7 +176,7 @@ bandwidth question (§7).
 The fleet already treats reachability as insufficient evidence: `ripple/discover.py`
 states that "reachability alone is not evidence that an oMLX node answers", and
 `ripple/hosts.py` refuses a host whose `GET /api/cluster/node_id` does not match
-the configured value (acceptance scenario AS-12, `docs/acceptance.md`).
+the configured value (acceptance scenario AS-12, `docs/requirements.md` §9).
 `ripple/calibration.py` keys its samples by `node_id` "never by host name",
 because a name is a label an operator may change at any time.
 
@@ -186,7 +186,7 @@ characters, the same stub `discover.py` already derives for a suggested host
 name. From then on, a node answering on that address with a different `node_id`
 is not the member; it is refused, and the refusal names both fingerprints. The
 fingerprint is displayed wherever the node is displayed, so that "is this still
-my nephew's machine" is answerable without reading a config file.
+a family member's machine" is answerable without reading a config file.
 
 ### 3.2 What a re-pointed address or DNS name does
 
@@ -495,7 +495,7 @@ window, and the operator's own house is subject to the same test.
 6. **Revocation.** There is no expiry on `node_id` and no revocation list. A
    member removed from the pool keeps its keys until someone rotates them by
    hand.
-7. **Fairness of the exchange itself.** The nephew's electricity pays for the
+7. **Fairness of the exchange itself.** The family member's electricity pays for the
    operator's model availability, and vice versa. Whether node-seconds are the
    right exchange rate between two households is an economics question that this
    document deliberately does not answer — it only makes the quantity

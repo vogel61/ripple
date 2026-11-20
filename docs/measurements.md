@@ -5,7 +5,7 @@ decode throughput, cold prefill, and what those numbers say about the configured
 host weights. **Part 2** measures what the fleet actually did over a multi-day
 run: per-host busy time, its hourly shape, and every thread movement.
 
-**Hardware.** Two Macs running oMLX: `M5-alpha` (weight 3) and `M3-beta`
+**Hardware.** Two Macs running oMLX: `alpha` (weight 3) and `beta`
 (weight 2). Models measured: `DeepSeek-V4.1-Flash-1017-oQ4e-mtp` (453.6 GB, the
 model that carries the threads), `Qwen3.5-9B-oQ4e-mtp` (informative only) and
 `Qwen3.8-Flash-Next-oQ4e-mtp` (111.6 GB, M3 only).
@@ -54,8 +54,8 @@ configured 3 : 2.
 
 | Host | Decode median | min – max | TTFT median |
 |---|---|---|---|
-| M5-alpha | **60,2 tok/s** | 57,4 – 67,4 | 1,99 s |
-| M3-beta | **43,5 tok/s** | 41,8 – 50,9 | 7,45 s |
+| alpha | **60,2 tok/s** | 57,4 – 67,4 | 1,99 s |
+| beta | **43,5 tok/s** | 41,8 – 50,9 | 7,45 s |
 
 Ratio **1,38 : 1**, configured **1,50 : 1** → deviation **8 % → weights confirmed**.
 
@@ -70,8 +70,8 @@ ratio is 1,38 or higher — which supports 3 : 2 rather than contradicting it.
 
 | Host | Decode median | min – max | TTFT median |
 |---|---|---|---|
-| M5-alpha | 136,3 tok/s | 95,0 – 152,1 | 1,94 s |
-| M3-beta | 444,4 tok/s | 263,2 – 459,8 | 4,97 s |
+| alpha | 136,3 tok/s | 95,0 – 152,1 | 1,94 s |
+| beta | 444,4 tok/s | 263,2 – 459,8 | 4,97 s |
 
 Ratio 0,31 : 1 — the M3 is more than three times faster on the 9B. That is not a
 statement about the machines: on the M5 the 9B shares the GPU with the resident
@@ -120,7 +120,7 @@ made with the session quiet (the agent sat in a tool call, so no request was in
 flight on the M5 during the samples). Same model, same 8k prompt, 400 completion
 tokens, 10 runs per host:
 
-| | M5-alpha | M3-beta | ratio |
+| | alpha | beta | ratio |
 |---|---|---|---|
 | decode median | **55,9 tok/s** | **42,8 tok/s** | **1,31 : 1** |
 | decode min / max | 34,6 / 61,8 | 41,1 / 48,4 | |
@@ -141,7 +141,7 @@ pays off. Measured with random-word prompts (no prefix cache can serve them),
 `max_tokens: 1`, fixed overhead per host subtracted (0,11 s / 0,14 s), two
 repetitions each:
 
-| prompt | M5-alpha | M3-beta | ratio |
+| prompt | alpha | beta | ratio |
 |---|---|---|---|
 | ~2 000 tokens | 2 541 tok/s | 879 tok/s | 2,89 : 1 |
 | ~8 000 tokens | 3 734 tok/s | 1 047 tok/s | 3,57 : 1 |
@@ -156,7 +156,7 @@ Three things follow:
    A 200k-token context costs the M3 ~191 s of prefill and the M5 ~48 s, while
    the same thread decodes only 1,3× slower on the M3. A placement rule that
    looks only at decode therefore systematically under-charges long contexts on
-   the M3 — exactly the open question in §0.2 of the handover.
+   the M3 — exactly the open question that motivated these measurements.
 3. **The 2k ratio is not the 24k ratio.** Any context weight must use the size
    it is judging, not a single average rate.
 
@@ -231,9 +231,9 @@ tokens, direct against the hosts, `--host` to keep one machine per run):
 
 | host | run | decode tok/s | min–max | ttft |
 |---|---|---|---|---|
-| M5-alpha | 1 | **56,6** | 51,9–61,7 | 1,995 s |
-| M5-alpha | 2 | **53,5** | 49,7–57,7 | 2,085 s |
-| M3-beta | 1 | **45,2** | 44,0–50,8 | 7,275 s |
+| alpha | 1 | **56,6** | 51,9–61,7 | 1,995 s |
+| alpha | 2 | **53,5** | 49,7–57,7 | 2,085 s |
+| beta | 1 | **45,2** | 44,0–50,8 | 7,275 s |
 
 **Ratio M5 : M3 = 1,22 : 1** (55,05 / 45,2), against 1,38 : 1 measured on 14.11.
 and 1,50 : 1 configured. The prefill ratio is unchanged and healthy: 7,275 / 2,04
@@ -267,7 +267,7 @@ and not a 400-token answer:
 
 | host | decode tok/s | min–max | ttft | prompt |
 |---|---|---|---|---|
-| M5-alpha | **58,0** | 54,5–65,1 | 7,055 s | 32 024 |
+| alpha | **58,0** | 54,5–65,1 | 7,055 s | 32 024 |
 
 Valid 10/10 — the window takes 32k in plus 1 600 out without truncation. The
 decode rate is *higher* than at 8k (56,6 / 53,5), which is the expected shape: a
@@ -276,11 +276,11 @@ are not the average. The prefill rate is 32 024 / 7,055 = **4 539 tok/s**, above
 the configured `pp_tps` 3 680 — the configured value stays, because it is the
 conservative side of the prefill bias.
 
-M3-beta, same settings, ten minutes later:
+beta, same settings, ten minutes later:
 
 | host | decode tok/s (median) | min–max | ttft | prompt |
 |---|---|---|---|---|
-| M3-beta | **44,8** (clean tail: 45,4) | 25,8–56,9 | 28,955 s | 32 024 |
+| beta | **44,8** (clean tail: 45,4) | 25,8–56,9 | 28,955 s | 32 024 |
 
 The first three runs are visibly disturbed — ttft 45,7–50,6 s against 28,9 s for the
 rest, decode 25,8–29,6 against 42,3–56,9. That was **not** the machine: the
@@ -321,13 +321,13 @@ to a model nobody had measured.
 Fleet quiet: `:8010` idle, no other request on either node during the runs. The M3
 was emptied first (DeepSeek unloaded, 453 GB) and Qwen3.8 loaded fresh
 (111,6 GB), so the measurement ran against a model that had not served anything.
-The tool talks to the node directly (`http://10.11.12.9:8000`), not through RIPPLE.
+The tool talks to the node directly (`http://192.0.2.9:8000`), not through RIPPLE.
 
 #### 8k / 400
 
 | host | decode tok/s (median) | min–max | ttft (median) | prompt tokens | valid |
 |---|---|---|---|---|---|
-| M3-beta | **87,2** | 81,1–93,2 | 3,095 s | 8 080 | 10/10 |
+| beta | **87,2** | 81,1–93,2 | 3,095 s | 8 080 | 10/10 |
 
 Raw data: `tools/as6/results/as6-20261116-020240.json`.
 
@@ -341,7 +341,7 @@ and is unaffected, which is why the two batches agree on it and disagree on ttft
 
 | host | decode tok/s (median) | min–max | ttft (median) | prompt tokens | valid |
 |---|---|---|---|---|---|
-| M3-beta | **76,5** | 72,4–85,5 | 3,235 s | 32 046 | 10/10 |
+| beta | **76,5** | 72,4–85,5 | 3,235 s | 32 046 | 10/10 |
 
 Raw data: `tools/as6/results/as6-20261116-015936.json`.
 
@@ -408,7 +408,7 @@ API call, no state.
 ```
 ./.venv/bin/python tools/load_report.py                    # last 24 h
 ./.venv/bin/python tools/load_report.py --since 7d
-./.venv/bin/python tools/load_report.py --since 2026-11-14T13:00 --hosts M5-alpha
+./.venv/bin/python tools/load_report.py --since 2026-11-14T13:00 --hosts alpha
 ./.venv/bin/python tools/load_report.py --no-m3            # offline: local host only
 ./.venv/bin/python tools/load_report.py --json
 ```
@@ -472,7 +472,7 @@ The hourly profile buckets the same union per clock hour, so a row cannot exceed
 ### The M3 over SSH
 
 The second Mac's log is not copied. `ssh -o BatchMode=yes -o ConnectTimeout=8
-10.11.12.9 '<command>'` runs a `grep` on that machine and only the matching
+192.0.2.9 '<command>'` runs a `grep` on that machine and only the matching
 lines come back — a 40 MB log stays a 40 MB log on the M3, and the report
 prints the files it actually read (`READ` lines on the remote side's stderr).
 
@@ -507,23 +507,23 @@ $ ./.venv/bin/python tools/load_report.py --since 6h
 RIPPLE load report
 window   2026-11-14 14:19 .. 2026-11-14 20:19  (6.0 h, local time)
 sources
-  M5-alpha     /Users/vogel/.omlx/logs/server.log
-  M3-beta      10.11.12.9:/Users/vogel/.omlx/logs/server.log
-  RIPPLE log   /Users/vogel/Library/Logs/ripple.log  (1270 lines, 1207 duplicates dropped)
+  alpha     ~/.omlx/logs/server.log
+  beta      192.0.2.9:~/.omlx/logs/server.log
+  RIPPLE log   ~/Library/Logs/ripple.log  (1270 lines, 1207 duplicates dropped)
 
 per host (oMLX log)
   host           req     PP s     TG s   busy s  busy%  idle%  mean TTFT  TG tok/s    prompt tok  compl tok
   ---------------------------------------------------------------------------------------------------------
-  M5-alpha       748    1,134   10,690   10,032  46.4%  53.6%      1.52s      50.2    81,138,615    536,863
-  M3-beta        272    1,783    4,960    5,384  24.9%  75.1%      6.55s      32.2    16,396,697    159,862
+  alpha       748    1,134   10,690   10,032  46.4%  53.6%      1.52s      50.2    81,138,615    536,863
+  beta        272    1,783    4,960    5,384  24.9%  75.1%      6.55s      32.2    16,396,697    159,862
   prompt tok is nominal (prefix-cache inflated) — not a prefill rate.
   PP and TG are per-request sums; concurrent requests overlap, so they
   can add up to more than busy. busy is the union of [end-total, end].
-  M5-alpha: prefill 1,134s (5.2% of window), decode 10,690s (49.5%), idle 53.6%
-  M3-beta: prefill 1,783s (8.3% of window), decode 4,960s (23.0%), idle 75.1%
+  alpha: prefill 1,134s (5.2% of window), decode 10,690s (49.5%), idle 53.6%
+  beta: prefill 1,783s (8.3% of window), decode 4,960s (23.0%), idle 75.1%
 
 hourly busy seconds (union per host, one row per clock hour)
-  hour  M5-alpha                               M3-beta
+  hour  alpha                               beta
   14:00  ###################             1,112s ###                               186s
   15:00  ########################        1,404s #################                 986s
   16:00  #############################   1,712s ###########                       632s
@@ -535,13 +535,13 @@ hourly busy seconds (union per host, one row per clock hour)
   bar: 30 chars = 1,788s
 
 thread movements (RIPPLE log)
-  18:28:04  26311548f7805f9c   M3-beta -> M5-alpha  gain 2.6s  cost 0.8s
-  19:41:17  26311548f7805f9c   M3-beta -> M5-alpha  gain 2.6s  cost 0.6s
-  direction M3-beta -> M5-alpha: 2
+  18:28:04  26311548f7805f9c   beta -> alpha  gain 2.6s  cost 0.8s
+  19:41:17  26311548f7805f9c   beta -> alpha  gain 2.6s  cost 0.6s
+  direction beta -> alpha: 2
   rebinds 2, promotions (batch->interactive) 0
   RIPPLE requests per host (deduplicated):
-    M3-beta        230 requests   2,628.2 ms mean
-    M5-alpha       604 requests     581.7 ms mean
+    beta        230 requests   2,628.2 ms mean
+    alpha       604 requests     581.7 ms mean
     unrouted         5 requests       0.2 ms mean
 
 idle = window - busy. TTFT is wall time (prefill); decode = total - TTFT.

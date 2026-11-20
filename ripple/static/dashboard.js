@@ -1458,7 +1458,7 @@ function renderKpis(h, s) {
 let showDim = true;
 
 /* ── Modell-Policy (Betreiberaktion, issue #11) ───────────────────────────── */
-/* Richard will ein Modell aus dem Betrieb nehmen, ohne oMLX anzufassen. Zwei
+/* Der Betreiber will ein Modell aus dem Betrieb nehmen, ohne oMLX anzufassen. Zwei
    Stufen, beide je (Knoten, Modell) und beide reiner RIPPLE-Zustand:
    `disabled` routet nicht mehr hierhin, das Modell bleibt aber in /v1/models,
    solange ein anderer Knoten es anbietet; `hidden` bietet es Clients gar nicht

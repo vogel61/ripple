@@ -445,7 +445,7 @@ Jeder Operator-Speicher lässt sich in der Konfiguration verschieben: `placement
 ```yaml
 hosts:
   overrides:            # ein Knoten aus config.yaml, am Page geändert
-    M5-alpha: {weight: 2.0}
+    alpha: {weight: 2.0}
   nodes:                # eine am Page hinzugefügte Maschine (wieder entfernbar)
     M5-beta: {addresses: ["http://192.0.2.40:8000"]}
 policy:                 # am Page gesetzte Routing-Policy (Issue #78)
@@ -455,7 +455,7 @@ policy:                 # am Page gesetzte Routing-Policy (Issue #78)
 
 — und wird atomar geschrieben (`.tmp`, fsync, rename) mit Modus `0600`, weil ein Overlay-Knoten einen oMLX-Schlüssel tragen kann. Ein Override darf an einem Knoten nur die Entscheidungen des Operators ändern — `enabled`, `weight`, `site`, `spill_threshold`, `prefer_resident` —, nie seine Identität (Adresse, `node_id`, Schlüssel, Backend, Limits): eine Maschine, die die Seite neu definieren kann, kann still zu einer anderen werden.
 
-Seit Issue #78 lässt sich die Routing-Policy ganz ohne Dateibearbeitung setzen: `PATCH /admin/config/{dotted.path}` setzt einen Wert (zum Beispiel `affinity.ttl_seconds` oder `hosts.M5-alpha.weight`), `DELETE` auf demselben Pfad entfernt den Override, sodass wieder der Wert aus `config.yaml` gilt. Beides liegt hinter `auth.admin_key`, und beides läuft durch den Parser des Loaders — ein Wert, den der Start verweigern würde, wird auch hier mit derselben Meldung verweigert. Eine Gewichtsänderung gilt nur für neue Threads (laufende behalten ihren Host bis zu ihrem Ende); ändert sie die Verteilung der laufenden, fragt RIPPLE vorher nach und nennt die Zahl der betroffenen Threads.
+Seit Issue #78 lässt sich die Routing-Policy ganz ohne Dateibearbeitung setzen: `PATCH /admin/config/{dotted.path}` setzt einen Wert (zum Beispiel `affinity.ttl_seconds` oder `hosts.alpha.weight`), `DELETE` auf demselben Pfad entfernt den Override, sodass wieder der Wert aus `config.yaml` gilt. Beides liegt hinter `auth.admin_key`, und beides läuft durch den Parser des Loaders — ein Wert, den der Start verweigern würde, wird auch hier mit derselben Meldung verweigert. Eine Gewichtsänderung gilt nur für neue Threads (laufende behalten ihren Host bis zu ihrem Ende); ändert sie die Verteilung der laufenden, fragt RIPPLE vorher nach und nennt die Zahl der betroffenen Threads.
 
 Eine `fleet.yaml` von vor der Umbenennung wird noch gelesen, einmal, mit einer Warnung; der erste Schreibvorgang legt `runtime.yaml` an. Mehr wird nicht migriert.
 

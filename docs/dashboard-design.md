@@ -1,6 +1,6 @@
 # Wie die RIPPLE-Seite aussehen soll
 
-**Status:** Entwurf, 15.11.2026. Gehört zu Issue #1 (Gitea `<owner>/ripple`).
+**Status:** Entwurf, 15.11.2026. Gehört zu Issue #1 (GitHub `<owner>/ripple`).
 Die Vorlage ist [`dashboard-mockup.html`](dashboard-mockup.html) — eine Datei,
 kein CDN, kein Framework, kein Build-Schritt, kein `fetch()`. Seit #84 ist sie
 **kein handgezeichneter Entwurf mehr, sondern ein erzeugter Schnappschuss der
@@ -220,8 +220,8 @@ ausgezählt (6 px × 160 px, sechsfach vergrößert):
 
 | Knoten | Ton/Muster | Grauwerte im Streifen | Tinte | Zeilenwechsel | Spaltenwechsel |
 |---|---|---|---|---|---|
-| M5-alpha | 1 / `hatch` | 22 · 72 · 189 | 34,3 % | 0,8 | 2,4 |
-| M3-beta | 3 / `lines` | 22 · 54 · 129 | 34,3 % | 4,3 | 1,5 |
+| alpha | 1 / `hatch` | 22 · 72 · 189 | 34,3 % | 0,8 | 2,4 |
+| beta | 3 / `lines` | 22 · 54 · 129 | 34,3 % | 4,3 | 1,5 |
 
 Ohne Farbkanal bleiben zwei Merkmale: die **Tinte** liegt 2,07:1 auseinander
 (189 gegen 129), und die **Zeichnung** ist gespiegelt — der Schraffurstreifen
@@ -263,7 +263,7 @@ verloren — die Farbe hört nur auf, für dieses Paar zu helfen.
 |---|---|---|
 | 40 px | Wortmarke | `RIPPLE` in Rubik Microbe, `#9BBA7D`, Sperrung 0.02 em |
 | 20 px | Abschnittstitel, Kennzahl | `Flotte`, `Modelle`, der große Wert einer Karte |
-| 17 px | Knotenname, Betragszeile | `M5-alpha`, `432,2 GB von 525,4 GB` |
+| 17 px | Knotenname, Betragszeile | `alpha`, `432,2 GB von 525,4 GB` |
 | 14 px | Fließtext | Hinweise, Erklärungen |
 | 13 px | Tabellenzelle, Sekundärtext | alle Datenzeilen |
 | 12 px | Spaltenkopf, Einheit, Tooltip | `GRÖSSE`, `GB · geschätzt / gemessen` |
@@ -452,9 +452,9 @@ Modellblöcke selbst nebeneinander.
 ```
 1440 px                         900 px (eine Spalte)
 ┌─────────────────────┐         ┌────────────────────┐
-│ M5-alpha │ M3-beta │         │ M5-alpha           │
+│ alpha    │ beta    │         │ alpha              │
 ├─────────────────────┤         ├────────────────────┤
-│ Kennzahlen (7)      │         │ M3-beta            │
+│ Kennzahlen (7)      │         │ beta               │
 ├──────────┬──────────┤         ├────────────────────┤
 │ DeepSeek │ Qwen     │  ← 2    │ Kennzahlen (2×2)   │
 ├──────────┴──────────┤         ├────────────────────┤
@@ -1089,9 +1089,9 @@ Deshalb steht hier, wer welchen Katalog gelesen hat:
 
 | Katalog | Stand |
 |---|---|
-| `en.json` | Quelle, von Richard abgenommen |
-| `de.json` | von Richard abgenommen (er ist der Leser) |
-| `tr.json` | **Entwurf**, maschinell erstellt, noch nicht von einem Muttersprachler gelesen (Mustafa) |
+| `en.json` | Quelle, vom Betreiber abgenommen |
+| `de.json` | vom Betreiber abgenommen (er ist der Leser) |
+| `tr.json` | **Entwurf**, maschinell erstellt, noch nicht von einem Muttersprachler gelesen (a colleague) |
 | `fr.json` | **Entwurf**, maschinell erstellt, kein Prüfer benannt |
 | `it.json` | **Entwurf**, maschinell erstellt, kein Prüfer benannt |
 | `es.json` | **Entwurf**, maschinell erstellt, kein Prüfer benannt |
@@ -1177,4 +1177,4 @@ Spalte es sagt — das ist die Regel aus dem Abschnitt oben, keine Ausnahme.
 
 Die Vorlage erfüllt die ersten sechs Zeilen. Die beiden Zeilen davor prüft der
 Testlauf (`tests/test_dashboard.py`, `tests/dashboard_dom_stub.js`); die letzte
-ist die Frage, die Richard beantwortet.
+ist die Frage, die der Betreiber beantwortet.

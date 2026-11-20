@@ -1,7 +1,7 @@
 # Sites: where a node stands (issue #67)
 
-`hosts[].site` used to be a free string. The M5 declared `site: WD` and listed its LAN address first; the machine
-stands in Traiskirchen and is reached over a different network. RIPPLE ran only because the loopback probe failed
+`hosts[].site` used to be a free string. The M5 declared `site: SA` and listed its LAN address first; the machine
+stands in site-b and is reached over a different network. RIPPLE ran only because the loopback probe failed
 first — the declaration was never wrong *in the program*, because nothing read
 it.
 
@@ -12,19 +12,19 @@ against the address a node is **actually** reached through.
 
 ```yaml
 sites:
-  - id: wien
-    name: Wien
+  - id: sa
+    name: site-a
     networks:
       - 192.0.2.0/24
-      - 198.51.100.0/24
-  - id: traiskirchen
-    name: Traiskirchen
+      - 203.0.113.0/29
+  - id: sb
+    name: site-b
     networks:
-      - 203.0.113.0/24
+      - 198.51.100.0/24
 
 hosts:
-  - name: M5-alpha
-    site: wien
+  - name: alpha
+    site: sa
     addresses:
       - http://192.0.2.5:8000
 ```
@@ -37,8 +37,8 @@ hosts:
 * Two sites whose networks overlap are a warning: the first site in the file
   wins, which is worth knowing.
 
-Backwards compatible: `site: WD` as a plain string still parses. If no `sites:`
-block defines `WD`, that is **one warning**, not an error — the configuration
+Backwards compatible: `site: SA` as a plain string still parses. If no `sites:`
+block defines `SA`, that is **one warning**, not an error — the configuration
 keeps loading, and the old behaviour (a label nobody reads) is at least said out
 loud.
 
@@ -47,13 +47,13 @@ loud.
 `ripple doctor` adds one line per host:
 
 ```
-OK   site       M5-alpha: http://192.0.2.5:8000 is in Wien (wien), as declared
-WARN site       M5-alpha: declares site Wien (wien), but http://203.0.113.9:8000
-                is reached in Traiskirchen (traiskirchen) — the node is not where
+OK   site       alpha: http://192.0.2.5:8000 is in site-a (sa), as declared
+WARN site       alpha: declares site-a (sa), but http://198.51.100.9:8000
+                is reached in site-b (sb) — the node is not where
                 the configuration says
-WARN site       M5-alpha: declares site Wien (wien), but http://198.51.100.9:8000
+WARN site       alpha: declares site-a (sa), but http://203.0.113.9:8000
                 is in none of its networks (192.0.2.0/24)
-SKIP site       M3-beta: no site declared
+SKIP site       beta: no site declared
 ```
 
 Three different answers, on purpose: confirmed, contradicted (both sites named),

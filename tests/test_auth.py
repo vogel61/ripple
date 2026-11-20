@@ -58,8 +58,8 @@ async def test_fa23_disabled_key_is_rejected(stub_factory, ripple_factory, tmp_p
     stub = stub_factory(models=[stub_model_loaded("m1")])
     harness = await ripple_factory(
         _cfg([host_config("A", stub.url, node_id=stub.state.node_id)], tmp_path / "keys.yaml"))
-    key = harness.ripple.keys.create("harry", "interactive")
-    harness.ripple.keys.set_enabled("harry", False)
+    key = harness.ripple.keys.create("alice", "interactive")
+    harness.ripple.keys.set_enabled("alice", False)
 
     resp = await harness.chat(chat_body("m1", "hi", turns=2), headers=_auth(key.key))
 
@@ -70,7 +70,7 @@ async def test_fa23_model_outside_the_key_scope_is_404(stub_factory, ripple_fact
     stub = stub_factory(models=[stub_model_loaded("m1")])
     harness = await ripple_factory(
         _cfg([host_config("A", stub.url, node_id=stub.state.node_id)], tmp_path / "keys.yaml"))
-    key = harness.ripple.keys.create("mustafa", "interactive", models=["other-model"])
+    key = harness.ripple.keys.create("alice", "interactive", models=["other-model"])
 
     resp = await harness.chat(chat_body("m1", "hi", turns=2), headers=_auth(key.key))
 
@@ -117,22 +117,22 @@ async def test_fa23_admin_endpoints(stub_factory, ripple_factory, tmp_path):
     assert (await harness.client.get("/admin/keys", headers=_auth("wrong"))).status_code == 401
 
     created = await harness.client.post("/admin/keys", headers=_auth(ADMIN),
-                                        json={"name": "mustafa", "kind": "interactive"})
+                                        json={"name": "alice", "kind": "interactive"})
     assert created.status_code == 200
     body = created.json()
     assert body["key"].startswith("rip-")
-    assert body["name"] == "mustafa"
+    assert body["name"] == "alice"
 
     listing = await harness.client.get("/admin/keys", headers=_auth(ADMIN))
     names = [k["name"] for k in listing.json()["keys"]]
-    assert names == ["mustafa"]
+    assert names == ["alice"]
     assert body["key"] not in str(listing.json())     # only the mask leaves the API
 
     # the created key works for inference
     resp = await harness.ok(chat_body("m1", "hi", turns=2), headers=_auth(body["key"]))
     assert resp.status_code == 200
 
-    rotated = await harness.client.post("/admin/keys/mustafa/rotate", headers=_auth(ADMIN))
+    rotated = await harness.client.post("/admin/keys/alice/rotate", headers=_auth(ADMIN))
     assert rotated.status_code == 200
     assert rotated.json()["key"] != body["key"]
     # the old secret is dead, the new one works
@@ -141,7 +141,7 @@ async def test_fa23_admin_endpoints(stub_factory, ripple_factory, tmp_path):
     assert (await harness.chat(chat_body("m1", "hi", turns=2),
                                headers=_auth(rotated.json()["key"]))).status_code == 200
 
-    assert (await harness.client.post("/admin/keys/mustafa/revoke",
+    assert (await harness.client.post("/admin/keys/alice/revoke",
                                       headers=_auth(ADMIN))).json()["revoked"] is True
     assert (await harness.client.get("/admin/keys", headers=_auth(ADMIN))).json()["keys"] == []
 

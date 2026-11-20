@@ -5,6 +5,60 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-20
+
+### Added
+
+- **`docs/competitive-analysis.md`** (issue #110) — what exists in the field and
+  what does not, in four profiles under `docs/comparisons/`: **LiteLLM**
+  (v1.110.2 — keys, budgets, spend tracking, 100+ provider adapters, the
+  surrounding platform RIPPLE deliberately does not build), the **open-source
+  landscape** (435 repositories screened, 16 profiled), the **commercial options**
+  (12 products, list prices), and RIPPLE's **own inventory**, where every `yes`
+  carries a `file:line`. `factcheck.md` is the audit trail: 40 claims checked
+  against sources and against this repository, 10 corrected — two of them
+  weakening our own argument. The verdict the documents defend: no open-source
+  and no commercial tool combines thread placement, a deficit-corrected weighted
+  share, residency awareness and eviction protection, and for anyone who rents
+  capacity the honest answer is to use LiteLLM.
+
+### Changed
+
+- **The documentation no longer contradicts the code** (issue #110).
+  `docs/loading-state-contract.md` gains a section "Protected and unprotected
+  loads": `cold_load` is the client token both for a load the forecast cleared
+  and for a load nobody forecast, so the header promises nothing about eviction,
+  and `evict_idle` is a load as well — only the request log line says which
+  happened. `warmup` is documented as inert wherever it was still sold as a
+  startup feature: `config.py` refuses a non-empty list with a warning and FA-16
+  is not implemented, so the key exists to let an old config parse. `model_pinned`
+  was defined as an eviction lock; the lock is `model_locked`, and the two are no
+  longer used as synonyms. FA-18 no longer claims that nothing is ever evicted —
+  `evict_idle` is an eviction RIPPLE allows, and the requirement now names it
+  instead of denying it.
+
+### Fixed
+
+- **`hosts[].prefer_resident` was parsed and never read** (issue #111).
+  Placement ignored it, so a host marked `prefer_resident: false` behaved exactly
+  like one that had not been marked at all — the key was documented, parsed,
+  exported, in the overlay allow-list and covered by config tests, and no routing
+  code looked at it. A resident model is now tier `resident` only while the
+  preference is on; otherwise the host keeps taking part as an ordinary
+  cold-load candidate with the note `resident_not_preferred` and the deficit
+  decides. The eviction guard is unchanged: a host that would evict a locked,
+  pinned or running model stays a 503.
+
+- **`evict_idle` in `/stats` was always 0** (issue #112). The counter was
+  incremented in an `elif` that a dispatched request never reached — an
+  `evict_idle` placement is a cold load too, so the branch above it always won,
+  and the number that says whether the fleet is thrashing read 0 for the lifetime
+  of the process. It is counted from the placement tier now, as a separate `if`:
+  `cold_load` stays "a load RIPPLE supervised" and `evict_idle` becomes the
+  subset that first had to unload an idle model. Counting from the tier and not
+  from the reason keeps the loads of a degraded host, whose reason is
+  `degraded_host`.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added
@@ -16,7 +70,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
   both sites plus a hint on the fleet card. `hosts[].replication.address` is an
   ordered list now (bridge first, LAN as the fallback — the first reachable
   entry wins and a fallback is reported). Placement never reads a site. A bare
-  `site: WD` still parses; an unknown id is a warning, not an error.
+  `site: SA` still parses; an unknown id is a warning, not an error.
 - **`ripple init`** — first-run configuration for a machine that has nothing:
   port check that names the process holding it, nodes from discovery, an optional
   oMLX key (continuing without one works and is reported), a generated 32-hex
@@ -40,7 +94,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **`tools/secret_scan.py`** — scans the tracked tree and the whole history for
   secrets, including a literal search for a short key (`--key-file`), because a
   four-character key has no entropy signature. Prints redacted samples only.
-- `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `docs/handover-coldstart-2.md`.
+- `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, and the internal cold-start
+  handover notes (not published).
 - **`docs/install.md`** (English, primary) and **`docs/install-de.md`** — the
   walkthrough from nothing to a running proxy:
   requirements, `pip install .` (and why not `-e`), the real `init` conversation,

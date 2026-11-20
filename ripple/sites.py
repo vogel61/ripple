@@ -1,19 +1,19 @@
 """Sites as data (issue #67): named locations, their networks, and the check.
 
-`hosts[].site` used to be a free string — `WD`, `TR` — that nothing looked at.
-The M5 declared `site: WD` and listed `http://192.0.2.11:8000` first, but the
-machine stands in Traiskirchen and answers on `198.51.100.49`; RIPPLE only ran
+`hosts[].site` used to be a free string — `SA`, `SB` — that nothing looked at.
+The M5 declared `site: SA` and listed `http://192.0.2.11:8000` first, but the
+machine stands in site-b and answers on `198.51.100.49`; RIPPLE only ran
 because the loopback probe failed first. A declaration nobody checks is a label,
 not data.
 
 So a site is a block with an id and the networks it contains:
 
     sites:
-      - id: wd
-        name: Vienna
+      - id: sa
+        name: site-a
         networks: [192.0.2.0/24]
 
-A host names a site by id (`hosts[].site: wd`). The claim is then checkable: the
+A host names a site by id (`hosts[].site: sa`). The claim is then checkable: the
 address a node is *actually* reached through is matched against the networks,
 and a contradiction is one `ripple doctor` line (plus a hint on the fleet card).
 
@@ -34,7 +34,7 @@ Three rules this module keeps deliberately:
   `site:` on such a node and `ripple doctor` reports `SKIP` *and says why*
   (`is_local_address`). No location is invented and no comparison is claimed.
 
-Backwards compatible: `site: WD` as a plain string still parses (it is just an
+Backwards compatible: `site: SA` as a plain string still parses (it is just an
 id nothing defines, which is one warning and not an error), and a host without a
 site is a host without a claim.
 """

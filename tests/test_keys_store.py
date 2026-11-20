@@ -31,7 +31,7 @@ def _mode(path) -> int:
 def test_create_and_check_round_trip(tmp_path):
     store = _store(tmp_path)
     created = store.create("alice", kind="batch", models=["m2", "m1"],
-                           created_by="richard", note="nightly eval")
+                           created_by="operator", note="nightly eval")
 
     assert isinstance(created, ClientKey)
     assert created.key.startswith("rip-")
@@ -41,7 +41,7 @@ def test_create_and_check_round_trip(tmp_path):
     assert created.models == ["m1", "m2"]      # sorted
     assert created.enabled is True
     assert created.created_at                  # ISO 8601, non-empty
-    assert created.created_by == "richard"
+    assert created.created_by == "operator"
     assert created.note == "nightly eval"
 
     found = store.check(created.key)
@@ -228,7 +228,7 @@ def test_store_survives_a_reload_from_disk(tmp_path):
     path = tmp_path / "keys.yaml"
     store = KeyStore(path, admin_key=ADMIN)
     alice = store.create("alice", kind="batch", models=["m2", "m1"],
-                         created_by="richard", note="nightly")
+                         created_by="operator", note="nightly")
     bob = store.create("bob")
     store.set_enabled("bob", False)
 
@@ -240,7 +240,7 @@ def test_store_survives_a_reload_from_disk(tmp_path):
     assert again.kind == "batch"
     assert again.models == ["m1", "m2"]
     assert again.created_at == alice.created_at
-    assert again.created_by == "richard"
+    assert again.created_by == "operator"
     assert again.note == "nightly"
     assert reloaded.check(bob.key) is None          # still disabled
     assert reloaded.get("bob").enabled is False

@@ -24,6 +24,9 @@ RIPPLE :8010  — sticky threads, weights 3:2, spillover
 Full specification: [`docs/requirements.md`](docs/requirements.md).
 Measured evaluation of the Olla proxy (why this is a custom build):
 [`docs/olla-evaluation.md`](docs/olla-evaluation.md).
+Competitive analysis — LiteLLM, the open-source field and the commercial
+options, with the requirement matrix:
+[`docs/competitive-analysis.md`](docs/competitive-analysis.md).
 Measurements — what one node can do and what the fleet did:
 [`docs/measurements.md`](docs/measurements.md).
 Putting it into operation, including how to switch a client over:
@@ -36,11 +39,30 @@ Why a second Mac only helps when the work above RIPPLE is parallel:
 [`docs/manual-en.md`](docs/manual-en.md) §9.
 
 State: `ripple init`, `ripple discover` and `ripple doctor` exist, the
-distribution builds as `ripple-proxy`, and the suite has 1292 tests — 1290
-passed, 2 skipped, 229 s (`python -m pytest -q`, 19.11.2026; a snapshot with a
+distribution builds as `ripple-proxy`, and the suite has 1298 tests — 1298
+passed, 0 skipped, 231.71 s (`python -m pytest -q`, 20.11.2026; a snapshot with a
 date on it, not a target).
 Start with [`docs/install.md`](docs/install.md) (English, the primary document)
 or [`docs/install-de.md`](docs/install-de.md) (German).
+
+## How does this compare to what already exists?
+
+Four things are hard, and nothing in the field combines them: a conversation that
+stays on one node, a weighted share that holds at *any* sample size (3:2 at five
+threads as well as at fifty), knowledge of which model is **loaded** where, and a
+refusal instead of an eviction.
+
+The closest candidates each fail on a different axis. LiteLLM routes requests
+between interchangeable deployments and has no concept of a resident model; SMG
+has the best thread keys in the field and no residency; LocalAI wrote the only
+eviction ladder worth copying and cannot front oMLX at all; Olla was measured
+against these two machines and cannot express 3:2. For everything *around*
+placement — keys, budgets, spend, a hundred providers — LiteLLM is the better
+tool, and if you rent capacity the problem this project solves does not exist.
+
+The full comparison, with sources, list prices and the requirement matrix:
+[`docs/competitive-analysis.md`](docs/competitive-analysis.md) — as of
+Nov 20th, 2026.
 
 ## Why not the oMLX cluster?
 
@@ -79,10 +101,12 @@ candidate instead of aborting:
 2. **Residency** (`prefer_resident`) — prefers nodes that already hold the
    model. Loading a 400 GB model cold costs 60–70 s.
 3. **Slots** — `threads_on_node < max_threads`, and `inflight < max_inflight`.
-4. **Eviction guard** — the node is refused if loading the model would evict a
-   model that a running thread holds (or that is pinned). If no node can take
-   the request without evicting, the answer is HTTP 503 naming the conflict —
-   never a silent eviction of a running session.
+4. **Eviction guard** — where a forecast exists, the node is refused if loading the
+   model would evict a model that a running thread holds (or that is pinned). If no
+   node can take the request without evicting, the answer is HTTP 503 naming the
+   conflict. **Where no forecast exists** — the node reports no `residency`, the guard
+   is off, or `estimated_size` is unknown — the load is allowed **unchecked**, and
+   oMLX's own LRU decides what goes. See *Protected and unprotected loads* below.
 
 Capacity comes before the deficit rule: no new thread goes to a node with
 `inflight >= spill_threshold` while another candidate still has room. If every
@@ -94,16 +118,36 @@ otherwise a fingerprint over model + first user message (the system prompt is
 **excluded** — it carries timestamps), otherwise a prefix similarity measure
 that survives a compressed conversation.
 
+## Protected and unprotected loads
+
+RIPPLE issues no load command. It places a request, and oMLX loads the model if it is
+not resident. Two kinds of load follow from that, and only one of them is checked.
+
+| | Protected | Unprotected |
+|---|---|---|
+| When | the node reports `residency` and `ceiling_bytes`, and `estimated_size` is known for every loaded model | any of those is missing, or the eviction guard is off for that host |
+| What RIPPLE knows | `sum(loaded) + new <= hard_threshold × ceiling` — or exactly which idle models would go | nothing; no arithmetic is done |
+| What it does | refuses the host if a locked, pinned or running model would go (503 `model_locked` / `conflict`); otherwise allows it, or allows it after an idle eviction (`evict_idle`) | allows it |
+| What you see | `x-ripple-reason: cold_load` or `evict_idle`, and the note on the request log line | `x-ripple-reason: cold_load` — **the same token**; the note `no_eviction_forecast`, `size_unknown` or `no_ceiling` appears only in `decision=` on the log line |
+
+The 503 is therefore a statement about a forecast RIPPLE could make, not a promise that
+no load ever evicts anything. When the guard is off, the protection is off with it —
+visibly in `/healthz` (`guard_enabled` per host, `capabilities.eviction_guard` for the
+fleet), but not in the response the client gets.
+
 ## What the weighting cannot do
 
 - Models only one node offers (e.g. a large model that only alpha has) go 100 % there. 3:2 only
   applies to models **both** nodes offer.
-- The smaller node has to keep shared models warm, otherwise every spill pays the load
-  time. `warmup` in the configuration does that at startup.
+- The smaller node pays a cold load whenever a spill lands on it and the model is not
+  resident — 60–70 s for a 400 GB model. RIPPLE does not preload it: `warmup` is accepted
+  in the configuration but does nothing, and `ripple config` warns about it. Keep the
+  model warm on the smaller node with a periodic request, or accept the load.
 - The eviction guard needs `estimated_size` and `final_ceiling` from the
   backend. Without them (adapter without `residency`) the guard switches itself
   **off visibly** — `eviction_guard: false` in `/healthz` and a banner in the
-  dashboard. No silent degradation.
+  dashboard. That flag is the fleet's AND, while `guard_enabled` is per host: a node
+  whose guard is off still takes requests, and the load it allows is unchecked.
 
 ## Installation
 
@@ -191,7 +235,7 @@ See `config.example.yaml` (commented). Short version:
 | `affinity.header` | header carrying the session id (default `X-Session-Id`) |
 | `placement.binding_strategy` | `deficit` (default), `consistent_hash`, `least_threads` |
 | `discovery.interval_seconds` | how often models/residency are re-read |
-| `warmup` | models to preload at startup |
+| `warmup` | accepted and **inert** — RIPPLE issues no load command (FA-16 not implemented); a non-empty list warns at startup |
 
 ## Tests
 

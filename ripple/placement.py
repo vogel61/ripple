@@ -107,10 +107,22 @@ class Decision:
 def residency_tier(host: HostRuntime, model: str, cfg: Config,
                    registry: ThreadRegistry) -> Candidate:
     """Forecast what oMLX would do, using its own arithmetic — not the measured
-    usage: `estimated_size` is what oMLX itself calculates with."""
+    usage: `estimated_size` is what oMLX itself calculates with.
+
+    A resident model is tier `resident` only while the host's FA-12 preference
+    is on. With `hosts[].prefer_resident: false` the host keeps taking part, but
+    as an ordinary cold-load candidate: being warm is then not a reason to send
+    the request there, and the deficit decides. The model is already loaded, so
+    no bytes have to be found for it and no eviction is forecast — the guard
+    below stays exactly as it is for every other host.
+    """
     info = host.models.get(model)
-    if info is not None and info.loaded:
+    resident = info is not None and info.loaded
+    if resident and host.cfg.prefer_resident:
         return Candidate(host=host, tier=TIER_RESIDENT)
+    if resident:
+        return Candidate(host=host, tier=TIER_COLD_LOAD,
+                         note="resident_not_preferred")
 
     # Without residency/capacity signals there is no forecast — say so by
     # staying on the availability tier instead of pretending.
@@ -269,7 +281,7 @@ def _prefill_bias(cand: Candidate, considered: list[Candidate], cfg: Config,
     The bias is never positive (no host is ever rewarded for being fast), never
     applies with fewer than two known prefill rates (a single known rate has
     nothing to be relative to), and is 0.0 for a host without `pp_tps` — unknown
-    is not the same as fast. Measured rates: `docs/as6-measurement.md`.
+    is not the same as fast. Measured rates: `docs/measurements.md`.
     """
     pb = cfg.placement.prefill_bias
     if not pb.enabled or prompt_tokens < pb.min_prompt_tokens:

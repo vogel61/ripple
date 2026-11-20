@@ -506,7 +506,7 @@ function rendered() {
   const beforeThird = rendered();
   const beforeThirdTemplates = templates;
   fixture.stats.decisions = fixture.stats.decisions.concat([{
-    time: '13:45:00', model: 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp', host: 'M5-alpha',
+    time: '13:45:00', model: 'DeepSeek-V4.1-Flash-1017-oQ4e-mtp', host: 'alpha',
     reason: 'thread', prompt_chars: 1219, duration_ms: 999.0, status: 200,
   }]);
   await api.tick();
@@ -903,21 +903,21 @@ function rendered() {
 
     /* Das Gewicht: 409, die Zahl der Threads, die umziehen würden — und erst
        die zweite Anfrage trägt `confirm: true`. */
-    const weightKey = 'PATCH admin/config/hosts.M5-alpha.weight';
+    const weightKey = 'PATCH admin/config/hosts.alpha.weight';
     const weightQueue = JSON.parse(JSON.stringify(fixture.responses[weightKey]));
     params.question = api.paramsWeightQuestion(3, 2.5);
 
     fixture.responses[weightKey] = JSON.parse(JSON.stringify(weightQueue));
     fixture.confirm = false;
     mark = calls.length;
-    params.declined = await api.paramsSubmit('hosts.M5-alpha.weight', 2.5);
+    params.declined = await api.paramsSubmit('hosts.alpha.weight', 2.5);
     params.declined_calls = calls.slice(mark)
       .filter(c => c.method === 'PATCH').map(c => c.path + ' ' + JSON.stringify(c.body));
 
     fixture.responses[weightKey] = JSON.parse(JSON.stringify(weightQueue));
     fixture.confirm = true;
     mark = calls.length;
-    params.confirmed = await api.paramsSubmit('hosts.M5-alpha.weight', 2.5);
+    params.confirmed = await api.paramsSubmit('hosts.alpha.weight', 2.5);
     params.confirmed_calls = calls.slice(mark)
       .filter(c => c.method === 'PATCH').map(c => c.path + ' ' + JSON.stringify(c.body));
 

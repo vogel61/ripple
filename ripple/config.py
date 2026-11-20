@@ -322,7 +322,7 @@ class ReplicationHostConfig:
     wants first (the Thunderbolt bridge) and the ones to fall back to (the LAN).
     It is the one thing the fleet's own address choice cannot supply — both of
     the M3's addresses are on-link from the M5 (`192.0.2.12` from
-    `192.0.2.11`, `192.168.77.2` from `192.168.77.1`), so
+    `192.0.2.11`, `203.0.113.2` from `203.0.113.1`), so
     `ordered_addresses()` cannot prefer the cable and the routed LAN address
     wins by configuration order. Order decides, not a site: a site rule would
     point the copy at a bridge that has no address (issue #67 point 3).
@@ -553,7 +553,7 @@ class Config:
     # page, merged over `hosts` at start-up. See `FleetConfig`.
     fleet: FleetConfig = field(default_factory=FleetConfig)
     # What the overlay currently sets, as dotted paths (issue #78):
-    # `{"affinity.ttl_seconds": 900, "hosts.M5-alpha.weight": 2.0}`. Filled by
+    # `{"affinity.ttl_seconds": 900, "hosts.alpha.weight": 2.0}`. Filled by
     # `apply_overlay`, so `/config` can say where a value in force comes from
     # without reading the overlay file again.
     overrides: dict[str, Any] = field(default_factory=dict)
@@ -868,7 +868,7 @@ def host_from_block(block: dict[str, Any], defaults: dict[str, Any] | None = Non
 #
 # One allow-list, one grammar, one validator.
 #
-# The grammar is a dotted path — `hosts.M5-alpha.weight`,
+# The grammar is a dotted path — `hosts.alpha.weight`,
 # `affinity.ttl_seconds`, `placement.rebind.max_per_hour` — because the same
 # string has to name a row on the page, a key in the overlay file and a segment
 # of the endpoint's URL, and three spellings of one field would drift apart.
@@ -930,7 +930,7 @@ _STARTUP_ONLY: dict[str, str] = {
 def policy_target(path: str) -> tuple[str, str, str] | None:
     """`(section, subsection, field)` for an editable path, None otherwise.
 
-    `hosts.M5-alpha.weight` → `("hosts", "M5-alpha", "weight")`;
+    `hosts.alpha.weight` → `("hosts", "alpha", "weight")`;
     `affinity.ttl_seconds` → `("affinity", "", "ttl_seconds")`;
     `placement.rebind.max_per_hour` → `("placement", "rebind", "max_per_hour")`.
 
@@ -1194,7 +1194,7 @@ class FleetOverlay:
 
     # -- dotted paths (issue #78) ------------------------------------------
     # One grammar for the file, the endpoint's URL and the page's rows:
-    # `hosts.M5-alpha.weight`, `affinity.ttl_seconds`,
+    # `hosts.alpha.weight`, `affinity.ttl_seconds`,
     # `placement.rebind.max_per_hour`. The rules above are unchanged — a host
     # path lands in `overrides` (so it can only ever touch the five decisions),
     # an `affinity`/`placement` path lands in `policy`.
@@ -1916,7 +1916,7 @@ def load_config(path: str | Path) -> Config:
             "or hosts[].replication.api_key")
 
     # Sites (issue #67). The declaration is data, so everything that cannot be
-    # checked is said out loud — but an unknown id stays a *warning*: `site: WD`
+    # checked is said out loud — but an unknown id stays a *warning*: `site: SA`
     # as a plain string must keep parsing, and a host whose location nobody
     # defined is exactly the silent case this issue is about, not a start-up
     # failure.

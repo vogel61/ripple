@@ -446,7 +446,7 @@ def _interface_networks() -> list[str]:
 
 
 def _site_id(name: str) -> str:
-    """`Wien West` → `wien-west`: an id a host can name, stable and ASCII."""
+    """`Site A West` → `site-a-west`: an id a host can name, stable and ASCII."""
     text = re.sub(r"[^a-z0-9]+", "-", str(name or "").strip().lower()).strip("-")
     return text or "local"
 

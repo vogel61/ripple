@@ -20,9 +20,9 @@ from tests.support import (bearer, host_config, keyed_config, make_config,
 
 MINIMAL = """
 hosts:
-  - name: M5-alpha
+  - name: alpha
     addresses: ["http://127.0.0.1:8000"]
-    node_id: e19d4c08-e64f-4641-98eb-19721a27d449
+    node_id: 22222222-2222-4222-8222-222222222222
 """
 
 
@@ -122,12 +122,12 @@ async def test_absent_loading_signals_stay_unknown_not_false(stub_factory):
 async def test_calibration_endpoints_are_mounted_and_need_the_admin_key(
         ripple_factory, stub_factory, tmp_path):
     stub = stub_factory(models=[StubModel(id="m1", loaded=True, estimated_size=10**10)])
-    cfg = keyed_config([host_config("M5-alpha", stub.url, node_id="nid-1")],
+    cfg = keyed_config([host_config("alpha", stub.url, node_id="nid-1")],
                        str(tmp_path / "keys.yaml"))
     harness = await ripple_factory(cfg)
 
-    for method, path in (("get", "/admin/nodes/M5-alpha/calibration"),
-                         ("post", "/admin/nodes/M5-alpha/calibrate")):
+    for method, path in (("get", "/admin/nodes/alpha/calibration"),
+                         ("post", "/admin/nodes/alpha/calibrate")):
         anonymous = await getattr(harness.client, method)(path)
         assert anonymous.status_code == 401, anonymous.text
 

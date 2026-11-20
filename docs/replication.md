@@ -84,12 +84,12 @@ new directory is invisible until someone reloads.
 
 | Host | `addresses[]` |
 |---|---|
-| M5-alpha (`0d7114d5-…`) | `http://192.0.2.11:8000`, `http://192.168.77.1:8000`, `http://localhost:8000` |
-| M3-beta (`e19d4c08-…`) | `http://192.0.2.12:8000`, `http://192.168.77.2:8000`, `http://198.51.100.49:8000` |
+| alpha (`11111111-…`) | `http://192.0.2.11:8000`, `http://203.0.113.1:8000`, `http://localhost:8000` |
+| beta (`22222222-…`) | `http://192.0.2.12:8000`, `http://203.0.113.2:8000`, `http://198.51.100.49:8000` |
 
-`192.168.77.0/24` is the Thunderbolt bridge: `ifconfig` on the M5 shows
-`en4 … inet 192.168.77.1 netmask 0xffffff00`, and the M3 answers on
-`192.168.77.2` (verified with a read-only `GET /admin/api/models` over that
+`203.0.113.0/24` is the Thunderbolt bridge: `ifconfig` on the M5 shows
+`en4 … inet 203.0.113.1 netmask 0xffffff00`, and the M3 answers on
+`203.0.113.2` (verified with a read-only `GET /admin/api/models` over that
 address).
 
 The fleet's address choice (`ripple/hosts.py`) is `_directly_connected()`, which
@@ -97,7 +97,7 @@ asks "is the target on the same /24 as the source address I would use?":
 
 ```
 http://192.0.2.12:8000     direct=True   src=192.0.2.11
-http://192.168.77.2:8000   direct=True   src=192.168.77.1
+http://203.0.113.2:8000   direct=True   src=203.0.113.1
 http://198.51.100.49:8000  direct=False  src=192.0.2.11
 ```
 
@@ -116,7 +116,7 @@ the plan carries a warning, and `config.py` warns at startup.
 `replication.address` is needed for the **remote** side only. RIPPLE runs on the
 entry node, so the M5 side of every copy is *this machine*, and its address is not
 just useless there — it is fatal: `_rsync_argv` built
-`vogel@192.168.77.1:/…` → `vogel@192.168.77.2:/…` and rsync refused with
+`user@203.0.113.1:/…` → `user@203.0.113.2:/…` and rsync refused with
 `both source and destination cannot be remote files` (second real attempt, issue
 #13, 16.11.2026 00:40). The local host is therefore identified from what the
 configuration already says — the host whose `hosts[].addresses` contains a
@@ -278,19 +278,19 @@ replication:
   model_roots: []
 
 hosts:
-  - name: M5-alpha
+  - name: alpha
     replication:
       address: 192.0.2.11        # the machine RIPPLE runs on: ignored, no SSH (§3a)
       model_roots:                 # `model.model_dirs` of ~/.omlx/settings.json
         - /Users/operator/.omlx/models
-        - /Volumes/GLM4TB/models
-  - name: M3-beta
+        - /Volumes/models
+  - name: beta
     replication:
-      address: 192.168.77.2        # the Thunderbolt address, not the LAN one (§3)
+      address: 203.0.113.2         # the Thunderbolt address, not the LAN one (§3)
       ssh_user: vogel
       model_roots:
         - /Users/operator/.omlx/models
-        - /Volumes/GLM4TB/models
+        - /Volumes/models
 ```
 
 Without `replication.enabled: true` the endpoints answer 409 and nothing else
@@ -305,7 +305,7 @@ the key).
 
    ```
    curl -s -H "Authorization: Bearer $RIPPLE_ADMIN" \
-     "http://localhost:8010/admin/replication/plan?source=M5-alpha&target=M3-beta&model=Qwen3.8-Flash-Next-oQ4e-mtp"
+     "http://localhost:8010/admin/replication/plan?source=alpha&target=beta&model=Qwen3.8-Flash-Next-oQ4e-mtp"
    ```
 
    Expect `"ok": true`, `size_gb`, `free_gb`, `target_path`, `staging_path`.
@@ -315,8 +315,8 @@ the key).
    ```
    curl -s -X POST -H "Authorization: Bearer $RIPPLE_ADMIN" \
      -H 'content-type: application/json' \
-     -d '{"source":"M5-alpha","model":"Qwen3.8-Flash-Next-oQ4e-mtp"}' \
-     http://localhost:8010/admin/nodes/M3-beta/replicate
+     -d '{"source":"alpha","model":"Qwen3.8-Flash-Next-oQ4e-mtp"}' \
+     http://localhost:8010/admin/nodes/beta/replicate
    ```
 
    `202` with `job`, or `409` with the refusal and the plan.
@@ -324,12 +324,12 @@ the key).
 
    ```
    curl -s -H "Authorization: Bearer $RIPPLE_ADMIN" \
-     http://localhost:8010/admin/nodes/M3-beta/replication
+     http://localhost:8010/admin/nodes/beta/replication
    ```
 
    `job.percent`, `job.rate`, `job.step` (`copy` → `move` → `reload` → `verify`
    → `settings`). The target is out of the pool the whole time
-   (`GET /admin/nodes/M3-beta/maintenance` → `by: "replication"`).
+   (`GET /admin/nodes/beta/maintenance` → `by: "replication"`).
 5. **Result.** `job.state: done` and `job.report` = `{bytes, seconds, mb_per_s,
    not_replicated: []}`. The acceptance check:
 
@@ -344,7 +344,7 @@ the key).
 
    ```
    curl -s -X DELETE -H "Authorization: Bearer $RIPPLE_ADMIN" \
-     http://localhost:8010/admin/nodes/M3-beta/replication
+     http://localhost:8010/admin/nodes/beta/replication
    ```
 
    The rsync child is terminated, nothing is registered, the staging copy stays.
@@ -353,8 +353,8 @@ the key).
 
 * **The acceptance model is already on both machines.** Measured on 15.11.2026:
   the M3 holds `Qwen3.8-Flash-Next-oQ4e-mtp` under `~/.omlx/models/Jundot/…`
-  (`du -sh` = 99 G), the M5 under `/Volumes/GLM4TB/models/Jundot/…` (99 G). The
-  preflight will therefore refuse with *"already on M3-beta … pass overwrite=1"*.
+  (`du -sh` = 99 G), the M5 under `/Volumes/models/Jundot/…` (99 G). The
+  preflight will therefore refuse with *"already on beta … pass overwrite=1"*.
   The live run either uses `overwrite: true` (a real 111,6 GB re-copy — the
   acceptance wording) or a model that exists only on the source.
 * **A model root on the target that is not the same disk as the staging

@@ -14,7 +14,7 @@ find. So this scanner does two things gitleaks would not do for us:
 
 Exit code 0 = nothing found, 1 = hits, 2 = the scan itself failed. A hit in the
 history is not fixable by editing a file: the history has to be rewritten, which
-is the operator's decision (see docs/handover-coldstart.md §5).
+is the operator's decision alone.
 
     tools/secret_scan.py                          # tree + history
     tools/secret_scan.py --key-file ~/.omlx/api_key.txt

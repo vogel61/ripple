@@ -156,7 +156,7 @@ def _pick_models(host, residency: dict[str, ModelInfo], entry_loaded: set[str],
     residency away from the node for the length of the job. When nothing else is
     left — the M5's allow-list holds exactly two models and both are normally
     resident, so the plan used to answer 409 and the operator had to unload by
-    hand (`docs/loading-state-live-2026-11-15.md` §10) — such a model is taken
+    hand (the live evidence from the loading-state work) — such a model is taken
     anyway: the job unloads it, measures the load and puts it back (`_reload`).
 
     The entry host's models are dropped where that still leaves two: those carry
@@ -178,7 +178,7 @@ def _pick_models(host, residency: dict[str, ModelInfo], entry_loaded: set[str],
     if len(pool) >= 2 and entry_loaded:
         # The entry host's models carry the operator's session, so they are the
         # ones we would rather not load. But the preference must not destroy the
-        # spread: on M3-beta it removed the only small model (6,5 GB, resident on
+        # spread: on beta it removed the only small model (6,5 GB, resident on
         # the M5) and left 111,6 vs 159,2 GB — a 1,4× range, which says nothing
         # about the slope. Drop them only while what remains still spans 3×.
         preferred = [m for m in pool if m.id not in entry_loaded]
@@ -253,7 +253,7 @@ async def _measure(host, model: str, max_seconds: float) -> float:
     oMLX's `/v1/models/{id}/load` blocks until the model is resident, so the wall
     time of the call *is* the load time — and on the instances measured on
     15.11.2026 that is the only usable source: `loading_started_at` there carries
-    a monotonic clock value (158021.3 s after boot on M3-beta), not an epoch, and
+    a monotonic clock value (158021.3 s after boot on beta), not an epoch, and
     it does not move while the load runs. Read as epoch it would store a sample of
     ~1.8 billion seconds. When the field *is* an epoch it is preferred, because it
     excludes our own request latency (`ripple.hosts.epoch_seconds` decides).

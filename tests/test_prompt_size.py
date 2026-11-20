@@ -23,7 +23,7 @@ from tests.support import chat_body, host_config, make_config, prompt_for, \
     stub_model_loaded
 
 SYSTEM = 300_000          # characters, the measured Hermes case in issue #14
-USER = "wo steht die anlage in traiskirchen?"          # 100 characters
+USER = "wo steht die anlage in site-b?"                # 100 characters
 
 
 def agent_body(*, system: int = SYSTEM, user: str = USER, model: str = "m1",
@@ -41,8 +41,8 @@ def agent_body(*, system: int = SYSTEM, user: str = USER, model: str = "m1",
 def _two_hosts(stub_factory) -> list:
     a = stub_factory(models=[stub_model_loaded("m1")])
     b = stub_factory(models=[stub_model_loaded("m1")])
-    return [host_config("M5-alpha", a.url, node_id=a.state.node_id, weight=3.0),
-            host_config("M3-beta", b.url, node_id=b.state.node_id, weight=2.0)]
+    return [host_config("alpha", a.url, node_id=a.state.node_id, weight=3.0),
+            host_config("beta", b.url, node_id=b.state.node_id, weight=2.0)]
 
 
 # ---------------------------------------------------------------------------

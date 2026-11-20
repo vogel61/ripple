@@ -96,7 +96,7 @@ def test_a_test_config_never_points_at_the_operator_fleet():
     `config.yaml` declares — and a test that read it would inherit machines that
     are not its own.
     """
-    cfg = make_config([host_config("M5-alpha", "http://192.0.2.11:8000")])
+    cfg = make_config([host_config("alpha", "http://192.0.2.11:8000")])
     assert not str(cfg.fleet.file).startswith(str(Path.home()))
     assert str(cfg.fleet.file).startswith(tempfile.gettempdir())
     # …and nothing is read or written at all unless a test asks for the file.
@@ -722,7 +722,7 @@ def _sites():
     """Two declared locations, one of which contains the stub's address."""
     from ripple.sites import SiteConfig
     return [SiteConfig(id="local", name="Local", networks=["127.0.0.1/32"]),
-            SiteConfig(id="wd", name="Wien", networks=["192.0.2.0/24"])]
+            SiteConfig(id="sa", name="site-a", networks=["192.0.2.0/24"])]
 
 
 async def test_the_preview_answers_the_four_facts_and_writes_nothing(
@@ -855,7 +855,7 @@ async def test_the_preview_shows_the_derived_site_and_the_mismatch(
         stub_factory, ripple_factory, tmp_path):
     """#67's comparison, in front of the write instead of after it.
 
-    The address falls into `local`; the operator declares `wd`. The preview says
+    The address falls into `local`; the operator declares `sa`. The preview says
     so and the add still succeeds — a site is a location, not a routing rule.
     """
     a, b = _two_hosts(stub_factory)
@@ -863,17 +863,17 @@ async def test_the_preview_shows_the_derived_site_and_the_mismatch(
     cfg.sites = _sites()
     harness = await ripple_factory(cfg)
 
-    resp = await _preview(harness, b.url, site="wd")
+    resp = await _preview(harness, b.url, site="sa")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["site"] == "wd"
+    assert body["site"] == "sa"
     assert body["site_derived"] == "local"
     assert body["site_mismatch"] is True
     assert any("site mismatch" in w for w in body["warnings"])
 
-    assert (await _add(harness, b.url, site="wd")).status_code == 201
+    assert (await _add(harness, b.url, site="sa")).status_code == 201
     row = host_row(await harness.healthz(), "B")
-    assert row["site"] == "wd" and row["site_derived"] == "local"
+    assert row["site"] == "sa" and row["site_derived"] == "local"
     assert row["site_mismatch"] is True
 
 
@@ -883,7 +883,7 @@ async def test_the_preview_says_when_no_site_contains_the_address(
     from ripple.sites import SiteConfig
     a, b = _two_hosts(stub_factory)
     cfg = _cfg(tmp_path, [host_config("A", a.url)])
-    cfg.sites = [SiteConfig(id="wd", name="Wien", networks=["192.0.2.0/24"])]
+    cfg.sites = [SiteConfig(id="sa", name="site-a", networks=["192.0.2.0/24"])]
     harness = await ripple_factory(cfg)
     resp = await _preview(harness, b.url)
     assert resp.status_code == 200, resp.text
@@ -1323,8 +1323,8 @@ async def test_a_host_that_is_not_in_the_fleet_is_403_with_the_names_it_has(
         stub_factory, ripple_factory, tmp_path):
     a = stub_factory(models=_models(MODEL))
     harness = await ripple_factory(_cfg(tmp_path, [host_config("A", a.url)]))
-    resp = await _patch_policy(harness, "hosts.M5-alpha.weight", 2.0)
+    resp = await _patch_policy(harness, "hosts.alpha.weight", 2.0)
     assert resp.status_code == 403, resp.text
     body = resp.json()
     assert body["error"] == "not_editable"
-    assert "M5-alpha" in body["message"] and "A" in body["message"]
+    assert "alpha" in body["message"] and "A" in body["message"]

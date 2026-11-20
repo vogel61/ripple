@@ -1,8 +1,8 @@
 """Sites as data (issue #67): the block, the derivation, the check.
 
 The state of the world before this issue: `hosts[].site` was a free string that
-nothing looked at. The M5 declared `site: WD` and listed `192.0.2.11` first;
-the machine stands in Traiskirchen and answers on `198.51.100.49`. RIPPLE ran only
+nothing looked at. The M5 declared `site: SA` and listed `192.0.2.11` first;
+the machine stands in site-b and answers on `198.51.100.49`. RIPPLE ran only
 because the loopback probe failed first.
 
 These tests hold the four properties that make the declaration checkable:
@@ -72,8 +72,8 @@ def entry(name: str, url: str, *, site: str = "", **extra: Any) -> dict[str, Any
 
 
 SITES = [
-    {"id": "wd", "name": "Wien", "networks": ["192.0.2.0/24"]},
-    {"id": "tr", "name": "Traiskirchen", "networks": ["198.51.100.0/24"]},
+    {"id": "sa", "name": "site-a", "networks": ["192.0.2.0/24"]},
+    {"id": "sb", "name": "site-b", "networks": ["198.51.100.0/24"]},
 ]
 
 
@@ -81,28 +81,28 @@ SITES = [
 # 1. The block parses and is validated
 # ---------------------------------------------------------------------------
 def test_the_sites_block_is_read_and_its_networks_are_canonical(tmp_path):
-    path = write_config(tmp_path, [entry("a", "http://192.0.2.5:8000", site="wd")],
-                        sites=[{"id": "wd", "name": "Wien",
+    path = write_config(tmp_path, [entry("a", "http://192.0.2.5:8000", site="sa")],
+                        sites=[{"id": "sa", "name": "site-a",
                                 "networks": ["192.0.2.7/24", "198.51.100.0/24"]}])
     cfg = load_config(path)
-    assert [s.id for s in cfg.sites] == ["wd"]
+    assert [s.id for s in cfg.sites] == ["sa"]
     site = cfg.sites[0]
-    assert site.name == "Wien"
+    assert site.name == "site-a"
     # canonical: the host bits are gone, so the same network written twice is
     # the same network (and a comparison later is not a string comparison)
     assert site.networks == ["192.0.2.0/24", "198.51.100.0/24"]
-    assert cfg.hosts[0].site == "wd"
+    assert cfg.hosts[0].site == "sa"
     assert cfg.site_of(cfg.hosts[0]) is site
 
 
 def test_a_bare_string_site_still_parses_and_is_one_warning(tmp_path):
-    """The old world: `site: WD` with no block. Not an error — a warning."""
-    path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000", site="WD")])
+    """The old world: `site: SA` with no block. Not an error — a warning."""
+    path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000", site="SA")])
     cfg = load_config(path)
-    assert cfg.hosts[0].site == "WD"
+    assert cfg.hosts[0].site == "SA"
     assert cfg.sites == []
     assert cfg.site_of(cfg.hosts[0]) is None
-    matching = [w for w in cfg.warnings if "site 'WD'" in w]
+    matching = [w for w in cfg.warnings if "site 'SA'" in w]
     assert len(matching) == 1
     assert "not defined" in matching[0]
 
@@ -117,7 +117,7 @@ def test_a_host_without_a_site_is_silent(tmp_path):
 def test_a_network_that_is_not_cidr_is_refused(tmp_path):
     """A mask pair is the shape this issue rules out: `ipaddress` refuses it."""
     path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000")],
-                        sites=[{"id": "wd", "networks": ["192.0.2.0 255.255.255.0"]}])
+                        sites=[{"id": "sa", "networks": ["192.0.2.0 255.255.255.0"]}])
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     assert "192.0.2.0 255.255.255.0" in str(exc.value)
@@ -126,46 +126,46 @@ def test_a_network_that_is_not_cidr_is_refused(tmp_path):
 
 def test_a_site_needs_an_id_and_a_unique_one(tmp_path):
     path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000")],
-                        sites=[{"name": "Wien", "networks": ["192.0.2.0/24"]}])
+                        sites=[{"name": "site-a", "networks": ["192.0.2.0/24"]}])
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     assert "'id' missing" in str(exc.value)
 
     path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000")],
-                        sites=[{"id": "wd", "networks": ["192.0.2.0/24"]},
-                               {"id": "wd", "networks": ["198.51.100.0/24"]}])
+                        sites=[{"id": "sa", "networks": ["192.0.2.0/24"]},
+                               {"id": "sa", "networks": ["198.51.100.0/24"]}])
     with pytest.raises(ConfigError) as exc:
         load_config(path)
     assert "duplicate site id" in str(exc.value)
 
 
 def test_a_site_without_networks_is_a_warning_not_an_error(tmp_path):
-    path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000", site="wd")],
-                        sites=[{"id": "wd", "name": "Wien"}])
+    path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000", site="sa")],
+                        sites=[{"id": "sa", "name": "site-a"}])
     cfg = load_config(path)
     assert cfg.sites[0].networks == []
-    assert any("site wd: no networks" in w for w in cfg.warnings)
+    assert any("site sa: no networks" in w for w in cfg.warnings)
 
 
 def test_overlapping_sites_are_reported_once(tmp_path):
     path = write_config(tmp_path, [entry("a", "http://127.0.0.1:8000")],
-                        sites=[{"id": "wd", "networks": ["192.0.2.0/24"]},
-                               {"id": "tr", "networks": ["192.0.2.128/25"]}])
+                        sites=[{"id": "sa", "networks": ["192.0.2.0/24"]},
+                               {"id": "sb", "networks": ["192.0.2.128/25"]}])
     cfg = load_config(path)
     overlap = [w for w in cfg.warnings if "overlap" in w]
     assert len(overlap) == 1
-    assert "wd" in overlap[0] and "tr" in overlap[0]
+    assert "sa" in overlap[0] and "sb" in overlap[0]
 
 
 # ---------------------------------------------------------------------------
 # 2. Derivation: address → site
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("address, expected", [
-    ("http://192.0.2.5:8000", "wd"),
-    ("https://192.0.2.5", "wd"),
-    ("192.0.2.5:8000", "wd"),
-    ("192.0.2.5", "wd"),
-    ("198.51.100.7:8000", "tr"),
+    ("http://192.0.2.5:8000", "sa"),
+    ("https://192.0.2.5", "sa"),
+    ("192.0.2.5:8000", "sa"),
+    ("192.0.2.5", "sa"),
+    ("198.51.100.7:8000", "sb"),
     ("http://203.0.113.9:8000", ""),        # inside no network
     ("", ""),
     (None, ""),
@@ -202,7 +202,7 @@ def site_checks(report: doctor.Report) -> list[doctor.Check]:
     return [c for c in report.checks if c.name == "site"]
 
 
-def checks_for(config: Path, address: str, name: str = "M5-alpha") -> list[doctor.Check]:
+def checks_for(config: Path, address: str, name: str = "alpha") -> list[doctor.Check]:
     """The site checks for one node, reached through `address`.
 
     A stub can only bind `127.0.0.1`, and since issue #76 loopback is not an
@@ -216,28 +216,28 @@ def checks_for(config: Path, address: str, name: str = "M5-alpha") -> list[docto
 
 
 def test_a_contradiction_is_exactly_one_warning_with_both_names(tmp_path):
-    """The M5 case: declares WD, is reached in Traiskirchen."""
-    config = write_config(tmp_path, [entry("M5-alpha", "http://203.0.113.9:8000",
-                                           site="wd")],
-                          sites=[{"id": "wd", "name": "Wien",
+    """The M5 case: declares SA, is reached in site-b."""
+    config = write_config(tmp_path, [entry("alpha", "http://203.0.113.9:8000",
+                                           site="sa")],
+                          sites=[{"id": "sa", "name": "site-a",
                                   "networks": ["192.0.2.0/24"]},
-                                 {"id": "tr", "name": "Traiskirchen",
+                                 {"id": "sb", "name": "site-b",
                                   "networks": ["203.0.113.0/24"]}])
 
     checks = checks_for(config, "http://203.0.113.9:8000")
     assert len(checks) == 1
     check = checks[0]
     assert check.status == doctor.WARN
-    assert "Wien" in check.reason and "Traiskirchen" in check.reason
-    assert "wd" in check.reason and "tr" in check.reason
-    assert check.detail["declared"] == "wd"
-    assert check.detail["derived"] == "tr"
+    assert "site-a" in check.reason and "site-b" in check.reason
+    assert "sa" in check.reason and "sb" in check.reason
+    assert check.detail["declared"] == "sa"
+    assert check.detail["derived"] == "sb"
 
 
 def test_a_matching_site_is_ok(tmp_path):
-    config = write_config(tmp_path, [entry("M5-alpha", "http://192.0.2.5:8000",
-                                           site="wd")],
-                          sites=[{"id": "wd", "name": "Wien",
+    config = write_config(tmp_path, [entry("alpha", "http://192.0.2.5:8000",
+                                           site="sa")],
+                          sites=[{"id": "sa", "name": "site-a",
                                   "networks": ["192.0.2.0/24"]}])
 
     checks = checks_for(config, "http://192.0.2.5:8000")
@@ -246,9 +246,9 @@ def test_a_matching_site_is_ok(tmp_path):
 
 
 def test_an_address_in_no_network_is_reported_as_unconfirmed(tmp_path):
-    config = write_config(tmp_path, [entry("M5-alpha", "http://198.51.100.9:8000",
-                                           site="wd")],
-                          sites=[{"id": "wd", "name": "Wien",
+    config = write_config(tmp_path, [entry("alpha", "http://198.51.100.9:8000",
+                                           site="sa")],
+                          sites=[{"id": "sa", "name": "site-a",
                                   "networks": ["192.0.2.0/24"]}])
 
     checks = checks_for(config, "http://198.51.100.9:8000")
@@ -272,34 +272,34 @@ async def test_healthz_carries_the_declared_and_the_derived_site(stub_factory,
     a = stub_factory(models=[stub_model_loaded("m1")])
     b = stub_factory(models=[stub_model_loaded("m1")])
     cfg = make_config([
-        host_config("A", a.url, node_id=a.state.node_id, weight=1, site="wd"),
-        host_config("B", b.url, node_id=b.state.node_id, weight=1, site="tr"),
-    ], sites=[SiteConfig(id="wd", name="Wien", networks=["127.0.0.1/32"]),
-              SiteConfig(id="tr", name="Traiskirchen",
+        host_config("A", a.url, node_id=a.state.node_id, weight=1, site="sa"),
+        host_config("B", b.url, node_id=b.state.node_id, weight=1, site="sb"),
+    ], sites=[SiteConfig(id="sa", name="site-a", networks=["127.0.0.1/32"]),
+              SiteConfig(id="sb", name="site-b",
                          networks=["198.51.100.0/24"])])
     harness = await ripple_factory(cfg)
     health = await harness.healthz()
 
     row_a = host_row(health, "A")
-    assert row_a["site"] == "wd"                 # declared
-    assert row_a["site_name"] == "Wien"
-    assert row_a["site_derived"] == "wd"         # derived from the used address
+    assert row_a["site"] == "sa"                 # declared
+    assert row_a["site_name"] == "site-a"
+    assert row_a["site_derived"] == "sa"         # derived from the used address
     assert row_a["site_mismatch"] is False
 
     row_b = host_row(health, "B")
-    assert row_b["site"] == "tr"
-    assert row_b["site_derived"] == "wd"         # 127.0.0.1 is in wd
+    assert row_b["site"] == "sb"
+    assert row_b["site_derived"] == "sa"         # 127.0.0.1 is in sa
     assert row_b["site_mismatch"] is True
-    assert row_b["site_derived_name"] == "Wien"
+    assert row_b["site_derived_name"] == "site-a"
 
 
 async def test_healthz_without_sites_keeps_the_old_fields(stub_factory,
                                                          ripple_factory):
     a = stub_factory(models=[stub_model_loaded("m1")])
     harness = await ripple_factory(make_config([
-        host_config("A", a.url, node_id=a.state.node_id, weight=1, site="WD")]))
+        host_config("A", a.url, node_id=a.state.node_id, weight=1, site="SA")]))
     row = host_row(await harness.healthz(), "A")
-    assert row["site"] == "WD"                   # the old free string
+    assert row["site"] == "SA"                   # the old free string
     assert row["site_derived"] is None
     assert row["site_mismatch"] is False
 
@@ -344,12 +344,12 @@ async def test_two_locations_do_not_change_a_single_decision(stub_factory):
 
     plain = await _distribution(make_config(fleet()))
     located_hosts = fleet()
-    located_hosts[0].site = "wd"
-    located_hosts[1].site = "tr"
+    located_hosts[0].site = "sa"
+    located_hosts[1].site = "sb"
     located = await _distribution(make_config(
         located_hosts,
-        sites=[SiteConfig(id="wd", name="Wien", networks=["192.0.2.0/24"]),
-               SiteConfig(id="tr", name="Traiskirchen",
+        sites=[SiteConfig(id="sa", name="site-a", networks=["192.0.2.0/24"]),
+               SiteConfig(id="sb", name="site-b",
                           networks=["198.51.100.0/24"])]))
 
     assert located == plain
@@ -482,15 +482,15 @@ def test_init_writes_the_derived_network_and_the_name(tmp_path, monkeypatch):
     assert init_module.main([
         "--yes", "--port", str(port), "--home-dir", str(tmp_path),
         "--config", str(tmp_path / "config.yaml"),
-        "--host", "http://192.0.2.5:1", "--site-name", "Wien West",
+        "--host", "http://192.0.2.5:1", "--site-name", "Site A West",
         "--no-check"]) == 0
 
     cfg = load_config(tmp_path / "config.yaml")
-    assert [s.id for s in cfg.sites] == ["wien-west"]
-    assert cfg.sites[0].name == "Wien West"
+    assert [s.id for s in cfg.sites] == ["site-a-west"]
+    assert cfg.sites[0].name == "Site A West"
     assert cfg.sites[0].networks == ["192.0.2.0/24"]
     # the node is inside the network, so it gets the id — and only then
-    assert cfg.hosts[0].site == "wien-west"
+    assert cfg.hosts[0].site == "site-a-west"
     assert [w for w in cfg.warnings if "site" in w] == []
 
 

@@ -36,7 +36,7 @@ QWEN = "Qwen3.8-Flash-Next-oQ4e-mtp"
 # everywhere, dispatched nowhere — the model a lock can never protect.
 INFRA = "MarkItDown"
 SOURCE_ROOT = "/Users/operator/.omlx/models"
-TARGET_ROOT = "/Volumes/GLM4TB/models"
+TARGET_ROOT = "/Volumes/models"
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +523,7 @@ async def test_a_replication_refuses_while_a_locked_model_is_loaded_on_the_targe
                                                       ssh_user="vogel",
                                                       model_roots=[SOURCE_ROOT])),
         host_config("B", b.url, node_id=b.state.node_id,
-                    replication=ReplicationHostConfig(address="192.168.77.2",
+                    replication=ReplicationHostConfig(address="203.0.113.2",
                                                       ssh_user="vogel",
                                                       model_roots=[TARGET_ROOT])),
     ]
@@ -571,7 +571,7 @@ async def test_a_replication_to_a_node_without_the_locked_model_is_allowed(
                                                       ssh_user="vogel",
                                                       model_roots=[SOURCE_ROOT])),
         host_config("B", b.url, node_id=b.state.node_id,
-                    replication=ReplicationHostConfig(address="192.168.77.2",
+                    replication=ReplicationHostConfig(address="203.0.113.2",
                                                       ssh_user="vogel",
                                                       model_roots=[TARGET_ROOT])),
     ]

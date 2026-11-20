@@ -3,7 +3,7 @@
 **Status:** frozen in wave W0 (15.11.2026). Binding for W1 (state machine),
 W2a (calibration engine), W2b (dashboard) and W3 (admin endpoints).
 **Derived from:** `docs/loading-state.md` (the specification, authoritative) and
-`docs/loading-state-plan.md` §1 (the plan). If a wave needs a change here, it
+the wave split W1–W3 that this contract freezes. If a wave needs a change here, it
 stops and reports — it does not edit this file.
 
 Why this document exists: three waves touch the same fleet object from different
@@ -44,7 +44,7 @@ Parsed tolerantly in `OmlxBackend.residency()` via `_as_bool_opt()` / `_as_float
 **`None` is "unknown", never "not loading".**
 
 **Live caveat (15.11.2026):** `loading_started_at` is **not** a Unix timestamp.
-oMLX reports a monotonic clock value there (158021.3 on M3-beta, constant while
+oMLX reports a monotonic clock value there (158021.3 on beta, constant while
 the load runs). It may only be used through `ripple.hosts.epoch_seconds()`, which
 rejects anything outside the ceiling around *now* and makes the caller fall back
 to its own clock. Read as epoch it puts the load ~57 years in the past.
@@ -209,20 +209,35 @@ Counters declared in W0 (fields + `as_dict()`), incremented by the owning wave:
 
 ## 9. Dispatch hooks (`ripple/proxy.py`, W1)
 
-- After `choose()` returned `decision.reason == "cold_load"` and before
-  `_forward()`: `host.begin_loading(model, size_gb=…, eta_seconds=…,
-  source="dispatch")`, `stats.loads_supervised += 1`.
+- After `choose()` returned and before `_forward()`: `_needs_cold_load(decision)`
+  reads the **tier of the chosen candidate**, not the reason, and is true for
+  `TIER_COLD_LOAD` *and* `TIER_EVICT_IDLE` — an `evict_idle` placement ends in a cold
+  load too, and `degraded_host` overrides the reason without changing the tier. Then
+  `host.begin_loading(model, size_gb=…, eta_seconds=…, source="dispatch")`,
+  `stats.loads_supervised += 1`.
 - In the `finally` block of the dispatch loop, after `host.release()`:
   `host.end_loading("request_returned")` if that host is still loading *this*
   request's model. A `retry_other_node` hop ends the state on the old host.
 - The bound-thread branch (`proxy.py:350`) tests `in_pool`: a degraded bound host
   must not produce a 503.
 
+**`cold_load`, `evict_idle`, `no_eviction_forecast` — one distinction, stated once.**
+Both tokens are loads, and neither is a promise about eviction. `cold_load` is the
+client token for a `TIER_COLD_LOAD` placement: a forecast that fits, *or* no forecast
+at all (no `residency`, guard off, `estimated_size` unknown, no ceiling) — the
+difference is only the decision note (`no_eviction_forecast`, `size_unknown`,
+`no_ceiling`), never the header. `evict_idle` is a `TIER_EVICT_IDLE` placement: idle,
+unpinned, unheld models are unloaded first and the model then loads. Both count in
+`stats.cold_load`, because the increment is taken from the tier before the reason is
+read — `stats.evict_idle` is not reached for a dispatched request. A `cold_load`
+header therefore says nothing about whether anything was evicted, and an `evict_idle`
+header says nothing about how the load was forecast — only the request log line does.
+
 ## 10. Corrections from the live run (15.11.2026)
 
 The stub suite was green while four things were wrong, because a stub answers the
 way the specification assumed. Recorded here so the next change does not have to
-rediscover them (evidence: `docs/loading-state-live-2026-11-15.md` §4).
+rediscover them (evidence: the live run of 15.11.2026).
 
 1. **`loading_started_at` is a monotonic value, not an epoch** → use
    `ripple.hosts.epoch_seconds()` and fall back to your own clock (§2).
@@ -242,7 +257,7 @@ shows before the POST.
 
 ## 11. Corrections from the adversarial review (15.11.2026)
 
-`docs/loading-state-review.md` is the full report. These are the rules it changed,
+The adversarial review of this contract is the full report. These are the rules it changed,
 and they hold for anything built on this contract:
 
 1. **A load we dispatched is unobserved until oMLX lists it.** `is_loading: false`

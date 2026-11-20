@@ -25,7 +25,7 @@ from ripple.discover import discover, scan_network
 
 @dataclass
 class NodeConfig:
-    node_id: Optional[str] = "0d7114d5-bbbf-483a-b3d9-d5e62afe9507"
+    node_id: Optional[str] = "11111111-1111-4111-8111-111111111111"
     models: List[str] = field(default_factory=lambda: ["Qwen3.5-9B-oQ4e-mtp"])
     # The key the stub demands. None means the node answers without one.
     key: Optional[str] = None
@@ -154,7 +154,7 @@ def closed_port() -> int:
 
 # -- discover() ------------------------------------------------------------
 async def test_full_node(node_factory) -> None:
-    stub = node_factory(node_id="0d7114d5-bbbf-483a-b3d9-d5e62afe9507",
+    stub = node_factory(node_id="11111111-1111-4111-8111-111111111111",
                         models=["DeepSeek-V4.1-Flash-1017-oQ4e-mtp",
                                 "Qwen3.5-9B-oQ4e-mtp"],
                         key="secret")
@@ -163,7 +163,7 @@ async def test_full_node(node_factory) -> None:
     assert len(found) == 1
     node = found[0]
     assert node.address == stub.url
-    assert node.node_id == "0d7114d5-bbbf-483a-b3d9-d5e62afe9507"
+    assert node.node_id == "11111111-1111-4111-8111-111111111111"
     assert node.models == ("DeepSeek-V4.1-Flash-1017-oQ4e-mtp", "Qwen3.5-9B-oQ4e-mtp")
     assert node.latency_ms > 0.0
     assert node.name == "local"
@@ -233,7 +233,7 @@ async def test_no_key_still_finds_the_node(node_factory) -> None:
     node = found[0]
     assert node.models == ()
     assert node.admin is False
-    assert node.node_id == "0d7114d5-bbbf-483a-b3d9-d5e62afe9507"
+    assert node.node_id == "11111111-1111-4111-8111-111111111111"
 
     # ... and with the key the same node tells us everything.
     with_key = await discover([stub.url], timeout=2.0, api_key="secret")
@@ -315,7 +315,7 @@ def test_main_reports_a_node_as_json(node_factory, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert len(payload) == 1
     assert payload[0]["address"] == stub.url
-    assert payload[0]["node_id"] == "0d7114d5-bbbf-483a-b3d9-d5e62afe9507"
+    assert payload[0]["node_id"] == "11111111-1111-4111-8111-111111111111"
     assert payload[0]["models"] == ["Qwen3.5-9B-oQ4e-mtp"]
     assert payload[0]["admin"] is True
     assert payload[0]["name"] == "local"
@@ -343,7 +343,7 @@ def test_main_human_output_one_line_per_node(node_factory, capsys) -> None:
     lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
     assert len(lines) == 1
     assert stub.url in lines[0]
-    assert "node_id=0d7114d5" in lines[0]
+    assert "node_id=11111111" in lines[0]
     assert "models=2" in lines[0]
     assert "latency=" in lines[0]
     assert "admin=yes" in lines[0]
@@ -378,9 +378,9 @@ def test_main_scans_only_with_the_flag(monkeypatch, capsys) -> None:
     async def fake_scan(cidr: str, **kwargs: Any) -> List[Any]:
         calls.append(cidr)
         return [discover_mod.Found(address="http://198.51.100.139:8000",
-                                   node_id="e19d4c08-e64f-4641-98eb-19721a27d449",
+                                   node_id="22222222-2222-4222-8222-222222222222",
                                    models=("m",), latency_ms=1.5,
-                                   name="node-e19d4c08", admin=True)]
+                                   name="node-22222222", admin=True)]
 
     monkeypatch.setattr(discover_mod, "scan_network", fake_scan)
     rc = discover_mod.main(["--address", "http://127.0.0.1:1", "--scan",
@@ -390,7 +390,7 @@ def test_main_scans_only_with_the_flag(monkeypatch, capsys) -> None:
     assert rc == 0
     out = capsys.readouterr().out
     assert "http://198.51.100.139:8000" in out
-    assert "node-e19d4c08" in out
+    assert "node-22222222" in out
 
 
 def test_module_is_runnable_standalone() -> None:

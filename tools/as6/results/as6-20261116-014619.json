@@ -1,0 +1,10 @@
+{
+  "model": "Qwen3.8-Flash-Next-oQ4e-mtp",
+  "results": [
+    {
+      "host": "beta",
+      "error": "HTTPStatusError: Client error '401 Unauthorized' for url 'http://192.0.2.9:8000/v1/models/status'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401"
+    }
+  ],
+  "dry_run": false
+}

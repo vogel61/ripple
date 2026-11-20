@@ -344,7 +344,7 @@ async function fetchStub(url, init) {
   const path = String(url).split('?')[0];
   if (path.indexOf('/admin/threads/') === 0) {
     if (deleteMode === 'conflict') {
-      const body = errorBody('thread ' + KEY + ' has 1 request(s) in flight on M5-alpha');
+      const body = errorBody('thread ' + KEY + ' has 1 request(s) in flight on alpha');
       return {ok: false, status: 409, text: async () => JSON.stringify(body)};
     }
     if (deleteMode === 'denied') {
@@ -354,7 +354,7 @@ async function fetchStub(url, init) {
     /* The fake backend forgets the thread, like the real one does: the tick
        after the delete is what makes the item disappear. */
     fixture.healthz.threads.registry = [];
-    const body = {key: KEY, removed: true, host: 'M5-alpha', slot_freed: true};
+    const body = {key: KEY, removed: true, host: 'alpha', slot_freed: true};
     return {ok: true, status: 200, json: async () => body,
             text: async () => JSON.stringify(body)};
   }
@@ -480,7 +480,7 @@ def test_a_refusal_is_said_in_the_block(click):
     the same sentence as a missing key. A silent refusal would look like a click
     that did nothing."""
     assert click["conflict"]["requests"][0] == "DELETE /admin/threads/4b17eecc4cf0a8a5"
-    assert "1 request(s) in flight on M5-alpha" in click["conflict"]["html"]
+    assert "1 request(s) in flight on alpha" in click["conflict"]["html"]
     assert "4b17eecc4cf0a8a5" in click["conflict"]["html"]      # still listed
     assert _en()["key.help"] in click["denied"]["html"]
 

@@ -27,7 +27,7 @@ NZ-4), against the live instance on `:8010`:
   not by the wall time of the level — otherwise a fast host looks slow because a
   slow host is still busy
 
-| configuration | M5-alpha cap / spill / threads | M3-beta cap / spill / threads |
+| configuration | alpha cap / spill / threads | beta cap / spill / threads |
 |---|---|---|
 | A (M2, hand-set) | 3 / 2 / 12 | 6 / 3 / 12 |
 | B (measured) | 6 / 4 / 20 | 6 / 3 / 20 |
@@ -135,8 +135,8 @@ are therefore more trustworthy than the absolute numbers.
 
 | host | max_inflight | spill_threshold | max_threads |
 |---|---|---|---|
-| M5-alpha (weight 3) | 6 | 4 | 20 |
-| M3-beta (weight 2) | 6 | 3 | 20 |
+| alpha (weight 3) | 6 | 4 | 20 |
+| beta (weight 2) | 6 | 3 | 20 |
 
 The cost is honest to state: when five or six requests run on the M5 at once, one
 of them takes 17–20 s instead of 11 s, and an interactive session on the same GPU
@@ -184,7 +184,7 @@ The 3:2 weights came from decode measurements (60.2 against 43.5 tok/s =
 1.38:1). Prefill was never measured — and it is not the same ratio. Cold prefill,
 unique text per request so no prefix cache could answer:
 
-| context | M5-alpha | M3-beta | ratio |
+| context | alpha | beta | ratio |
 |---|---|---|---|
 | 8.4k tokens | 2.10 s (4.011 tok/s) | 15.60 s (541 tok/s) | 7.4 : 1 |
 | 24.5k tokens | 6.66 s (3.680 tok/s) | 25.23 s (970 tok/s) | 3.8 : 1 |
