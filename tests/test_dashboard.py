@@ -30,7 +30,7 @@ from datetime import datetime
 
 import pytest
 
-from ripple.config import DiscoveryConfig, PlacementConfig
+from ripple.config import DiscoveryConfig, FIELD_HELP, PlacementConfig
 from ripple.dashboard import render_dashboard
 from ripple.proxy import (INHERITED_LABEL_REASON, QUERY_FAILED_REASON,
                           UNOWNED_LABEL_REASON, UNSUPERVISED_REASON)
@@ -324,6 +324,9 @@ def _config() -> dict:
     return {
         "source": "config.yaml", "listen": "0.0.0.0:8010", "log_level": "INFO",
         "log_file": "/tmp/ripple.log",
+        # Der Satz zu jeder Zeile kommt seit #139 mit dem Schema (#144 zeigt ihn
+        # aus dem Katalog, dies ist der Rückfall).
+        "help": dict(FIELD_HELP),
         "placement": {"binding_strategy": "thread", "balance_abs_threshold": 1,
                       "balance_rel_threshold": 0.25, "thread_decay_seconds": 900,
                       "flap_guard_failures": 2,
@@ -738,8 +741,13 @@ def _card(fleet: str, name: str) -> str:
 
 # -- the shell --------------------------------------------------------------
 def test_the_shell_links_the_two_static_assets(page):
-    assert '<link rel="stylesheet" href="/static/dashboard.css">' in page
-    assert '<script src="/static/dashboard.js"></script>' in page
+    """Beide Dateien tragen `?v=<mtime>` — ohne das holt ein normales Neuladen
+    die geänderte Datei nicht zwingend (siehe `_asset_version()`)."""
+    css_link = re.search(r'<link rel="stylesheet" href="/static/dashboard\.css\?v=([^"]+)">', page)
+    js_src = re.search(r'<script src="/static/dashboard\.js\?v=([^"]+)">', page)
+    assert css_link and js_src, page[-300:]
+    assert css_link[1] == js_src[1]
+    assert re.fullmatch(r"\d+-\d+", css_link[1]), css_link[1]
 
 
 def test_the_page_carries_no_external_url(page, css, js):
@@ -1352,15 +1360,19 @@ def test_the_thread_registry_stands_in_two_columns(css):
     stays the one of the list. A grid with `grid-auto-flow:column` would have to
     know the row count; balanced columns do it themselves. `break-inside:avoid`
     is what keeps a thread from being cut across the column boundary, and under
-    1200 px there is one column again — two half columns of a phone are two
-    unreadable columns."""
+    1100 px there is one column again (#143) — two half columns of a phone are two
+    unreadable columns. The line used to sit at 1200 px, which cost an iPad in
+    landscape (1180–1194 CSS px) a column it could hold: measured at 1100 px the
+    columns are 518 px wide and the key keeps 205 px without truncating; at
+    1060 px three of four keys already cut."""
     panel = _rule(css, "#threads")
     assert "column-count:2" in panel
     # the hairline between the columns, not a background: the panel is one block
     assert "column-rule:1px solid var(--line)" in panel
     assert "break-inside:avoid" in _rule(css, "#threads > .thread-item")
-    narrow = css.split("@media (max-width:1200px)")[1].split("@media")[0]
-    assert "#threads{column-count:1}" in narrow
+    narrow = css.split("@media (max-width:1100px){")
+    assert any("#threads{column-count:1}" in part.split("@media")[0] for part in narrow[1:])
+    assert "@media (max-width:1200px)" not in css      # the old line is gone
 
 
 def test_the_middle_label_of_a_thread_sits_in_a_fixed_column(css):
@@ -6721,7 +6733,7 @@ sandbox.globalThis = sandbox;
   const fleet = () => (elements.get('fleet') || {}).__html || '';
 
   const out = {
-    H: api.SPARK_H, W: api.SPARK_W, PAD: api.SPARK_PAD,
+    H: api.SPARK_H, W: api.SPARK_W, PAD: api.SPARK_PAD, FLOOR: api.SPARK_FLOOR,
     fleet: fleet(),
     geom: api.seriesGeom(fixture.entry),
     gap: api.seriesGeom(fixture.gap),
@@ -6921,7 +6933,7 @@ def test_the_two_lines_are_total_and_per_thread_from_the_payload(series_run):
     is exactly the mistake this test exists to catch.
     """
     g = series_run["geom"]
-    base = series_run["H"] - series_run["PAD"]
+    base = series_run["H"] - series_run["FLOOR"]
     top = base - series_run["PAD"]
     peak = g["max"]
     assert peak == max(v for v in SERIES_TOTAL + SERIES_RATE if v is not None)
@@ -6947,6 +6959,56 @@ def test_the_two_lines_are_total_and_per_thread_from_the_payload(series_run):
     # both rows, normalised to the same length and the same holes
     assert series_run["rows"]["total"] == SERIES_TOTAL
     assert series_run["rows"]["per_thread"] == SERIES_RATE
+
+
+def test_the_zero_sits_on_the_line_the_card_draws(series_run, css):
+    """#145: die Null der Kurve ist die Trennlinie der Karte, nicht 9 px darueber.
+
+    Der Betreiber hatte die graue Linie unter der Grafik als Nulllinie gelesen —
+    sie lag 9 px unter der echten Null (3 px Fussluft im viewBox + 6 px Padding),
+    und damit wirkten die zwei Reihen wie zwei Skalen. Jetzt liegt die Null auf
+    der Unterkante (`SPARK_FLOOR = 0`), `.spark` hat kein Padding mehr, und die
+    Linie ist einen Ton heller (`--line-2`), damit sie als Achse gelesen wird.
+    """
+    assert series_run["FLOOR"] == 0
+    block = re.search(r"\n  \.spark\{([^}]*)\}", css)[1]
+    assert "padding:0" in block and "px" not in block
+    foot = re.search(r"\.host-foot\{([^}]*)\}", css)[1]
+    assert "border-top:1px solid var(--line-2)" in foot
+
+    g = series_run["geom"]
+    base = series_run["H"] - series_run["FLOOR"]
+    ys = [y for sub in _subpaths(g["total"]) for _, y in sub]
+    assert max(ys) <= base                       # nichts liegt unter der Null
+    lo = min(v for v in SERIES_TOTAL if v is not None)
+    assert max(ys) == pytest.approx(
+        base - lo / g["max"] * (base - series_run["PAD"]), abs=0.05)
+
+
+def test_the_omlx_version_in_the_foot_is_not_grey(css, series_run):
+    """#145: die oMLX-Version steht in `--fg`, nicht im Grau der Zaehler daneben.
+
+    Der Betreiber (21.11.): „dieser Wert ist wichtig und geht im Moment etwas
+    unter". Die Fusszeile ist sonst `--fg-3`; die Version ist dort der einzige
+    Wert, der den Stand des Knotens beschreibt, und ein grauer Stand liest sich
+    wie ein Zaehler.
+    """
+    rule = re.search(r"\.host-foot \.ver\{([^}]*)\}", css)
+    assert rule and "color:var(--fg)" in rule[1]
+    assert 'class="ver"' in series_run["fleet"]
+
+
+def test_the_per_thread_value_carries_the_maintenance_colour(css, series_run):
+    """#145: der Wert von „pro Thread" steht in `--maint` (Wunsch vom 21.11.).
+
+    Der Test haelt die Zuweisung samt ihrer Kollision fest: `--maint` ist im
+    Rest der Seite die Zustandsfarbe „Wartung". Wer die Farbe spaeter aendert,
+    soll hier lesen, dass sie auf dieser Karte nicht den Zustand meint.
+    """
+    rule = re.search(r"\.metrics \.metric\.rate-p \.metric-val\{([^}]*)\}", css)
+    assert rule and "color:var(--maint)" in rule[1]
+    assert re.search(r'class="metric tip cell flip rate rate-p"', series_run["fleet"])
+    assert re.search(r'class="metric tip cell flip rate rate-t"', series_run["fleet"])
 
 
 def test_one_empty_bucket_is_the_resolution_of_the_data_and_the_pen_crosses_it(series_run):
@@ -7100,7 +7162,7 @@ def test_the_script_builds_the_path_the_reference_builds(series_run):
     """
     def axes(length, peak):
         W, H, PAD = series_run["W"], series_run["H"], series_run["PAD"]
-        span, base = max(1, length - 1), H - PAD
+        span, base = max(1, length - 1), H - series_run["FLOOR"]
         return (lambda i: round(i / span * W, 1),
                 lambda v: round(base - (v / peak) * (base - PAD), 2) if peak > 0 else base)
 
@@ -7193,10 +7255,15 @@ def test_the_two_lines_differ_by_dash_pattern_and_not_by_colour(css):
     assert ".sw.dash" in css and "repeating-linear-gradient(90deg" in css
 
 
-def test_the_chart_takes_the_48_pixels_the_fleet_tab_has(css, series_run):
-    """The fleet tab must not grow: 14 px head + 34 px plot + 2 px + 6 px is the
-    room #80 left, and the height in the style sheet is the height of the
-    `viewBox` — otherwise the drawing would be stretched, not scaled."""
+def test_the_chart_takes_the_60_pixels_the_fleet_tab_gives_it(css, series_run):
+    """#145: the plot is 46 px, not 34 — the height is the height of the
+    `viewBox`, otherwise the drawing would be stretched, not scaled.
+
+    34 px was the height the fleet tab had "without growing" (#83), and at a
+    ratio of 1.5 between the two series the two lines lay 8 px apart: the
+    separation the chart exists for was not readable. 14 px head + 46 px plot +
+    2 px margin + 6 px padding = 68 px is the budget the card may spend here.
+    """
     plot = re.search(r"\.spark-plot\{([^}]*)\}", css)[1]
     head = re.search(r"\.spark-head\{([^}]*)\}", css)[1]
     block = re.search(r"\n  \.spark\{([^}]*)\}", css)[1]
@@ -7204,10 +7271,10 @@ def test_the_chart_takes_the_48_pixels_the_fleet_tab_has(css, series_run):
     h_head = int(re.search(r"height:(\d+)px", head)[1])
     margin = int(re.search(r"margin-top:(\d+)px", plot)[1])
     pad = sum(int(v) for v in re.findall(r"(\d+)px", block))
-    assert h_plot == series_run["H"]
+    assert h_plot == series_run["H"] == 46
     assert "width:100%" in plot                 # the width follows the card
     assert "preserveAspectRatio=\"none\"" in series_run["spark_en"]
-    assert h_head + h_plot + margin + pad <= 60
+    assert h_head + h_plot + margin + pad <= 68
 
 
 def test_the_svg_survives_the_two_second_patch(series_stub):
@@ -7490,9 +7557,10 @@ def test_the_readout_follows_the_line_across_one_empty_bucket(series_run):
     card = series_run["hover_card"]
     assert card.count('<b class="spark-v">~') == 2
     assert ">0.0<" not in card and ">0<" not in card
-    cross = re.search(r'class="spark-cross" x1="([\d.]+)" y1="0" x2="([\d.]+)" y2="34"', card)
+    cross = re.search(r'class="spark-cross" x1="([\d.]+)" y1="0" x2="([\d.]+)" y2="(\d+)"', card)
     assert cross, card
     assert cross[1] == cross[2]                   # a vertical line, no lean
+    assert cross[3] == str(series_run["H"])       # it spans the plot, #145
     assert float(cross[1]) == pytest.approx(SERIES_GAP_AT / 9 * 1000, abs=0.1)
 
     # the words are the two ids of the legend, not new ones
@@ -7528,7 +7596,7 @@ def test_the_readout_survives_the_two_second_patch(spark_patch):
     assert len(patched["cross"]) == 1
     assert patched["cross"][0]["x1"] == str(round(SERIES_GAP_AT / span * 1000, 1))
     assert patched["cross"][0]["x1"] == patched["cross"][0]["x2"]
-    assert patched["cross"][0]["y2"] == "34"      # the height of the plot
+    assert patched["cross"][0]["y2"] == "46"      # the height of the plot (#145)
     assert patched["values"] == ["~60.4", "~30.2"]   # bucket 4 is bridged (#105)
     # the legend's own words stay in the head — the number is added, not swapped in
     assert patched["keys"][0].startswith("total")
@@ -7635,21 +7703,20 @@ def test_the_total_row_is_separated_by_an_axis_not_by_a_ring(css):
     assert "#load .loadrow.total .lr-name" not in css   # no quieter override left
     assert "opacity" not in total
     assert "outline" not in total                # the ring is gone, not moved
-    # …und die Summenzeile wird seit dem 21.11.2026 an der **Höhe** erkannt, nicht
-    # an einer Farbe: der Balken der Summe ist 50 % höher als der ihrer Teile
-    # (14 → 21 px). Die 1-px-Achse allein trug den Schnitt nicht — 2,22:1 gegen
-    # den Panelhintergrund ist eine Tabellenlinie, keine Zäsur (Betreiber-Fund).
-    # Was bleibt, ist die Regel von #106: keine zweite Farbe, kein Ring, keine
-    # Deckkraft — die Summe ist dieselbe Größe, nur größer.
+    # …und seit #142 wird die Summe an der **Helligkeit** erkannt, nicht an der
+    # Höhe. Der 50-%-Balken aus #138 war das einzige hohe Element im Panel und zog
+    # den Blick von den Knoten weg; die Achse klebte mit 8 px am Balken. Ein
+    # Rahmen wurde in 1, 2 und 3 px gemessen und verworfen (unsichtbar /
+    # konkurrierend / frisst 6 von 14 px). Was bleibt, ist die Regel aus #106:
+    # keine zweite Farbe, kein Ring, keine Deckkraft — dieselbe Größe, eine Stufe
+    # heller. Die fünf Segmentfarben der Summe liegen exakt 9 L* über denen der
+    # Teile, bei gleichem Farbton und gleicher Buntheit (CIE Lab, nicht HSL).
     m_base = re.search(r"\n  #load \.loadbar\{([^}]*)\}", css)
-    m_total = re.search(r"\n  #load \.loadrow\.total \.loadbar\{([^}]*)\}", css)
-    assert m_base and m_total, "die beiden Höhenregeln stehen nicht mehr in der Datei"
+    assert m_base, "die Balkenhöhe steht nicht mehr in der Datei"
     h_base = re.search(r"height:(\d+)px", m_base.group(1))
-    h_total = re.search(r"height:(\d+)px", m_total.group(1))
-    assert h_base and h_total
-    assert int(h_total.group(1)) * 2 == int(h_base.group(1)) * 3   # genau 50 % höher
-    assert "background" not in m_total.group(1) and "box-shadow" not in m_total.group(1)
-    assert "border" not in total                 # a border would move the layout
+    assert h_base and h_base.group(1) == "14"
+    assert not re.search(r"#load \.loadrow\.total \.loadbar\{", css)   # no taller bar
+    assert "top:-10px" in rule
     assert "margin-top:8px" in total
     # the rule is positioned against the row it belongs to, not against the page
     assert "position:relative" in total
@@ -7679,6 +7746,53 @@ def test_the_total_row_is_separated_by_an_axis_not_by_a_ring(css):
         assert axis * 2 <= lum(hexof(seg)), seg
     assert lum(hexof("--line-3")) > track        # darker than the track, but a step
     assert lum(hexof("--line-3")) - track > 0.03 # …that the eye can take
+
+    # Die Summe ist eine Stufe heller, nicht größer (#142): jede der fünf Farben
+    # liegt exakt 9 L* über ihrer Grundfarbe — und die Zeile zieht sie auch.
+    def lstar(h):
+        def ch(v):
+            v = v / 255
+            return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+        r, g, b = [ch(int(h[i:i + 2], 16)) for i in (1, 3, 5)]
+        y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return 116 * y ** (1 / 3) - 16 if y > 0.008856 else 903.3 * y
+
+    for cls, base_name, sum_name in (
+            ("idle", "--fg-3", "--sum-idle"), ("loading", "--load", "--sum-loading"),
+            ("prefill", "--warn", "--sum-prefill"), ("decode", "--ok", "--sum-decode"),
+            ("mixed", "--maint", "--sum-mixed")):
+        step = lstar(hexof(sum_name)) - lstar(hexof(base_name))
+        # Eine Wahrnehmungsstufe, kein exakter Wert: das Orange (`--warn`) sitzt am
+        # Rand von sRGB — die ideale Farbe (L* +9 bei gleichem a*/b*) liegt
+        # außerhalb, `#ffbb55` ist mit ΔE76 2,1 die nächste darstellbare und kommt
+        # auf +8,4. Die anderen vier treffen 9,0 auf eine Nachkommastelle.
+        assert abs(step - 9) <= 0.7, (base_name, round(step, 1))
+        assert f"#load .loadrow.total .seg-{cls}{{background:var({sum_name})}}" in css, cls
+
+
+def test_no_comment_ends_in_the_middle_of_its_line(css, js):
+    """Ein `*/` mitten im Kommentar beendet ihn vorzeitig — und nimmt die nächste
+    Deklaration mit (#142).
+
+    Der Satz „Ziel sind +9 L* bei gleichem a*/b*" enthält den Kommentar-Terminator
+    wörtlich. Der Parser schloss den Kommentar dort, der Rest des Satzes wurde zu
+    CSS-Müll, und `--sum-idle:#929dac` fiel mit ihm weg: `background:var(--sum-idle)`
+    hatte damit keinen Wert, der Idle-Abschnitt der Summenzeile malte
+    `transparent` und wirkte fast schwarz. **Die Suite war dabei grün** — jeder
+    Test las die Datei als Text, und textuell stand alles da. Deshalb prüft
+    dieser Test die Kommentare selbst, in beiden Dateien: hinter einem Kommentar
+    steht auf derselben Zeile nichts außer schließender Klammer oder Semikolon
+    (`catch (e) { /* … */ }` ist erlaubt), nie ein Satzteil. `a*/b*` schreibt
+    sich `a* und b*`.
+    """
+    bad = []
+    for name, text in (("dashboard.css", css), ("dashboard.js", js)):
+        for m in re.finditer(r"/\*(.*?)\*/", text, re.S):
+            line_end = text.find("\n", m.end())
+            tail = text[m.end():line_end if line_end >= 0 else len(text)].strip()
+            if tail and not re.fullmatch(r"[});,]+", tail):
+                bad.append((name, text.count("\n", 0, m.start()) + 1, tail[:40]))
+    assert not bad, bad
 
 
 def test_the_total_row_carries_the_rule_across_the_full_row(rendered):
@@ -7710,8 +7824,9 @@ def test_the_total_row_moves_down_eight_pixels_without_growing_the_block(css):
 
     The padding pays for the gap: bottom padding minus 8 px plus the 8 px margin
     is the top padding — the same height as before, in every window width, which
-    is why the measurement at 1440 px and at 741 px can be equal. The rule sits
-    inside that margin (`top:-8px`), so it costs nothing either.
+    is why the measurement at 1440 px and at 741 px can be equal. The rule sits at
+    `top:-10px` — 2 px above that margin's edge since #142, which still costs
+    nothing because it is absolutely positioned against the row.
     """
     bars = re.search(r"\n  #load \.loadbars\{([^}]*)\}", css)[1]
     total = re.search(r"\n  #load \.loadrow\.total\{([^}]*)\}", css)[1]
@@ -7721,7 +7836,7 @@ def test_the_total_row_moves_down_eight_pixels_without_growing_the_block(css):
     assert s3 - paid + gap == s3                  # 12 − 8 + 8 == 12
     assert gap == 8 and paid == 8                 # the paragraph, and who pays
     assert "gap:9px" in bars                      # the row spacing is untouched
-    assert "top:-8px" in re.search(r"\n  #load \.load-sum-rule\{([^}]*)\}", css)[1]
+    assert "top:-10px" in re.search(r"\n  #load \.load-sum-rule\{([^}]*)\}", css)[1]
 
 
 # -- die relative Last neben dem Gewicht (#80) -------------------------------
@@ -7804,103 +7919,102 @@ def test_the_load_grows_no_block_on_the_card(rel_loads):
     assert without(measured) == without(missing)
 
 
-def test_the_load_stays_inside_the_one_line_of_the_sub(css, rel_loads):
-    """Die Unterzeile ist einzeilig (`nowrap` + Ellipse) und die Last ist ein
-    `<span>` darin: kein `display:block`, kein `<br>`, weiter vier Zellen."""
+def test_the_load_stays_inside_the_sub_but_may_wrap(css, rel_loads):
+    """Die Last ist ein `<span>` in der Unterzeile: kein `display:block`, kein
+    `<br>` — sie darf den Satz umbrechen, aber keine eigene Zeile aufmachen.
+
+    Bis #145 war die Unterzeile einzeilig (`nowrap` + Ellipse). Mit fünf
+    Spalten ist sie 117 px breit und „Ziel 60 % · Last 0,36" braucht gemessen
+    130: umbrechen ist die Reparatur, nicht kürzen (#80 hatte gekürzt und dafür
+    die Einheit aus der Zeile genommen). Der Umbruch bleibt innerhalb der Zelle.
+    """
     sub = re.search(r"\.metric-sub\{([^}]*)\}", css)[1]
-    assert "white-space:nowrap" in sub
-    assert "text-overflow:ellipsis" in sub
+    assert "nowrap" not in sub                  # two lines are allowed (#145)
+    assert "line-height" in sub
     rel = re.search(r"\.metric-sub \.rel\{([^}]*)\}", css)[1]
     assert "display:block" not in rel and "display:flex" not in rel
     card = _cards(rel_loads["measured"])["alpha"]
     assert "<br" not in card
-    assert card.count('class="metric-sub"') == 5
+    assert card.count('class="metric-sub"') == 6
 
 
-def test_the_four_metric_cells_stay_equal_wide(css):
-    """Variante 3: gleiche Spalten *und* nichts abgeschnitten. Ungleiche Spalten
+def test_the_five_metric_cells_stay_equal_wide(css):
+    """Gleiche Spalten *und* nichts abgeschnitten: ungleiche Spalten
     (`auto`/`1fr`) hätten das Abschneiden gelöst, aber die zwei Host-Karten wären
-    nicht mehr pixelgleich — die Karten sind das Vergleichsbild. Der Test hält
-    die Entscheidung fest, damit sie nicht beim nächsten Layout-Wunsch
-    stillschweigend zurückkommt: vier gleich breite Zellen, kein `auto`."""
+    nicht mehr pixelgleich — die Karten sind das Vergleichsbild. #145 hat die
+    vierte Zelle in zwei geteilt (tok/s pro Thread und tok/s total) und die
+    Unterzeile darf dafür umbrechen; die Spalten bleiben gleich breit, kein
+    `auto`. Der Test hält beides fest, damit es nicht beim nächsten Layout-Wunsch
+    stillschweigend zurückkommt.
+    """
     metrics = re.search(r"\.metrics\{([^}]*)\}", css)
     assert metrics
-    assert "repeat(4,minmax(0,1fr))" in metrics[1]
+    assert "repeat(5,minmax(0,1fr))" in metrics[1]
     assert "auto" not in metrics[1]
 
 
-# -- das Alter der Messung in seiner Einheit (#80) ---------------------------
-# Rohe Sekunden waren die Ursache des Überlaufs: „32 018 569 s ago" ist in einer
-# 149,6-px-Zelle fünfstellig und war in sieben der 16 Sprachen breiter als die
-# Zelle (polnisch +78 px, französisch +62 px, englisch +39 px). Der Test baut
-# den Payload über `measured_at` — der Stub hat eine stehende Uhr (`FROZEN`), ein
-# Alter von 86 400 s ist deshalb exakt 86 400 s — und liest, was auf der Karte
-# steht. Die Kataloge tragen die Einheiten (`tests/test_i18n.py` prüft sie in
-# allen 16); hier steht, dass die Seite sie benutzt.
-SENTINEL_AGE = 32_018_569          # „nie gemessen", aber die Zeile existiert
+# -- die zwei tok/s-Zellen der Karte (#145) ----------------------------------
+# Bis #145 stand in der vierten Zelle die Modellrate (`metrics[].tg_tps`) mit
+# ihrem Alter in seiner Einheit (#80) und der Probenzahl im Tip. Seit #145
+# stehen dort die zwei Raten, die der Fahrtenschreiber zeichnet: links pro
+# Thread, rechts die Summe. Beide kommen aus demselben Eintrag
+# (`hosts[].series`), damit Zelle und Linie nie zwei Zahlen nennen; die
+# Modellrate samt Proben lebt in der Modelltabelle (#124), wo sie zu einem
+# (Modell, Knoten)-Paar gehoert. Die Unterzeile nennt das Fenster — nie rohe
+# Sekunden, das war der Ueberlauf aus #80.
+
+RATE_CELL = re.compile(
+    r'<div class="metric tip cell flip rate rate-[pt]" data-tip="([^"]*)">'
+    r'<div class="metric-lbl">(.*?)</div>'
+    r'<div class="metric-val num">(.*?)</div>'
+    r'<div class="metric-sub">(.*?)</div>', re.S)
 
 
-def _age_healthz(seconds: int) -> dict:
-    """`_healthz()` mit einer Messung, die `seconds` alt ist."""
-    h = json.loads(json.dumps(_healthz()))
-    for row in h["hosts"]:
-        for m in row["metrics"].values():
-            m["measured_at"] = FROZEN - seconds
-    return h
+def _rate_cells(card: str) -> list:
+    cells = RATE_CELL.findall(card)
+    assert len(cells) == 2, card[:400]
+    return cells
 
 
 @pytest.fixture(scope="module")
-def ages(tmp_path_factory) -> dict:
-    def run(name: str, seconds: int) -> str:
-        data = _stub_fixture(healthz=_age_healthz(seconds))
-        return _run_stub(tmp_path_factory.mktemp(name), data)["parts"]["fleet"]
-
-    return {"now": run("age-now", 0), "minute": run("age-60", 60),
-            "day": run("age-86400", 86400), "sentinel": run("age-sentinel", SENTINEL_AGE)}
+def noseries(tmp_path_factory) -> str:
+    """Eine Karte ohne `series` — der Knoten hat noch keine Probe geliefert."""
+    return _run_stub(tmp_path_factory.mktemp("noseries"), _stub_fixture())["parts"]["fleet"]
 
 
-def _tps_sub(card: str) -> str:
-    """Die Unterzeile der vierten Zelle — tok/s — einer Karte.
+def test_the_two_rate_cells_show_what_the_chart_draws(series_run):
+    """Links `per thread`, rechts `total`, beide aus `hosts[].series`.
 
-    Fünf seit #98: die vierte ist tok/s, die fünfte ist der Prefix-Cache.
+    Der Wert ist der letzte Sample des Eintrags, den `sparkline()` zeichnet —
+    nicht die Modellrate aus `metrics` und keine zweite Rechnung im Browser.
+    `total > per thread`, weil die Summe ueber die Stroeme laeuft; beide
+    Unterzeilen nennen dasselbe Fenster wie der Kopf der Kurve.
     """
-    subs = re.findall(r'<div class="metric-sub">(.*?)</div>', card, re.S)
-    assert len(subs) == 5, subs
-    return subs[3]
+    (tip_p, lbl_p, val_p, sub_p), (tip_t, lbl_t, val_t, sub_t) = \
+        _rate_cells(_cards(series_run["fleet"])["alpha"])
+
+    assert (lbl_p, lbl_t) == ("per thread", "total")
+    assert " tok/s" in val_p and " tok/s" in val_t
+    number = lambda v: float(v.split("<")[0].replace(",", "."))
+    assert number(val_t) > number(val_p) > 0
+    assert sub_p == sub_t == "15 min"
+
+    # die Rechnung und die Quelle stehen im Tip, in vorhandenen Woertern
+    assert "\u03a3 per thread" in tip_t and "hosts[].series[].total" in tip_t
+    assert "total \u00f7 inflight" in tip_p and "hosts[].series[].per_thread" in tip_p
 
 
-def test_the_age_of_the_measurement_is_read_in_its_unit(ages):
-    """60 s wird `1 min ago`, 86 400 s `1 d ago`, der Sentinel `370 d ago`.
+def test_a_card_without_series_says_so_in_both_rate_cells(noseries):
+    """Ohne Probe im Fenster steht `—` und `no samples yet` — nicht `0,0`.
 
-    Eine fünfstellige Sekundenzahl war in der Viertel-Karte nicht unterzubringen;
-    die Einheit ist die Reparatur, nicht das Grid. `just now` bleibt für den
-    Moment — „0 s ago" wäre keine Messung, sondern eine Uhr.
+    Eine fehlende Messung ist keine Null (#80): der Wert schweigt, die
+    Unterzeile sagt warum. Beide Zellen tragen dieselbe Aussage, damit die Karte
+    nicht halb gefuellt aussieht.
     """
-    expected = {"now": "just now", "minute": "1 min ago",
-                "day": "1 d ago", "sentinel": "370 d ago"}
-    for key, text in expected.items():
-        card = _cards(ages[key])["alpha"]
-        assert _tps_sub(card) == text, key
-        # keine rohen Sekunden mehr, in keiner Schreibweise des Tausenderpunkts
-        for raw in ("86,400", "86400", "32,018,569", "32018569", "370.6"):
-            assert raw not in card, (key, raw)
-
-
-def test_the_sample_count_moved_into_the_tooltip_of_the_cell(ages):
-    """Die Zeile trägt *eine* Angabe: das Alter. Die Probenzahl — wie viele
-    Anfragen in die Rate eingegangen sind — steht im Tooltip derselben Zelle.
-
-    Zwei Angaben nebeneinander waren in sieben der 16 Sprachen breiter als die
-    Zelle; eine passt überall. Der Tip ist derselbe Layer wie jeder andere
-    (`data-tip`), kein zweites `title`.
-    """
-    card = _cards(ages["day"])["alpha"]
-    sub = _tps_sub(card)
-    assert "sample" not in sub and "Proben" not in sub, sub
-    assert not re.search(r"\d", sub.replace("1 d ago", "")), sub
-    tips = re.findall(r'data-tip="([^"]*)"', card)
-    assert any(t.endswith("309 samples") for t in tips), tips
-    assert 'title="309 samples"' not in card
+    for tip, lbl, val, sub in _rate_cells(_cards(noseries)["alpha"]):
+        assert val.strip() == "—", (lbl, val)
+        assert sub == "no samples yet", (lbl, sub)
+        assert "hosts[].series[]." in tip
 
 
 # -- die Messung des Servers auf der Karte (#98) -----------------------------
@@ -7991,16 +8105,14 @@ def test_the_cache_row_carries_its_rates_and_samples_in_the_tip(cache_cards):
     assert cell, card[card.index("wide") - 80:][:200]
 
 
-def test_the_cache_row_spans_the_card_and_leaves_the_four_cells_alone(css):
-    """Fünf gleich breite Spalten hätten die vier bestehenden Zellen von 160 auf
-    125 px verschmälert — genau der Grund, aus dem #80 die Last zu einer nackten
-    Zahl gemacht hat. Die fünfte Zeile nimmt die volle Breite und kostet Höhe,
-    nicht Breite; die vier Zellen bleiben gleich breit."""
+def test_the_cache_row_spans_the_card_and_leaves_the_five_cells_alone(css):
+    """Die Cache-Zeile nimmt die volle Breite und kostet Höhe, nicht Breite; die
+    fünf Zellen darüber bleiben gleich breit (#98, fünf seit #145)."""
     rule = re.search(r"\.metrics \.metric\.wide\{([^}]*)\}", css)
     assert rule, "the wide row has no rule"
     assert "grid-column:1/-1" in rule[1]
     metrics = re.search(r"\.metrics\{([^}]*)\}", css)[1]
-    assert "repeat(4,minmax(0,1fr))" in metrics
+    assert "repeat(5,minmax(0,1fr))" in metrics
 
 
 # ── 6.5 Parameter: Wert in Kraft · Herkunft · Zurücksetzen (issue #78) ──────
@@ -8211,6 +8323,34 @@ def test_without_a_key_the_fields_are_off_and_the_block_says_why(params_run, en)
         assert " disabled" in row[2], row[2][:80]
     resets = [row for row in rows if "pbtn" in row[4]]
     assert resets and all(" disabled" in row[4] for row in resets)
+
+
+def test_the_parameter_help_comes_from_the_catalog_and_the_schema_is_the_fallback(tmp_path):
+    """#144: the sentence behind a parameter is translated, English is the net.
+
+    `helpOf()` asks the catalog first (`params.help.<path>`) and falls back to the
+    text `/config` ships beside the schema. Two runs of the same page prove both
+    halves: with the German catalog the German sentence stands in the tooltip, and
+    with that one id removed the English one does — not an empty tooltip, and not
+    `params.help.…` on screen.
+    """
+    path = "placement.rebind.enabled"
+    data = _stub_fixture()
+    de = data["static/i18n/de.json"]
+    en = data["static/i18n/en.json"]
+    key = "params.help." + path
+    assert de[key] != en[key] and de[key].strip() and en[key].strip()
+
+    (tmp_path / "with").mkdir()
+    with_catalog = _run_stub(tmp_path / "with", data)["parts"]["params_live"]["de"]
+    assert de[key] in with_catalog
+    assert en[key] not in with_catalog
+
+    del de[key]
+    (tmp_path / "without").mkdir()
+    without = _run_stub(tmp_path / "without", data)["parts"]["params_live"]["de"]
+    assert en[key] in without               # the schema text, not an empty tip
+    assert key not in without               # and never the bare id
 
 
 def test_a_narrow_window_keeps_room_for_the_value_field(css):

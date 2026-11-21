@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security problem
+    url: https://github.com/vogel61/ripple/blob/main/SECURITY.md
+    about: Do not open a public issue for a vulnerability. SECURITY.md says how to reach the maintainer.
+  - name: Documentation and manual
+    url: https://github.com/vogel61/ripple/tree/main/docs
+    about: The operator manual, the commissioning guide and the design notes — worth a look before opening an issue.
+  - name: Contributing
+    url: https://github.com/vogel61/ripple/blob/main/CONTRIBUTING.md
+    about: What a useful report contains, and how changes are proposed.

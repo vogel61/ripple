@@ -1,0 +1,61 @@
+name: Feature request
+description: A behaviour you are missing, or a number you cannot see.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RIPPLE is a small project with one maintainer and a narrow claim: place threads,
+        keep models resident, show what happened. A request that names the problem is worth
+        more than one that names a solution — the solution may already exist in a different
+        shape.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - placement / routing
+        - residency guard / eviction
+        - dashboard
+        - proxy / OpenAI-compatible API
+        - install, deploy, operations
+        - documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and where does it stop working? Concrete situations beat general wishes.
+      placeholder: "I want to know whether a node is slower per thread than its weight assumes, and nothing on the page tells me."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already know the shape, describe it — including what it should *not* do.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: A workaround, another tool, a config trick. This is often the most useful part.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues for the same request.
+          required: true
+        - label: I understand this is a personal project, and that "no" is a normal answer with a reason.
+          required: true

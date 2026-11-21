@@ -9,7 +9,7 @@
      loads nothing. The DOM is what the page rendered; the frame around it (the
      contents list, the per-tab headings) is all this tool adds.
 
-     Generated against commit acfa956.
+     Generated against commit 501e7a2.
      The instance reported: node-a (draining), node-b (maintenance).
 
      Regenerate with:
@@ -1689,7 +1689,7 @@
       </div>
 <div class="snap-when" id="snapWhen" data-tip="Live pull from /healthz and /stats, patched in the background every 2 s — no reload, no lost scroll position. Every number carries an explanation: hover it.">
         <span class="snap-label" data-i18n="app.snapshot">Snapshot</span>
-        <span class="snap-time num" id="snapTime"><span class="tip" data-tip="Snapshot — Moment of the last pull of /healthz and /stats. The page does not reload, it only replaces the values — the scroll position stays.  Source: pull of /healthz + /stats, every 2 s">01:17:39 PM</span></span>
+        <span class="snap-time num" id="snapTime"><span class="tip" data-tip="Snapshot — Moment of the last pull of /healthz and /stats. The page does not reload, it only replaces the values — the scroll position stays.  Source: pull of /healthz + /stats, every 2 s">01:49:27 PM</span></span>
       </div>
       <div class="snap-src" data-i18n-html="app.snap_src">Live pull from <code>/healthz</code> and <code>/stats</code>, patched in the background every 2 s — no reload, no lost scroll position. Every number carries an explanation: hover it.</div>
     </div>
@@ -1899,7 +1899,7 @@ prefill 890.4 tok/s · decode 44.8 tok/s"><div class="metric-lbl">cache</div><di
       <div class="maint on" data-key="maint-node-b">
         <div class="maint-row">
           <span class="maint-lbl"><span class="tip" data-tip="Maintenance — A maintenance window declared by the operator: the node accepts no new work, running requests finish. RIPPLE changes nothing on oMLX while doing so — it is routing state. A window with a remaining time ends by itself, a window without an end runs until it is ended.  Source: /healthz → hosts[].maintenance (POST/DELETE /admin/nodes/{name}/maintenance)">Maintenance</span></span>
-          <span class="maint-done"><span class="tip" data-tip="drained — No request is running on this node any more: the window is empty, the machine can be updated or restarted.  Source: /healthz → hosts[].inflight">drained — safe to update</span></span><span class="tip" data-tip="Maintenance until — Moment the window ends by itself, local time of this machine.  Source: /healthz → hosts[].maintenance.until">until 13:41</span><span class="tip" data-tip="Remaining — Minutes left in the window, recomputed by the service on every pull. When it runs out the node returns to the pool without further action.  Source: /healthz → hosts[].maintenance.minutes_left">24 min left</span><span class="tip" data-tip="set by — Who set the window: &quot;dashboard&quot; = this button, &quot;operator&quot; = by hand in the file, &quot;calibration&quot; = a calibration run (which is not stored and ends with the run).  Source: /healthz → hosts[].maintenance.by">by operator</span>
+          <span class="maint-done"><span class="tip" data-tip="drained — No request is running on this node any more: the window is empty, the machine can be updated or restarted.  Source: /healthz → hosts[].inflight">drained — safe to update</span></span><span class="tip" data-tip="Maintenance until — Moment the window ends by itself, local time of this machine.  Source: /healthz → hosts[].maintenance.until">until 14:13</span><span class="tip" data-tip="Remaining — Minutes left in the window, recomputed by the service on every pull. When it runs out the node returns to the pool without further action.  Source: /healthz → hosts[].maintenance.minutes_left">24 min left</span><span class="tip" data-tip="set by — Who set the window: &quot;dashboard&quot; = this button, &quot;operator&quot; = by hand in the file, &quot;calibration&quot; = a calibration run (which is not stored and ends with the run).  Source: /healthz → hosts[].maintenance.by">by operator</span>
           <span class="maint-btns"><button class="btn maint-btn" data-node="node-b" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Window length — How long the window applies. &quot;no end&quot; stays until someone ends it — across a restart of RIPPLE as well, because it lives in ~/.ripple/maintenance.yaml.  Source: POST /admin/nodes/{name}/maintenance?minutes=">30 min</span></button><button class="btn maint-btn" data-node="node-b" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Window length — How long the window applies. &quot;no end&quot; stays until someone ends it — across a restart of RIPPLE as well, because it lives in ~/.ripple/maintenance.yaml.  Source: POST /admin/nodes/{name}/maintenance?minutes=">60 min</span></button><button class="btn maint-btn" data-node="node-b" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Window length — How long the window applies. &quot;no end&quot; stays until someone ends it — across a restart of RIPPLE as well, because it lives in ~/.ripple/maintenance.yaml.  Source: POST /admin/nodes/{name}/maintenance?minutes=">no end</span></button><button class="btn maint-end" data-node="node-b" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab.">end</button></span>
         </div>
         <div class="maint-why">Admin key required — set it on the key page (/keys). It stays in this tab.</div>
@@ -2112,7 +2112,7 @@ decode — 2.3 h · 38.8 %"></span></span><span class="lr-lead"><span class="tip
       </div>
     </div>
     <div class="log-foot">
-      <span><span class="tip" data-tip="Since — When the window began: the last reset, or the start of the process if the ledger was never reset. The number after the dot is the length of the window.  Source: /healthz → load.since, load.window_seconds">since 10:21 · 2.9 h</span></span>
+      <span><span class="tip" data-tip="Since — When the window began: the last reset, or the start of the process if the ledger was never reset. The number after the dot is the length of the window.  Source: /healthz → load.since, load.window_seconds">since 10:53 · 2.9 h</span></span>
       <span><span class="tip" data-tip="Without a split — Requests that ended without a usage object (client abort, error, a backend that does not measure). Their tokens may be counted; their prefill and decode time is unknown and is not estimated.  Source: /healthz → load.total.requests_without_usage">5 requests without a split</span></span>
       <span style="margin-left:auto"><button class="btn load-reset" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Reset — Zeroes every counter of this ledger and starts again from now. The file on disk is written before the answer, and the nodes' own count underneath is not touched — it is their number, not ours.  Source: POST /admin/stats/reset (admin key)">reset</span></button></span>
     </div>
@@ -2253,7 +2253,7 @@ machine capability, not this model: 44.8 tok/s from the AS-6 calibration in conf
           <span><span class="tip" data-tip="Turns — Requests this thread has carried since it was created.  Source: /healthz → threads.registry[].turns">12 turns</span></span>
           <span><span class="tip" data-tip="idle — Seconds since this thread's last request.  Source: /healthz → threads.registry[].idle_seconds">idle 1 min ago</span></span>
           
-          <span><span data-deadline="1795265155.508" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
+          <span><span data-deadline="1795267063.451" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
 TTL — After this time without a request the thread is dropped and frees its slot.  Source: /healthz → threads.registry[].ttl_seconds
 TTL 1,800 s">28 min left</span></span>
           <button class="btn" style="margin-left:auto" data-key="sid:9f2c41ab" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Delete — drops the thread and frees its slot on this node. The prefix cache cannot be recreated; the next request pays the prefill.  Source: DELETE /admin/threads/{key} (admin key)">delete</span></button>
@@ -2272,7 +2272,7 @@ TTL 1,800 s">28 min left</span></span>
           <span><span class="tip" data-tip="Turns — Requests this thread has carried since it was created.  Source: /healthz → threads.registry[].turns">27 turns</span></span>
           <span><span class="tip" data-tip="idle — Seconds since this thread's last request.  Source: /healthz → threads.registry[].idle_seconds">idle 6 min ago</span></span>
           
-          <span><span data-deadline="1795264839.508" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
+          <span><span data-deadline="1795266747.451" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
 TTL — After this time without a request the thread is dropped and frees its slot.  Source: /healthz → threads.registry[].ttl_seconds
 TTL 1,800 s">23 min left</span></span>
           <button class="btn" style="margin-left:auto" data-key="sid:5b0e1c4d#fp8" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Delete — drops the thread and frees its slot on this node. The prefix cache cannot be recreated; the next request pays the prefill.  Source: DELETE /admin/threads/{key} (admin key)">delete</span></button>
@@ -2291,7 +2291,7 @@ TTL 1,800 s">23 min left</span></span>
           <span><span class="tip" data-tip="Turns — Requests this thread has carried since it was created.  Source: /healthz → threads.registry[].turns">34 turns</span></span>
           <span><span class="tip" data-tip="idle — Seconds since this thread's last request.  Source: /healthz → threads.registry[].idle_seconds">working</span></span>
           
-          <span><span data-deadline="1795263553.508" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
+          <span><span data-deadline="1795265461.451" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
 TTL — After this time without a request the thread is dropped and frees its slot.  Source: /healthz → threads.registry[].ttl_seconds
 TTL 120 s">2 min left</span></span>
           <button class="btn" style="margin-left:auto" data-key="sid:c41d7e02" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Delete — drops the thread and frees its slot on this node. The prefix cache cannot be recreated; the next request pays the prefill.  Source: DELETE /admin/threads/{key} (admin key)">delete</span></button>
@@ -2310,7 +2310,7 @@ TTL 120 s">2 min left</span></span>
           <span><span class="tip" data-tip="Turns — Requests this thread has carried since it was created.  Source: /healthz → threads.registry[].turns">3 turns</span></span>
           <span><span class="tip" data-tip="idle — Seconds since this thread's last request.  Source: /healthz → threads.registry[].idle_seconds">idle 4 min ago</span></span>
           
-          <span><span data-deadline="1795265007.508" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
+          <span><span data-deadline="1795266915.451" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
 TTL — After this time without a request the thread is dropped and frees its slot.  Source: /healthz → threads.registry[].ttl_seconds
 TTL 1,800 s">26 min left</span></span>
           <button class="btn" style="margin-left:auto" data-key="fp:1a77b3e9" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Delete — drops the thread and frees its slot on this node. The prefix cache cannot be recreated; the next request pays the prefill.  Source: DELETE /admin/threads/{key} (admin key)">delete</span></button>
@@ -2329,7 +2329,7 @@ TTL 1,800 s">26 min left</span></span>
           <span><span class="tip" data-tip="Turns — Requests this thread has carried since it was created.  Source: /healthz → threads.registry[].turns">1 turns</span></span>
           <span><span class="tip" data-tip="idle — Seconds since this thread's last request.  Source: /healthz → threads.registry[].idle_seconds">idle 10 min ago</span></span>
           
-          <span><span data-deadline="1795264628.508" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
+          <span><span data-deadline="1795266536.451" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
 TTL — After this time without a request the thread is dropped and frees its slot.  Source: /healthz → threads.registry[].ttl_seconds
 TTL 1,800 s">20 min left</span></span>
           <button class="btn" style="margin-left:auto" data-key="sid:77aa0d16" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Delete — drops the thread and frees its slot on this node. The prefix cache cannot be recreated; the next request pays the prefill.  Source: DELETE /admin/threads/{key} (admin key)">delete</span></button>
@@ -2348,7 +2348,7 @@ TTL 1,800 s">20 min left</span></span>
           <span><span class="tip" data-tip="Turns — Requests this thread has carried since it was created.  Source: /healthz → threads.registry[].turns">8 turns</span></span>
           <span><span class="tip" data-tip="idle — Seconds since this thread's last request.  Source: /healthz → threads.registry[].idle_seconds">idle 21 min ago</span></span>
           <span class="chip th-silent tip" data-tip="silent — no request for this thread in over 15 min. It keeps its slot and its row until the TTL expires, and only the same conversation can wake it. The thread count is read as &quot;what is running&quot;, so the row says when that is no longer true.">silent</span>
-          <span><span data-deadline="1795263950.508" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
+          <span><span data-deadline="1795265858.451" data-deadline-kind="thread" class="tip" data-tip="Time left — how long this thread stays bound to this host without a request. At zero the TTL drops it.  Source: /healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)
 TTL — After this time without a request the thread is dropped and frees its slot.  Source: /healthz → threads.registry[].ttl_seconds
 TTL 1,800 s">8 min left</span></span>
           <button class="btn" style="margin-left:auto" data-key="fp:0d9e52c8" disabled="" title="Admin key required — set it on the key page (/keys). It stays in this tab."><span class="tip" data-tip="Delete — drops the thread and frees its slot on this node. The prefix cache cannot be recreated; the next request pays the prefill.  Source: DELETE /admin/threads/{key} (admin key)">delete</span></button>
@@ -2402,8 +2402,8 @@ TTL 1,800 s">8 min left</span></span>
           <th class="num"><span class="th-main">Status</span></th>
         </tr>
       </thead>
-      <tbody><tr data-key="13:17:13|atlas-32b-oQ4e-mtp|node-a|thread|2310.4|200|sid:9f2c41ab">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:17:13 PM</span></td>
+      <tbody><tr data-key="13:49:01|atlas-32b-oQ4e-mtp|node-a|thread|2310.4|200|sid:9f2c41ab">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:49:01 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:9f2c41ab" data-tip="sid:9f2c41ab  Source: /stats → decisions[].thread">9f2c41ab</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2413,8 +2413,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:71%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:16:47|atlas-9b-oQ4e-mtp|node-b|thread|884.2|200|sid:c41d7e02">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:16:47 PM</span></td>
+    </tr><tr data-key="13:48:35|atlas-9b-oQ4e-mtp|node-b|thread|884.2|200|sid:c41d7e02">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:48:35 PM</span></td>
       <td class="m" data-label="Model" title="atlas-9b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-9b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:c41d7e02" data-tip="sid:c41d7e02  Source: /stats → decisions[].thread">c41d7e02</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-b</span></td>
@@ -2424,8 +2424,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:27%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:16:20|atlas-32b-oQ4e-mtp|node-a|thread|3120.8|200|sid:5b0e1c4d#fp8">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:16:20 PM</span></td>
+    </tr><tr data-key="13:48:08|atlas-32b-oQ4e-mtp|node-a|thread|3120.8|200|sid:5b0e1c4d#fp8">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:48:08 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:5b0e1c4d#fp8" data-tip="sid:5b0e1c4d#fp8  Source: /stats → decisions[].thread">5b0e1c4d#fp8</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2435,8 +2435,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:96%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:15:55|atlas-32b-oQ4e-mtp|node-b|new_thread|198.4|200|fp:1a77b3e9">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:15:55 PM</span></td>
+    </tr><tr data-key="13:47:43|atlas-32b-oQ4e-mtp|node-b|new_thread|198.4|200|fp:1a77b3e9">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:47:43 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="fp:1a77b3e9" data-tip="fp:1a77b3e9  Source: /stats → decisions[].thread">fp:1a77b3e9</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-b</span></td>
@@ -2446,8 +2446,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:6%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:15:33|atlas-9b-oQ4e-mtp|node-b|thread|902.1|200|sid:c41d7e02">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:15:33 PM</span></td>
+    </tr><tr data-key="13:47:21|atlas-9b-oQ4e-mtp|node-b|thread|902.1|200|sid:c41d7e02">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:47:21 PM</span></td>
       <td class="m" data-label="Model" title="atlas-9b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-9b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:c41d7e02" data-tip="sid:c41d7e02  Source: /stats → decisions[].thread">c41d7e02</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-b</span></td>
@@ -2457,8 +2457,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:28%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:15:08|atlas-9b-oQ4e-mtp|node-a|one_shot|64.2|200|sid:77aa0d16">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:15:08 PM</span></td>
+    </tr><tr data-key="13:46:56|atlas-9b-oQ4e-mtp|node-a|one_shot|64.2|200|sid:77aa0d16">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:46:56 PM</span></td>
       <td class="m" data-label="Model" title="atlas-9b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-9b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:77aa0d16" data-tip="sid:77aa0d16  Source: /stats → decisions[].thread">77aa0d16</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2468,8 +2468,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:2%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:14:44|atlas-32b-oQ4e-mtp|node-a|thread|2211.9|200|sid:9f2c41ab">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:14:44 PM</span></td>
+    </tr><tr data-key="13:46:32|atlas-32b-oQ4e-mtp|node-a|thread|2211.9|200|sid:9f2c41ab">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:46:32 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:9f2c41ab" data-tip="sid:9f2c41ab  Source: /stats → decisions[].thread">9f2c41ab</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2479,8 +2479,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:68%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:14:20|atlas-32b-oQ4e-mtp|node-a|new_thread|640.5|200|fp:0d9e52c8">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:14:20 PM</span></td>
+    </tr><tr data-key="13:46:08|atlas-32b-oQ4e-mtp|node-a|new_thread|640.5|200|fp:0d9e52c8">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:46:08 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="fp:0d9e52c8" data-tip="fp:0d9e52c8  Source: /stats → decisions[].thread">fp:0d9e52c8</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2490,8 +2490,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:20%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:13:57|atlas-32b-oQ4e-mtp|node-a|rebind|3260.7|200|sid:5b0e1c4d#fp8">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:13:57 PM</span></td>
+    </tr><tr data-key="13:45:45|atlas-32b-oQ4e-mtp|node-a|rebind|3260.7|200|sid:5b0e1c4d#fp8">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:45:45 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:5b0e1c4d#fp8" data-tip="sid:5b0e1c4d#fp8  Source: /stats → decisions[].thread">5b0e1c4d#fp8</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2501,8 +2501,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:100%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:13:33|atlas-32b-oQ4e-mtp|node-b|fallback|1204.3|502|fp:1a77b3e9">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:13:33 PM</span></td>
+    </tr><tr data-key="13:45:21|atlas-32b-oQ4e-mtp|node-b|fallback|1204.3|502|fp:1a77b3e9">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:45:21 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="fp:1a77b3e9" data-tip="fp:1a77b3e9  Source: /stats → decisions[].thread">fp:1a77b3e9</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-b</span></td>
@@ -2512,8 +2512,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:37%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st bad"><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">502</span></span></td>
-    </tr><tr data-key="13:13:09|atlas-9b-oQ4e-mtp|node-b|thread|871.6|200|sid:c41d7e02">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:13:09 PM</span></td>
+    </tr><tr data-key="13:44:57|atlas-9b-oQ4e-mtp|node-b|thread|871.6|200|sid:c41d7e02">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:44:57 PM</span></td>
       <td class="m" data-label="Model" title="atlas-9b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-9b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:c41d7e02" data-tip="sid:c41d7e02  Source: /stats → decisions[].thread">c41d7e02</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-b</span></td>
@@ -2523,8 +2523,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:27%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:12:44|atlas-9b-oQ4e-mtp|node-a|ephemeral|71.8|200|sid:77aa0d16">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:12:44 PM</span></td>
+    </tr><tr data-key="13:44:32|atlas-9b-oQ4e-mtp|node-a|ephemeral|71.8|200|sid:77aa0d16">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:44:32 PM</span></td>
       <td class="m" data-label="Model" title="atlas-9b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-9b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:77aa0d16" data-tip="sid:77aa0d16  Source: /stats → decisions[].thread">77aa0d16</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2534,8 +2534,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:2%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:12:20|atlas-32b-oQ4e-mtp|node-a|slot_evict|2188.4|200|sid:9f2c41ab">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:12:20 PM</span></td>
+    </tr><tr data-key="13:44:08|atlas-32b-oQ4e-mtp|node-a|slot_evict|2188.4|200|sid:9f2c41ab">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:44:08 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:9f2c41ab" data-tip="sid:9f2c41ab  Source: /stats → decisions[].thread">9f2c41ab</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2545,8 +2545,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:67%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:11:55|atlas-32b-oQ4e-mtp|node-a|thread|628.9|200|fp:0d9e52c8">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:11:55 PM</span></td>
+    </tr><tr data-key="13:43:43|atlas-32b-oQ4e-mtp|node-a|thread|628.9|200|fp:0d9e52c8">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:43:43 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="fp:0d9e52c8" data-tip="fp:0d9e52c8  Source: /stats → decisions[].thread">fp:0d9e52c8</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2556,8 +2556,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:19%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:11:30|atlas-9b-oQ4e-mtp|node-b|model_pinned|940.2|200|sid:c41d7e02">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:11:30 PM</span></td>
+    </tr><tr data-key="13:43:18|atlas-9b-oQ4e-mtp|node-b|model_pinned|940.2|200|sid:c41d7e02">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:43:18 PM</span></td>
       <td class="m" data-label="Model" title="atlas-9b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-9b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:c41d7e02" data-tip="sid:c41d7e02  Source: /stats → decisions[].thread">c41d7e02</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-b</span></td>
@@ -2567,8 +2567,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:29%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:11:03|atlas-32b-oQ4e-mtp|node-a|thread|3044.1|200|sid:5b0e1c4d#fp8">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:11:03 PM</span></td>
+    </tr><tr data-key="13:42:51|atlas-32b-oQ4e-mtp|node-a|thread|3044.1|200|sid:5b0e1c4d#fp8">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:42:51 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:5b0e1c4d#fp8" data-tip="sid:5b0e1c4d#fp8  Source: /stats → decisions[].thread">5b0e1c4d#fp8</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2578,8 +2578,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:93%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:10:39|atlas-32b-oQ4e-mtp|node-b|new_thread|201.7|200|fp:1a77b3e9">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:10:39 PM</span></td>
+    </tr><tr data-key="13:42:27|atlas-32b-oQ4e-mtp|node-b|new_thread|201.7|200|fp:1a77b3e9">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:42:27 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="fp:1a77b3e9" data-tip="fp:1a77b3e9  Source: /stats → decisions[].thread">fp:1a77b3e9</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-b</span></td>
@@ -2589,8 +2589,8 @@ TTL 1,800 s">8 min left</span></span>
         <span class="tip" data-tip="Duration bar — Length relative to the longest decision in the buffer — shows outliers, not absolute values.  Source: computed from decisions[].duration_ms"><span class="dur-track"><i style="width:6%"></i></span></span>
       </div></td>
       <td class="num" data-label="Status"><span class="st "><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status">200</span></span></td>
-    </tr><tr data-key="13:10:14|atlas-32b-oQ4e-mtp|node-a|thread|2298|200|sid:9f2c41ab">
-      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:10:14 PM</span></td>
+    </tr><tr data-key="13:42:02|atlas-32b-oQ4e-mtp|node-a|thread|2298|200|sid:9f2c41ab">
+      <td class="t num" data-label="Time"><span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:42:02 PM</span></td>
       <td class="m" data-label="Model" title="atlas-32b-oQ4e-mtp"><span class="tip" data-tip="Model — Requested model.  Source: /stats → decisions[].model">atlas-32b-oQ4e-mtp</span></td>
       <td class="sid" data-label="Thread" title="sid:9f2c41ab" data-tip="sid:9f2c41ab  Source: /stats → decisions[].thread">9f2c41ab</td>
       <td data-label="Node"><span class="tip" data-tip="Node — Node the request went to.  Source: /stats → decisions[].host">node-a</span></td>
@@ -2607,7 +2607,7 @@ TTL 1,800 s">8 min left</span></span>
       <span>median <span class="tip" data-tip="Median / p90 — Median and 90th percentile of the duration over all entries in the buffer.  Source: computed from /stats → decisions[].duration_ms"><b>940.2 ms</b></span></span>
       <span>p90 <span class="tip" data-tip="Median / p90 — Median and 90th percentile of the duration over all entries in the buffer.  Source: computed from /stats → decisions[].duration_ms"><b>3,120.8 ms</b></span></span>
       <span><span class="tip" data-tip="Status — HTTP status the client received.  Source: /stats → decisions[].status"><b>1</b></span> with an error status</span>
-      <span>oldest <span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:10:14 PM</span> · newest <span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:17:13 PM</span></span>
+      <span>oldest <span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:42:02 PM</span> · newest <span class="tip" data-tip="Time — Moment of the decision, local time of the machine RIPPLE runs on.  Source: /stats → decisions[].ts">01:49:01 PM</span></span>
     </div></div>
     </section>
   </section>
@@ -2748,7 +2748,7 @@ TTL 1,800 s">8 min left</span></span>
     <span>FA-22 · <code>/healthz</code> + <code>/stats</code> + <code>/config</code></span>
     <span data-i18n="foot.source">no CDN, no framework, no build step</span>
     <span data-i18n="foot.readonly">read-only: the page writes nothing except calibration, maintenance window, model policy and replication</span>
-    <span id="conn" data-i18n="conn.connecting">connected · v0.1.0 · acfa956 (2026-11-19) · up 176 min</span>
+    <span id="conn" data-i18n="conn.connecting">connected · v0.2.0 · 501e7a2 (2026-11-21) · up 176 min</span>
   </footer>
 </div>
 </body>

@@ -889,7 +889,8 @@ def install_shim(cdp: CDP, now: float | None = None) -> None:
     """
     commit, dirty = repo_commit()
     cdp.call("Page.addScriptToEvaluateOnNewDocument",
-             source=demo.shim_script(now, commit=commit, dirty=dirty))
+             source=demo.shim_script(now, commit=commit, dirty=dirty,
+                                     date=repo_commit_date()))
 
 
 def measure(cdp: CDP, crop: Crop) -> dict:
@@ -1093,6 +1094,19 @@ def repo_commit() -> tuple[str, bool]:
         return commit, bool(status.strip())
     except (OSError, subprocess.CalledProcessError):
         return "unknown", False
+
+
+def repo_commit_date() -> str:
+    """The commit's own date (`%cs`), so the footer names the build it shows.
+
+    Not "today": a picture rendered from a two-day-old checkout would otherwise
+    claim a date that no build ever had.
+    """
+    try:
+        return subprocess.run(["git", "log", "-1", "--format=%cs"], cwd=str(REPO),
+                              capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
 
 
 def command_line() -> str:

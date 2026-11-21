@@ -51,8 +51,9 @@ is re-created every two seconds loses what was typed into it.
 
 Deliberately not part of it: load/unload buttons, configuration changes,
 anything writing. The balancer does not touch oMLX (NZ-4); this is a window,
-not a control panel. Two exceptions, both operator-initiated and both behind
-the admin key:
+not a control panel. The exceptions below are all operator-initiated and all
+behind the admin key — the list grew with every amendment, and the sentence that
+called replication "the third and last" was true only when #13 was written:
 
 - the `Calibrate` button per node, amended in `docs/requirements.md` for
   `docs/loading-state.md` §6.1 — it loads the node's own models one after
@@ -70,9 +71,9 @@ the admin key:
   table, read from `GET /admin/nodes/{name}/models` when the operator block is
   opened (issue #16) — otherwise the rule would be invisible and impossible to
   undo.
-- the replication panel (issue #13) — the third and last exception, and the
-  only one that writes to another machine's filesystem: it copies one model from
-  one node to another (`docs/replication.md`), reloads the target and writes the
+- the replication panel (issue #13) — the one exception that writes to another
+  machine's filesystem: it copies one model from one node to another
+  (`docs/replication.md`), reloads the target and writes the
   source's per-model settings back. The panel shows the plan (size, free space,
   destination path), asks before it starts, and reports bytes, seconds, MB/s and
   anything that could not be replicated.
@@ -102,6 +103,8 @@ removal.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 SHELL = """<!DOCTYPE html>
 <html lang="en">
@@ -490,11 +493,41 @@ SHELL = """<!DOCTYPE html>
 """
 
 
+def _asset_version() -> str:
+    """Der mtime von CSS und JS als Query — die zwei Dateien ändern sich oft.
+
+    Ohne ihn entscheidet der Browser-Heuristik-Cache, ob er überhaupt fragt:
+    `StaticFiles` schickt `ETag` und `Last-Modified`, aber kein `Cache-Control`,
+    und ein normales Neuladen holt die Datei dann nicht zwingend neu. Am
+    21.11.2026 stand nach einem Fix weiter die alte Summenfarbe auf dem Schirm,
+    obwohl der Server die neue Datei längst auslieferte (per md5 verglichen) —
+    der Betreiber hätte den Cache von Hand leeren müssen. Mit `?v=<mtime>` ist
+    jede Änderung eine neue URL, und das ist die einzige Sorte Cache, die ein
+    Browser nicht ignorieren kann.
+    """
+    static = Path(__file__).with_name("static")
+    stamps = []
+    for name in ("dashboard.css", "dashboard.js"):
+        try:
+            stamps.append(str(int((static / name).stat().st_mtime)))
+        except OSError:                      # eine fehlende Datei ist kein Fehler
+            stamps.append("0")
+    return "-".join(stamps)
+
+
 def render_dashboard() -> str:
     """The page shell. Data comes from `/healthz` and `/stats` in the browser.
 
     The visible text does not come from here: the shell carries message ids
     (`data-i18n`, `data-i18n-html`, `data-i18n-aria`) and `dashboard.js` fills
     them from `ripple/static/i18n/<lang>.json` at boot (issue #17).
+
+    Die zwei statischen Dateien tragen den mtime als Query (`_asset_version()`),
+    damit ein Fix ohne hartes Neuladen ankommt.
     """
-    return SHELL
+    v = _asset_version()
+    return SHELL.replace('href="/static/dashboard.css"',
+                         f'href="/static/dashboard.css?v={v}"').replace(
+                         'src="/static/dashboard.js"',
+                         f'src="/static/dashboard.js?v={v}"')
+

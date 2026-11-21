@@ -1008,13 +1008,13 @@ bigger one.
 **Third amendment, issue #13 (`docs/replication.md`):** a `Replicate` panel that
 copies one model from one node to another — files over `rsync`/SSH, then
 `POST /admin/api/reload` on the target, then the source's per-model settings.
-This is the **third and last** exception, and the only one that writes to another
-machine's filesystem. It is on the same terms as the first: operator-initiated,
-admin key, one model at a time, behind a confirmation dialog that names source,
-target, size and free space — and it opens a maintenance window on the target
-itself, because the reload it needs unloads every model there. There will be no
-fourth exception: anything beyond these three is a different tool, not this
-dashboard.
+This is the **third and last** exception *as of this amendment*, and the only one
+that writes to another machine's filesystem. It is on the same terms as the first:
+operator-initiated, admin key, one model at a time, behind a confirmation dialog
+that names source, target, size and free space — and it opens a maintenance window
+on the target itself, because the reload it needs unloads every model there. There
+will be no fourth exception of this kind: anything beyond these three is a
+different tool, not this dashboard.
 
 **Amendment, issue #83:** the fleet card carries a **tachograph** — two lines over a
 configurable window (default 15 min): total throughput `n · rate(n)` solid,

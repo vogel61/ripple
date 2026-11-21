@@ -39,6 +39,8 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 
+from ripple import __version__
+
 GB = 1_000_000_000
 
 # ── the fleet's vocabulary ───────────────────────────────────────────────────
@@ -241,7 +243,7 @@ LOCK_SINCE = "2026-11-19T09:41:00"
 
 
 def healthz(now: float | None = None, commit: str = "0000000",
-            dirty: bool = False) -> dict:
+            dirty: bool = False, date: str | None = None) -> dict:
     """The Fleet tab's whole world: hosts, models, threads, ledger, series.
 
     `commit` is the repository the pictures were taken from — the page prints it
@@ -252,10 +254,17 @@ def healthz(now: float | None = None, commit: str = "0000000",
     maint_until = _iso(now + 24 * 60)
     drain_started = now - 41
 
+    # `version` kommt aus dem Paket, nicht aus dieser Datei: hier stand "0.1.0",
+    # und der README-Hero-Shot trug die Nummer noch, als 0.2.0 längst
+    # veröffentlicht war (Betreiberhinweis 21.11.2026). Ein festes Datum neben
+    # einer beweglichen Version ist derselbe Fehler in klein — es kommt deshalb
+    # aus dem Commit, aus dem die Bilder stammen.
     return {
         "ok": True,
-        "version": "0.1.0",
-        "build": {"commit": commit, "date": "2026-11-19", "dirty": dirty},
+        "version": __version__,
+        "build": {"commit": commit,
+                  "date": date or datetime.now(timezone.utc).date().isoformat(),
+                  "dirty": dirty},
         "uptime_seconds": 10569.3,
         "server_time": round(now, 3),
         "restart": {"supervised": True, "supervisor": "ai.ripple", "reason": None,
@@ -763,10 +772,11 @@ def keys() -> dict:
 # calls the same path for a dry run and for the write, and the picture is the
 # dry run.
 def endpoints(now: float | None = None, commit: str = "0000000",
-              dirty: bool = False) -> list[dict]:
+              dirty: bool = False, date: str | None = None) -> list[dict]:
     now = time.time() if now is None else now
     return [
-        {"m": "GET", "p": "/healthz", "s": 200, "b": healthz(now, commit, dirty)},
+        {"m": "GET", "p": "/healthz", "s": 200,
+         "b": healthz(now, commit=commit, dirty=dirty, date=date)},
         {"m": "GET", "p": "/stats", "s": 200, "b": stats(now)},
         {"m": "GET", "p": "/config", "s": 200, "b": config()},
         # The lock view: the third padlock state lives here, not in /healthz (#126).
@@ -787,7 +797,7 @@ def endpoints(now: float | None = None, commit: str = "0000000",
 
 
 def shim_script(now: float | None = None, commit: str = "0000000",
-                dirty: bool = False) -> str:
+                dirty: bool = False, date: str | None = None) -> str:
     """The JavaScript that answers the page's fetches from `endpoints()`.
 
     Installed with `Page.addScriptToEvaluateOnNewDocument`, so it runs before
@@ -800,7 +810,7 @@ def shim_script(now: float | None = None, commit: str = "0000000",
     said yes, and a headless browser would otherwise dismiss every dialog.
     """
     import json
-    table = json.dumps(endpoints(now, commit, dirty), ensure_ascii=False)
+    table = json.dumps(endpoints(now, commit, dirty, date), ensure_ascii=False)
     return """
 (() => {
   const TABLE = %s;

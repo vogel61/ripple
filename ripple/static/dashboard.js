@@ -73,6 +73,16 @@ const supported = code => {
 const langInfo = () => LANGS.find(l => l.code === lang) || LANGS[1];
 const locale = () => langInfo().locale;
 
+/* Wie `t`, aber der Rückfall ist ein Text, keine id (#144): fehlt der Satz im
+   Katalog, kommt der englische aus dem Schema. `t` würde hier `params.help.x`
+   anzeigen — und genau das ist der Unterschied zwischen „übersetzt" und
+   „übersetzt, sobald jemand dazu kommt". */
+function tOr(id, fallback) {
+  const cat = catalogs[lang] || {};
+  const s = cat[id] !== undefined ? cat[id] : (catalogs[FALLBACK] || {})[id];
+  return s === undefined ? fallback : s;
+}
+
 /* `{name}`-Platzhalter; ein fehlender Wert bleibt als `{name}` stehen, damit
    die Lücke sichtbar ist statt zu einem halben Satz zu werden. */
 const fill = (s, params) => String(s).replace(/\{(\w+)\}/g, (m, k) =>
@@ -932,8 +942,15 @@ function hostTps(h) {
    Pixeln, damit die gestrichelte Linie auch in einer breiten Karte gestrichelt
    aussieht. */
 const SPARK_W = 1000;   /* Einheiten der Zeitachse — die Karte skaliert sie */
-const SPARK_H = 34;     /* px, fest: der Flotten-Tab wächst nicht (CSS: 34px) */
-const SPARK_PAD = 3;    /* Luft oben und unten für Strich und Spitzen */
+const SPARK_H = 46;     /* px, fest: die Höhe aus #145 (CSS: 46px) */
+const SPARK_PAD = 3;    /* Luft oben, damit eine Spitze nicht am Rand klebt */
+const SPARK_FLOOR = 0;  /* die Null liegt auf der Unterkante = der Linie der Karte
+                           (#145): der Betreiber hatte die graue Trennlinie unter
+                           der Kurve als Nulllinie gelesen — sie lag 9 px unter
+                           der echten Null, und damit wirkten die zwei Reihen wie
+                           zwei Skalen. Jetzt ist die Linie, die man sieht, die
+                           Null; ein Wert von 0 verschmilzt mit ihr, was für
+                           „kein Verkehr" das richtige Bild ist. */
 
 const isNum = v => typeof v === 'number' && isFinite(v);
 
@@ -965,6 +982,28 @@ function seriesRows(entry) {
     total: Array.from({length: len}, (_, i) => at(total, i)),
     per_thread: Array.from({length: len}, (_, i) => at(per, i)),
   };
+}
+
+/* Die zwei Raten der Kurve als Zahl (#145) — aus **demselben** Eintrag, den
+   `sparkline()` zeichnet, und aus **demselben Bucket**. Die zwei Zellen der
+   Karte und die zwei Linien können damit nicht auseinanderlaufen; das war der
+   Grund, sie nicht aus `metrics` (Modellrate) zu bauen.
+
+   Der Bucket ist der letzte mit einer `total`-Probe, und beide Reihen werden
+   dort gelesen. `lastNum()` je Reihe war der naheliegende Weg und der falsche:
+   im Leerlauf steht `total` auf 0,0, während `per_thread` in diesem Bucket
+   `null` ist — die Zellen zeigten dann „0,0" neben „23,9" aus einem 20 s alten
+   Bucket, und die Karte widersprach sich selbst. `null` heißt: keine Probe,
+   nicht 0. */
+function liveRates(x) {
+  const entry = hostSeries(x);
+  if (!entry) return null;
+  const rows = seriesRows(entry);
+  let i = rows.total.length - 1;
+  while (i >= 0 && !isNum(rows.total[i])) i--;
+  if (i < 0) return null;
+  return {total: rows.total[i], per_thread: rows.per_thread[i],
+          window: entry.window_s, model: entry.model, bucket: i};
 }
 
 /* One row as a path. A `null` is not a sample — but not every `null` is a gap:
@@ -1077,9 +1116,10 @@ function seriesGeom(entry) {
   const nums = rows.total.concat(rows.per_thread).filter(isNum);
   const max = nums.length ? Math.max.apply(null, nums) : 0;
   const span = Math.max(1, rows.total.length - 1);
-  const base = SPARK_H - SPARK_PAD;
+  const base = SPARK_H - SPARK_FLOOR;
   /* Auf zwei Nachkommastellen: ein `d` mit 17 Stellen ist keine Genauigkeit,
-     sondern Ballast im 2-s-Patch. */
+     sondern Ballast im 2-s-Patch. `base` ist die Null (die Unterkante, #145),
+     `SPARK_PAD` der Abstand der Spitze nach oben. */
   const scale = v => Math.round((max > 0 ? base - (v / max) * (base - SPARK_PAD) : base) * 100) / 100;
   const x = i => sparkX(i, span);
   return {
@@ -1222,9 +1262,13 @@ function sparkline(x) {
   const drawn = !!(g && g.points);
   const win = windowLabel(entry ? entry.window_s : null);
   const empty = t('fleet.series_empty');
+  /* Dieselben zwei Zahlen wie die Zellen darüber, aus demselben Bucket (#145):
+     der Vorleser soll nicht hören, was die Karte nicht zeigt. */
+  const rates = liveRates(x);
+  const shown = v => (isNum(v) ? nf(v, 1) : '—');
   const aria = drawn
-    ? x.name + ': ' + t('fleet.series_total') + ' ' + nf(lastNum(g.rows.total), 1) +
-      ' tok/s · ' + t('fleet.series_per_thread') + ' ' + nf(lastNum(g.rows.per_thread), 1) +
+    ? x.name + ': ' + t('fleet.series_total') + ' ' + shown(rates && rates.total) +
+      ' tok/s · ' + t('fleet.series_per_thread') + ' ' + shown(rates && rates.per_thread) +
       ' tok/s · ' + win
     : x.name + ': ' + empty;
   /* Steht der Zeiger auf dieser Karte? Dann tragen die zwei Legendenmarken die
@@ -1263,7 +1307,7 @@ function sparkline(x) {
           ? line('total', g.total) + line('per_thread', g.per_thread) +
             dot('total', g.dots.total) + dot('per_thread', g.dots.per_thread) + cross
           : ''}</svg>${drawn ? '' : `
-        <span class="spark-empty" style="position:absolute;left:0;right:0;bottom:6px;height:${SPARK_H}px;display:flex;align-items:center;justify-content:center;font-size:var(--t-xs);color:var(--fg-3);pointer-events:none">${esc(empty)}</span>`}
+        <span class="spark-empty" style="position:absolute;left:0;right:0;bottom:0;height:${SPARK_H}px;display:flex;align-items:center;justify-content:center;font-size:var(--t-xs);color:var(--fg-3);pointer-events:none">${esc(empty)}</span>`}
       </div>`;
 }
 
@@ -1594,8 +1638,7 @@ const routableNow = r => !!r && (r.phase === 'pp' || (r.routable !== undefined
 function renderFleet(h) {
   const keyed = !!adminKey();
   return (h.hosts || []).map(x => {
-    const tps = hostTps(x);
-    const age = tps && tps.measured_at ? Math.max(0, Math.round(Date.now() / 1000 - tps.measured_at)) : null;
+    const live = liveRates(x);
     const cache = cacheOf(x);
     const split = threadSplit(h, x.name);
     const loaded = (x.models_loaded || []).length;
@@ -1608,6 +1651,31 @@ function renderFleet(h) {
       ? '<span class="site-warn">⚠ ' + esc(t('fleet.site_mismatch',
           {declared: x.site, derived: x.site_derived || '?'})) + '</span>'
       : '';
+    /* Die zwei Raten des Fahrtenschreibers als Zellen (#145): links pro Thread,
+       rechts die Summe. Beide kommen aus `liveRates()` — derselbe Eintrag, den
+       `sparkline()` zeichnet, damit Zelle und Linie nie zwei Zahlen nennen.
+       Der Tip nennt die Rechnung aus vorhandenen Wörtern (`total ÷ inflight`,
+       `Σ per thread`) statt aus einem neuen Katalogsatz; `flip` öffnet ihn nach
+       links, weil die zwei Zellen am rechten Kartenrand stehen. */
+    const rateCell = which => {
+      const v = live ? live[which] : null;
+      /* Zwei feste Ids statt einer zusammengesetzten Kennung: der i18n-Scan
+         liest Literale, ein Präfix sähe wie ein fehlender Katalogeintrag aus. */
+      const lbl = which === 'total' ? t('fleet.series_total') : t('fleet.series_per_thread');
+      const formula = which === 'total'
+        ? 'Σ ' + t('fleet.series_per_thread')
+        : t('fleet.series_total') + ' ÷ ' + t('fleet.inflight');
+      const tip = lbl + ' = ' + formula + '  ' +
+        t('common.source') + ': /healthz → hosts[].series[].' + which;
+      return '<div class="metric tip cell flip rate rate-' + (which === 'total' ? 't' : 'p') +
+        '" data-tip="' + esc(tip) + '">' +
+        '<div class="metric-lbl">' + esc(lbl) + '</div>' +
+        '<div class="metric-val num">' +
+          (isNum(v) ? nf(v, 1) + '<span class="den"> tok/s</span>' : '—') + '</div>' +
+        '<div class="metric-sub">' +
+          esc(live ? windowLabel(live.window) : t('fleet.series_empty')) + '</div>' +
+        '</div>';
+    };
     const metric = (keys, label, value, sub, flip, more, cls) =>
       cell(keys, '<div class="metric-lbl">' + label + '</div>' +
                  '<div class="metric-val num">' + value + '</div>' +
@@ -1662,10 +1730,8 @@ function renderFleet(h) {
         ${metric(['rtt'], 'RTT',
                  nf(x.rtt_ms, 1) + '<span class="den"> ms</span>',
                  esc(t('fleet.probe', {host: x.name})), true)}
-        ${metric(['tps', 'samples', 'measured'], 'tok/s',
-                 tps ? nf(tps.tg_tps, 1) : '—',
-                 tps ? esc(ageText(age)) : esc(t('fleet.no_sample')), true,
-                 tps ? esc(t('fleet.samples', {n: nf(tps.tg_samples)})) : '')}
+        ${rateCell('per_thread')}
+        ${rateCell('total')}
         ${metric(['cache'], esc(t('fleet.cache')),
                  cache ? nf(cache.tokens) +
                    (cache.prompt === null ? '' : '<span class="den"> / ' + nf(cache.prompt) + '</span>')
@@ -1683,7 +1749,7 @@ function renderFleet(h) {
       </div>
       ${sparkline(x)}
       <div class="host-foot">
-        <span>${T('version', esc(t('fleet.version', {v: x.version || '—'})))}</span>
+        <span class="ver">${T('version', esc(t('fleet.version', {v: x.version || '—'})))}</span>
         <span>${T('guard', 'Guard ' + esc(x.guard_enabled ? t('common.on') : t('common.off')))}</span>
         <span>${T('models_avail', esc(t('fleet.models', {n: nf(x.models_available)})))}</span>
         <span>${T('loaded_routable', esc(t('fleet.loaded_routable', {loaded: nf(loaded), routable: nf(routable)})))}</span>
@@ -2981,9 +3047,19 @@ function paramsTableLive(c, overrides, editable) {
      Umbenennen eines Feldes nicht still falsch werden. Host-Pfade tragen den
      Knotennamen, die Tabelle führt sie mit `*` — deshalb die zweite Suche. */
   const helpMap = c.help || {};
+  /* Der Satz zu einer Zeile (#144): erst der Katalog (`params.help.<pfad>`,
+     für Knotenzeilen `params.help.hosts.*.<feld>`), dann der englische Text, den
+     `/config` mit dem Schema mitschickt. Der Rückfall ist der Grund, warum die
+     Sätze überhaupt übersetzbar sind: ein Feld, das im Schema eine Erklärung
+     hat, steht auch dann erklärt da, wenn diese Sprache den Satz noch nicht
+     kennt — und ein neues Feld kann nicht ohne Satz ausgeliefert werden. */
   const helpOf = path => {
     if (!path) return '';
-    return helpMap[path] || helpMap[String(path).replace(/^hosts\.[^.]+\./, 'hosts.*.')] || '';
+    const wild = String(path).replace(/^hosts\.[^.]+\./, 'hosts.*.');
+    const key = helpMap[path] !== undefined ? path
+      : (helpMap[wild] !== undefined ? wild : '');
+    if (!key) return '';
+    return tOr('params.help.' + key, helpMap[key]);
   };
   const add = (scope, label, value, opts) => {
     const o = Object.assign({keyed: keyed}, opts || {});
@@ -5018,7 +5094,7 @@ globalThis.RIPPLE = {
      Readout eines Buckets und der Zustand, den ein Patch mitnehmen muss. */
   sparkIndex, sparkReadout, sparkValue, sparkX, sparkHoverSet, sparkHoverClear, sparkMove,
   get sparkHover() { return sparkHover; },
-  SPARK_W, SPARK_H, SPARK_PAD, SPARK_HOLD,
+  SPARK_W, SPARK_H, SPARK_PAD, SPARK_FLOOR, SPARK_HOLD,
   /* Die relative Last (#80): die eine Zelle, die Gewicht und Last nebeneinander
      setzt — der Test rendert sie gegen einen Payload mit und ohne Messung. */
   relLoad,

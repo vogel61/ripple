@@ -151,6 +151,13 @@ def test_every_catalog_on_disk_is_wired_complete_and_not_a_copy(en, js, page):
             want = sorted(re.findall(r"\{\w+\}", en[key]))
             got = sorted(re.findall(r"\{\w+\}", text))
             assert got == want, (code, key, want, got)
+            # Was in Backticks steht, ist ein Name oder eine Formel und bleibt
+            # stehen (`deficit`, `max_inflight`, `placement.imbalance()`,
+            # `gain ≥ cost × factor`). #144 hat hier zum ersten Mal Prosa in
+            # Backticks eingeführt; ohne diese Zeile übersetzt sie jedes Kind
+            # anders und der Tooltip zeigt je nach Sprache etwas anderes.
+            assert sorted(re.findall(r"`([^`]+)`", text)) == \
+                sorted(re.findall(r"`([^`]+)`", en[key])), (code, key)
         # 3. wired in both lists
         assert re.search(r"code:\s*'" + code + r"'", js), f"{code} missing in LANGS"
         assert f'<option value="{code}"' in page, f"{code} missing in the selector"
@@ -158,6 +165,21 @@ def test_every_catalog_on_disk_is_wired_complete_and_not_a_copy(en, js, page):
         if code != "en":
             differing = sum(1 for k, v in cat.items() if v != en[k])
             assert differing >= 0.6 * len(en), (code, differing, len(en))
+
+
+def test_the_english_parameter_help_is_the_schema_text_word_for_word(en):
+    """#144: `en.json` and `FIELD_HELP` are two copies of the same 29 sentences.
+
+    The page asks the catalog first and the text from `/config` second, so the two
+    copies must not drift: an English edit that lands in only one of them would
+    make the tooltip say different things depending on whether the id is present.
+    Every other catalog is free to translate; this test only guards the source.
+    """
+    from ripple.config import FIELD_HELP
+
+    ids = {k[len("params.help."):]: v for k, v in en.items() if k.startswith("params.help.")}
+    assert ids == FIELD_HELP
+    assert len(FIELD_HELP) == 29
 
 
 def test_every_catalog_names_all_seven_shapes_in_the_legend_note():
@@ -279,7 +301,11 @@ def test_no_catalog_entry_is_dead_weight(js, page, en):
     shell, or one of the four families the script builds at runtime."""
     quoted = set(re.findall(r"'([a-z][a-z0-9_.]+)'", js))
     shell = set(re.findall(r'data-i18n(?:-html|-aria)?="([^"]+)"', page))
-    families = ("tip.", "state.", "reason.", "phase.")
+    # `params.help.<pfad>` steht als Literal nirgends im Skript: die Seite baut die
+    # id aus dem Pfad der Zeile (#144). Dass genau die 29 Pfade des Schemas drin
+    # stehen und kein erfundener, prüft
+    # `test_the_english_parameter_help_is_the_schema_text_word_for_word`.
+    families = ("tip.", "state.", "reason.", "phase.", "params.help.")
     unused = sorted(k for k in en
                     if k not in quoted and k not in shell
                     and not k.startswith(families))

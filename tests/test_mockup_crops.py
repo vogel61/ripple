@@ -121,6 +121,33 @@ def _payloads() -> str:
                       ensure_ascii=False)
 
 
+def test_the_pictures_name_the_version_and_the_date_they_were_taken_from():
+    """Der Fuß jeder Aufnahme nennt Version und Baudatum — beides muss stimmen.
+
+    Hier stand die Version fest verdrahtet auf "0.1.0", und der README-Hero-Shot
+    trug sie noch, als 0.2.0 längst veröffentlicht war (Betreiberhinweis
+    21.11.2026). Die Nummer kommt jetzt aus dem Paket, das Datum aus dem Commit;
+    dieser Test hält beides fest, damit die nächste Versionserhöhung nicht wieder
+    an einer Bildunterschrift vorbeigeht.
+    """
+    from datetime import datetime, timezone
+
+    from ripple import __version__
+
+    payload = fleet.healthz(commit="abc1234", date="2026-11-21")
+    assert payload["version"] == __version__, (
+        "the picture's footer says %r, the package is %r"
+        % (payload["version"], __version__))
+    assert payload["build"] == {"commit": "abc1234", "date": "2026-11-21", "dirty": False}
+    # Ohne Datum fällt es auf heute zurück, nicht auf ein festes Jahr.
+    assert fleet.healthz(commit="abc1234")["build"]["date"] == datetime.now(timezone.utc).date().isoformat()
+    # Positionsargumente in der Reihenfolge der Signatur: hier standen `dirty` und
+    # `date` vertauscht, und weil ein Datumsstring wahr ist, trug der Fuß der
+    # Aufnahme ein „-dirty“, das nie einer war (gefunden 21.11.2026 am Bild).
+    positional = fleet.healthz(None, "abc1234", True, "2026-11-21")
+    assert positional["build"] == {"commit": "abc1234", "date": "2026-11-21", "dirty": True}
+
+
 def test_the_payloads_carry_no_production_identifier():
     blob = _payloads()
     for word in ("alpha", "beta", "DeepSeek", "Qwen", "MarkItDown", "GLM",

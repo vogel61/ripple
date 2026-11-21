@@ -59,6 +59,19 @@
     --ok-bright:#6fcf4a;
     --warn-bright:#f6c477;
 
+    /* Die Summenzeile in 2.1 (#142): derselbe Farbton, eine Wahrnehmungsstufe
+       heller — gerechnet in CIE Lab, nicht als HSL-Lichtigkeit +8 %: der
+       HSL-Schritt fällt je Farbe zwischen +4,9 (prefill) und +9,0 (decode,
+       gemischt) aus, und die Zeile wirkt dann ungleichmäßig aufgehellt statt eine
+       Stufe heller. Ziel sind +9 L* bei gleichem a* und b*; vier Farben treffen das,
+       das Orange (`--warn`) sitzt am Rand von sRGB — `#ffbb55` ist mit ΔE76 2,1
+       die nächste darstellbare Farbe und kommt auf +8,4, eine halbe
+       Wahrnehmungsstufe darunter. Die Namen sagen, wo sie gelten: nur in der
+       Summenzeile von `#load`; Knotenzeilen und Legende behalten die
+       Grundfarben. Kontraste gegen `--surface` in docs/dashboard-design.md §3. */
+    --sum-idle:#929dac;    --sum-loading:#76c1ff;  --sum-prefill:#ffbb55;
+    --sum-decode:#70bf50;  --sum-mixed:#d9a3f0;
+
     /* Der Host-Streifen (Issue #89): eine Farbe je Knoten, damit ein Blick
        sagt, welcher Thread wo sitzt. Die vier Töne sitzen in der Mitte der
        vier größten Lücken der Zustandspalette (36° · 103° · 206° · 282° · 8°),
@@ -450,7 +463,7 @@
      Ungleiche Spalten (`auto`/`1fr`) hätten das gelöst, aber die zwei
      Host-Karten wären dann nicht mehr pixelgleich — die Karten sind das
      Vergleichsbild, also bleiben die Spalten gleich. */
-  .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s3);
+  .metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:var(--s3);
            padding:var(--s3) 0;border-top:1px solid var(--line)}
   .metric{min-width:0}
   .metric-lbl{font-size:var(--t-xs);color:var(--fg-3);letter-spacing:.02em;white-space:nowrap;
@@ -458,8 +471,16 @@
   .metric-val{font-size:var(--t-xl);font-weight:600;letter-spacing:-.015em;line-height:1.25;
               margin-top:1px}
   .metric-val .den{font-size:var(--t-s);font-weight:500;color:var(--fg-3);letter-spacing:0}
-  .metric-sub{font-size:var(--t-xs);color:var(--fg-3);margin-top:1px;white-space:nowrap;
-              overflow:hidden;text-overflow:ellipsis}
+  /* Zwei Zeilen statt einer (#145): fünf gleich breite Spalten sind bei 1440 px
+     117 px breit, und die längste Unterzeile („Ziel 60 % · Last 0,36") braucht
+     gemessen 130. Statt den Satz zu kürzen — #80 hat genau das schon einmal
+     getan und dafür die Einheit aus der Zeile genommen — darf sie umbrechen.
+     Sie ist die kleinste Zeile der Karte; zwei Zeilen kosten Höhe nur dort, wo
+     der Text sie braucht, und die Karten bleiben pixelgleich, weil beide Knoten
+     dieselbe Beschriftung tragen. `break-word` ist die Rückversicherung für
+     Sprachen ohne Leerzeichen im Satz, nicht die Regel. */
+  .metric-sub{font-size:var(--t-xs);color:var(--fg-3);margin-top:1px;line-height:1.3;
+              overflow-wrap:break-word}
   /* Die relative Last neben dem Gewicht (issue #80): dieselbe Zeile, dieselbe
      Größe — sie darf die Karte nicht wachsen lassen, und bei 1440 px ist der
      Platz durch den Fahrtenschreiber verbraucht. Tabellarische Ziffern, damit
@@ -467,31 +488,48 @@
   .metric-sub .rel{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
   .metric-sub .rel.none{color:var(--fg-3)}
   /* Die Messung des Servers (issue #98): eine Zeile über die volle Kartenbreite
-     unter den vier gleich breiten Zellen. Fünf gleich breite Spalten hätten die
-     vier bestehenden Zellen von 160 auf 125 px verschmälert — genau der Grund,
-     aus dem #80 die relative Last zu einer nackten Zahl gemacht hat; die Zeile
-     kostet 22 px Höhe und keine Breite. Sie ist trotzdem eine Spalte der Karte:
+     unter den fünf gleich breiten Zellen. Sie ist eine Spalte der Karte:
      dieselbe Beschriftung, derselbe Wert, dieselbe Unterzeile, nur in einer
-     Zeile statt in dreien. */
+     Zeile statt in dreien — 22 px Höhe, keine Breite. */
   .metrics .metric.wide{grid-column:1/-1;display:grid;
                         grid-template-columns:auto auto minmax(0,1fr);
                         align-items:baseline;gap:var(--s3);
                         border-top:1px dashed var(--line);padding-top:8px}
   .metrics .metric.wide .metric-val{margin-top:0}
   .metrics .metric.wide .metric-sub{margin-top:0;text-align:right}
+  /* #145: der Wert von „tok/s pro Thread" in der Wartungsfarbe (`--maint`) —
+     Wunsch des Betreibers vom 21.11.2026. Bewusst hier notiert: im Rest der
+     Seite trägt `--maint` den Zustand „Wartung", und ein Blick auf die Karte
+     liest die Farbe zuerst als Zustand. Der Wert von `total` bleibt im
+     Vordergrundton, damit die zwei Zellen nicht um dieselbe Aufmerksamkeit
+     konkurrieren. */
+  .metrics .metric.rate-p .metric-val{color:var(--maint)}
   .host-foot{display:flex;flex-wrap:wrap;gap:0 var(--s3);padding:10px 0 11px;
-             border-top:1px solid var(--line);font-size:var(--t-xs);color:var(--fg-3)}
+             /* Die Linie ist seit #145 die Null der Kurve darüber, nicht nur ein
+                Trenner: sie sitzt direkt unter dem Diagramm und einen Ton heller
+                als die übrigen Linien (`--line`), damit man sie als Achse liest
+                und nicht als Dekoration. */
+             border-top:1px solid var(--line-2);font-size:var(--t-xs);color:var(--fg-3)}
+  /* #145: die oMLX-Version ist der einzige Wert in der Fußzeile, der etwas über
+     den Stand des Knotens sagt — sie steht in `--fg` statt im gedämpften Grau
+     der Zähler daneben. */
+  .host-foot .ver{color:var(--fg)}
   .host-foot span{white-space:nowrap}
 
-  /* ── Fahrtenschreiber je Knoten (issue #83) ─────────────────────────────── */
+  /* ── Fahrtenschreiber je Knoten (issue #83, Höhe #145) ──────────────────── */
   /* Zwei Linien über das Fenster: durchgezogen = total, gestrichelt = per
      thread. Die Strichart trägt die Aussage, nicht die Farbe — in Graustufen
      (und für Rot-Grün-Schwäche) bleiben die beiden an `solid`/`dash`
      unterscheidbar; die Farbe ist die zweite, leisere Auskunft. 14 px Kopf
-     (Einheit links, Legende mittig, Fenster rechts) + 34 px Fläche = 48 px:
-     die Höhe, die der Flotten-Tab an dieser Stelle hat, ohne zu wachsen. Kein
-     Gitternetz, keine Skalenstriche — die Achse trägt nur, was eine Zahl hat. */
-  .spark{padding:0 0 6px}
+     (Einheit links, Legende mittig, Fenster rechts) + 46 px Fläche = 60 px.
+     Die 34 px aus #83 waren die Höhe, die der Tab „ohne zu wachsen" hatte; bei
+     einem Verhältnis von 1,5 zwischen den zwei Reihen lagen sie 8 px
+     auseinander und die Trennung war nicht ablesbar (#145). Kein Gitternetz,
+     keine Skalenstriche — die Achse trägt nur, was eine Zahl hat. */
+  /* Kein Abstand mehr unter der Fläche (#145): die Trennlinie der Karte ist die
+     Null der Kurve. Vorher lagen 6 px Padding plus die 3 px Fussluft des viewBox
+     zwischen echter Null und der Linie, die das Auge als Horizont nimmt. */
+  .spark{padding:0}
   .spark-head{display:flex;align-items:center;gap:10px;height:14px;
               font-size:var(--t-xs);line-height:1;color:var(--fg-3);white-space:nowrap}
   .spark-unit{font-variant-numeric:tabular-nums}
@@ -512,7 +550,7 @@
      nicht den Wert — der Wert steht oben. `non-scaling-stroke` hält den Strich
      bei 1 px, obwohl der viewBox gestreckt wird. */
   .spark-cross{stroke:var(--fg-3);stroke-width:1;pointer-events:none}
-  .spark-plot{display:block;width:100%;height:34px;margin-top:2px}
+  .spark-plot{display:block;width:100%;height:46px;margin-top:2px}
   .spark-line{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
   .spark-line.total{stroke:var(--load)}
   .spark-line.per_thread{stroke:var(--fg-3);stroke-dasharray:4 3}
@@ -792,26 +830,37 @@
      `--fg-3` (#7b8694) — beides unbunt, 45 Luminanzstufen Unterschied, aber ein
      dünner grauer Strich um eine zu 70–80 % graue Fläche gruppiert sich mit ihr.
      Statt dessen: 8 px Abstand und eine 1-px-Linie in `--line-3` (#46505e) über
-     die volle Zeilenbreite. Die Linie sitzt **im** Abstand (`top:-8px`, absolut
+     die volle Zeilenbreite. Die Linie sitzt **im** Abstand (`top:-10px`, absolut
      positioniert), kostet also kein Layout — ein `border-top` würde die Zeile um
      1 px verschieben; `margin-top:8px` wird aus dem unteren Padding des Blocks
-     bezahlt. Die Segmentfarben bleiben unverändert. */
+     bezahlt. Seit #142 steht sie 9 px unter der Zeile darüber und 11 px über dem
+     Summenbalken, statt am Balken zu kleben. Die Segmentfarben der Summe liegen
+     eine L*-Stufe über denen der Teile (`--sum-*`, siehe Palette): die Höhe ist
+     wieder die der Teile, kein Ring, keine Deckkraft. */
   #load .loadrow.total{margin-top:8px;position:relative}
-  #load .load-sum-rule{position:absolute;left:0;right:0;top:-8px;height:1px;
+  #load .load-sum-rule{position:absolute;left:0;right:0;top:-10px;height:1px;
                        background:var(--line-3);pointer-events:none}
   #load .lr-lead{font-size:var(--t-xs);color:var(--fg-2);text-align:right;
                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #load .lr-lead b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
   #load .loadbar{display:flex;height:14px;border-radius:3px;overflow:hidden;
                  background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--line)}
-  /* Die Summenzeile bekommt einen 50 % höheren Balken (14 → 21 px): die graue
-     Linie allein trägt den Schnitt nicht — sie ist 1 px in `--line-3` über die
-     volle Breite und liest sich als Tabellenlinie, nicht als „hier endet die
-     Aufzählung, hier beginnt die Summe" (Betreiber-Fund 21.11.2026). Die Höhe
-     ist der Unterschied, den man ohne Hinsehen sieht: die Summe ist die Zeile,
-     die mehr Fläche beansprucht. Die Segmentfarben bleiben gleich — sonst wäre
-     die Summe eine andere Größe, nicht dieselbe Größe größer. */
-  #load .loadrow.total .loadbar{height:21px}
+  /* Die Summenzeile ist so hoch wie ihre Teile und eine L*-Stufe heller (#142).
+     Der 50 % höhere Balken aus #138 war der falsche Hebel: er ist das einzige
+     hohe Element im Panel, also landet der Blick zuerst auf der Summe statt auf
+     den Knoten, und die Achse klebte mit 8 px am Balken statt zwischen den
+     Zeilen zu schneiden. Ein Rahmen wurde in drei Breiten gemessen und
+     verworfen: 1 px sieht man neben dem Leerlauf-Grau nicht, 2 px liest sich als
+     konkurrierender Rahmen, 3 px in `#fff` lassen von 14 px nur 8 px Farbe übrig
+     und sind der hellste Wert der Palette. (Ein Innenring braucht `outline` mit
+     negativem Offset — `box-shadow: inset` wird von den Segmenten überdeckt und
+     wäre wirkungslos.) Was bleibt, ist die Regel aus #102/#106: keine zweite
+     Farbe, kein Ring, keine Deckkraft — dieselbe Größe, eine Stufe heller. */
+  #load .loadrow.total .seg-idle{background:var(--sum-idle)}
+  #load .loadrow.total .seg-loading{background:var(--sum-loading)}
+  #load .loadrow.total .seg-prefill{background:var(--sum-prefill)}
+  #load .loadrow.total .seg-decode{background:var(--sum-decode)}
+  #load .loadrow.total .seg-mixed{background:var(--sum-mixed)}
   #load .loadbar .seg{display:block;height:100%;transition:filter .12s}
   #load .loadbar .seg:hover{filter:brightness(1.35)}
   #load .loadbar.empty{background:repeating-linear-gradient(
@@ -911,7 +960,7 @@
      Zeilenzahl kennen; die Spalten hier tun das von selbst, weil sie nach Höhe
      ausgleichen. `break-inside:avoid` ist die Bedingung dafür, dass kein Block
      über die Spaltengrenze zerteilt wird (ein Thread ist ein Block, keine
-     Fortsetzung). Unter 1200 px eine Spalte — siehe Media-Query. */
+     Fortsetzung). Unter 1100 px eine Spalte — siehe Media-Query. */
   #threads{column-count:2;column-gap:1px;column-rule:1px solid var(--line)}
   #threads > .thread-item{break-inside:avoid}
   .thread-item{padding:var(--s4)}
@@ -1335,19 +1384,19 @@
      bekommt; unter 900 px stapeln sie (#73). Eine Media-Query und keine
      Mindestbreite allein, damit die Grenze dieselbe ist wie die der Kennzahlen
      darunter. */
-  /* Der Thread-Tab hat seit #80 zwei Spalten. Unter 1200 px wird eine Spalte
-     daraus: bei 1200 px sind das zwei Spalten zu ~570 px, darunter bliebe vom
-     Schlüssel, zwei Chips und der Modellzeile zu wenig übrig, als dass zwei
-     Spalten mehr Information trügen als eine. */
-  @media (max-width:1200px){
-    #threads{column-count:1}
-  }
+  /* Der Thread-Tab hat seit #80 zwei Spalten. Unter 1100 px wird eine Spalte
+     daraus (#143): bei 1100 px sind das zwei Spalten zu 518 px und der Schlüssel
+     behält 205 px — gemessen, nichts kürzt, keine Zeile läuft über; bei 1060 px
+     kürzen drei von vier Schlüsseln. Vorher stand hier 1200, und ein iPad
+     10,9"/11" im Querformat meldet 1180–1194 CSS px: es bekam eine Spalte,
+     obwohl zwei getragen hätten. */
   @media (max-width:1180px){
     .kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
   }
   @media (max-width:1100px){
     .fleet{grid-template-columns:minmax(0,1fr)}
     .legend{grid-template-columns:repeat(4,minmax(0,1fr))}
+    #threads{column-count:1}
   }
   @media (max-width:900px){
     .wrap{padding:var(--s5) var(--s4) 48px}

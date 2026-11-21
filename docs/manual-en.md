@@ -322,6 +322,14 @@ that keeps running. The open tab is the URL hash (`#fleet`, `#models`,
 land where you were. The language selector in the masthead carries sixteen
 catalogs; the choice is stored in the browser (`localStorage['ripple_lang']`).
 
+**A fix reaches the page on a plain reload.** The stylesheet and the script are
+linked as `/static/dashboard.css?v=<mtime>` and `/static/dashboard.js?v=<mtime>`
+— the mtime of each file, not a release number. Without it the browser's
+heuristic cache decides whether to ask at all: `StaticFiles` sends `ETag` and
+`Last-Modified` but no `Cache-Control`, so a normal reload can show yesterday's
+CSS while the server already serves today's. With the mtime in the URL every
+edit is a new URL, and a reload is enough.
+
 Six tabs, in the order the page numbers them:
 
 ![The tab bar](images/manual-tabs.png)
@@ -412,28 +420,34 @@ only switched off deliberately and with a way back.
 - the **memory bar** — see below;
 - a **loading line** while a model is being loaded, with the model, its size and
   an estimate of the remaining time;
-- five **metrics**, four across and the cache cell as a full-width row beneath
-  them: `inflight` against `max_inflight` (and the threshold from which new
-  threads spill to another node), `thread slots` against `max_threads` — with
-  the node's target share and its **relative load** on the second line of that
-  cell, the number the optimizer decides on (§4.3) — `RTT` in milliseconds,
-  `tok/s` with the age of the measurement and the number of samples behind it,
-  and `cache`: the prompt tokens the last request found in the cache against
-  that request's prompt, with the share that was cached, and the sample count
-  and the last request's prefill and decode rates in the tooltip;
-- a **footer** with the node's oMLX version, whether the eviction guard is on,
-  how many models it offers, how many of those are loaded and routable, and its
-  request and error counters;
+- five **metrics** of equal width: `inflight` against `max_inflight` (and the
+  threshold from which new threads spill to another node), `thread slots` against
+  `max_threads` — with the node's target share and its **relative load** on the
+  second line of that cell, the number the optimizer decides on (§4.3) — `RTT` in
+  milliseconds, `tok/s per thread` and `tok/s total`, both read from the same
+  bucket of the series below and both carrying the age of that bucket, and
+  `cache` as a full-width row beneath them: the prompt tokens the last request
+  found in the cache against that request's prompt, with the share that was
+  cached, and the sample count and the last request's prefill and decode rates in
+  the tooltip;
+- a **footer** with the node's oMLX version — the only value there in the full
+  foreground tone, because it is the one that says which build the node runs —
+  whether the eviction guard is on, how many models it offers, how many of those
+  are loaded and routable, and its request and error counters;
 - the **maintenance row** — the three window buttons, disabled until the page is
   unlocked.
 
 **The tok/s series** under the metrics is the node's decode rate over the window
 named at its right edge, as two lines: `total` solid, `per thread` dashed. The
-plot is 34 px high and carries no y-axis — a scale there would be smaller than
-its label — so the pointer does the reading. It snaps to the bucket under it,
-draws a 1-px crosshair at that x, and the two legend marks at the top keep their
-pattern and take the two numbers of that bucket, one per line; only the card under
-the pointer shows a readout, the others keep their legend. The probe runs every
+plot is 46 px high and carries no y-axis — a scale there would be smaller than
+its label — so the pointer does the reading. Its zero is the card's separator
+line directly below: the plot has no padding of its own, so a rate of 0 sits on
+that rule instead of floating 9 px above it, and the two lines cannot be read as
+two scales. The two rate cells above show the last bucket of the same series. The
+pointer snaps to the bucket under it, draws a 1-px crosshair at that x, and the
+two legend marks at the top keep their pattern and take the two numbers of that
+bucket, one per line; only the card under the pointer shows a readout, the others
+keep their legend. The probe runs every
 10 s into 5-s buckets, so every second bucket is empty by construction and the
 line draws across it: a bucket without a sample of its own reads as the value of
 the segment that crosses it, marked with a leading `~`, and only a run of two
@@ -467,10 +481,13 @@ loading, prefill, mixed, decode — drawn as one bar whose width is the sampled
 time, plus the work behind it (requests, prompt and completion tokens in
 millions). Under it, the nodes' own count from their SQLite database as a
 cross-check; the gap between the two is traffic that went past RIPPLE. The sum
-row at the bottom is set off by a 1-px axis across the full row width, 8 px above
-it — not by a frame: a ring in a neutral grey groups with the segments instead of
-separating from them, while the hairline sits in the gap and costs no layout.
-`Reset` zeroes the ledger and needs the admin key.
+row at the bottom is set off by a 1-px axis across the full row width, 9 px above
+it and 11 px below the row above — not by a frame: a ring in a neutral grey
+groups with the segments instead of separating from them, while the hairline sits
+in the gap and costs no layout. The row itself is one lightness step brighter
+than the bars it sums, not taller: a taller bar would be the only tall element in
+the block and would take the first glance away from the nodes. `Reset` zeroes the
+ledger and needs the admin key.
 
 #### The two memory numbers
 
@@ -702,7 +719,9 @@ oMLX can quietly change a routing rule.
 
 The unit of placement is the **thread** — one conversation — not the request. A
 thread is what holds a slot on a node and keeps the prefix cache warm; the tab is
-the registry of them. One line per thread:
+the registry of them. Above 1100 px the list stands in two columns; below that it
+is one, because at 1100 px the key still has 205 px and at 1060 px three of four
+keys truncate. One line per thread:
 
 - the **key** — `sid:…` when the client sent `X-Session-Id`, `fp:…` when RIPPLE
   recognised the conversation from its first message;
@@ -1090,8 +1109,9 @@ it does not update itself.
 
 **What it does.** Copies one model's files from one node to the other over SSH,
 reloads the target so oMLX sees it, and writes the source's per-model settings
-back onto the copy. It is the third and last exception to "this page writes
-nothing", and the only one that touches another machine's filesystem.
+back onto the copy. It writes to another machine's filesystem — every other
+write path on the page (calibration, maintenance, model policy, parameters,
+restart, the node list) stays on this host.
 
 **What it costs.** The target leaves the pool for the duration of the reload, so
 its capacity is gone while it re-reads its model directories. A large model is a

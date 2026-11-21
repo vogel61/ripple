@@ -507,10 +507,17 @@ konkurrieren.
 |---|---|
 | ≥ 1180 px | Flotte zweispaltig, Kennzahlen siebenmal, Verteilung ein Block je Modell nebeneinander (~680 px je Block), 2.1 über die volle Breite |
 | < 1180 px | Kennzahlen vier Spalten |
-| < 1100 px | Flotte eine Karte je Zeile, Legende vierspaltig |
+| < 1100 px | Flotte eine Karte je Zeile, Legende vierspaltig, **Thread-Liste eine Spalte** (seit #143; vorher 1200 px) |
 | < 900 px | Verteilung untereinander (ein Block je Modell in einer Spalte), Kennzahlen zwei Spalten, Kartenkennzahlen 2 × 2, Kopf untereinander, Legende zweispaltig |
 | < 820 px | Tabellenschrift 12 px, Modellname bricht um statt abgeschnitten zu werden, Verteilungsbalken schmaler, Verlauf scrollt waagerecht |
 | < 700 px | 6.5 und der Verlauf werden **Blöcke**: eine Zeile je Eintrag, ein Wert je Zeile, der Bezeichner steht am Wert (`data-label`) |
+
+**Die Thread-Liste wird bei 1100 px einspaltig, nicht bei 1200 (issue #143).**
+Bei 1100 px sind die zwei Spalten 518 px breit und der Schlüssel behält 205 px —
+gemessen, nichts kürzt, keine Zeile läuft über; bei 1060 px kürzen drei von vier
+Schlüsseln. Die alte Grenze 1200 lag über dem, was ein iPad 10,9"/11" im
+Querformat meldet (1180–1194 CSS px): es bekam eine Spalte, obwohl zwei getragen
+hätten.
 
 ### Unter 700 px: Blöcke statt Spalten (issue #134)
 
@@ -676,6 +683,19 @@ Schlüssel selbst steht nie im DOM, nie in der URL und in keinem Log — er geht
 `Authorization: Bearer` hinaus, über `adminApi()`, den einen Ort, an dem die
 Seite diesen Header baut.
 
+### Der mtime steht in der URL (issue #145)
+
+Die zwei statischen Dateien tragen seit dem 21.11. ihren Änderungszeitpunkt als
+Query: `/static/dashboard.css?v=<mtime>` und `/static/dashboard.js?v=<mtime>`.
+`StaticFiles` schickt `ETag` und `Last-Modified`, aber kein `Cache-Control`;
+damit entscheidet die Heuristik des Browsers, ob ein normales Neuladen überhaupt
+fragt. Am 21.11. stand nach einem Fix weiter die alte Summenfarbe auf dem Schirm,
+obwohl der Server die neue Datei längst auslieferte (per md5 verglichen) — der
+Betreiber hätte den Cache von Hand leeren müssen. Mit dem mtime in der URL ist
+jede Änderung eine neue URL; das ist die einzige Sorte Cache, die ein Browser
+nicht ignorieren kann. Eine fehlende Datei ist kein Fehler: `_asset_version()`
+schreibt dann `0`, und die Seite lädt weiter.
+
 ## 7. Der Entscheidungsstrom
 
 Die letzten 50 Entscheidungen sind ein **Protokoll**, kein Bericht. Deshalb:
@@ -736,7 +756,7 @@ RIPPLE.
 | **Zustand** | Ergebnis der letzten Erreichbarkeitsprüfung: antwortet der Knoten, stimmt seine Identität, flappt er? | `/healthz → hosts[].state` |
 | **Adresse** | Adresse, über die RIPPLE den Knoten gerade anspricht; die Alternativen dienen dem Site-Wechsel (FA-21). | `/healthz → hosts[].address, addresses[]` |
 | **Adresswechsel** | Wie oft RIPPLE seit dem Start auf eine andere Adresse desselben Knotens ausgewichen ist. | `/healthz → hosts[].addr_switches` |
-| **oMLX-Version** | Version, die der Knoten über seine eigene Statusantwort meldet. | `/healthz → hosts[].version (oMLX /api/cluster/node_id)` |
+| **oMLX-Version** | Version, die der Knoten über seine eigene Statusantwort meldet. Steht im Fuß in `--fg` — dem einzigen Wert dort im vollen Vordergrundton, weil sie als einzige etwas über den Stand des Knotens sagt (#145). | `/healthz → hosts[].version (oMLX /api/cluster/node_id)` |
 | **Memory-Guard** | Ob der Knoten ein Laden ablehnt, wenn der Speicher über die harte Grenze laufen würde — HTTP 507 statt Eviction. | `/healthz → hosts[].guard_enabled` |
 | **belegter Speicher** | Gemessener Modellspeicher der residenten Gewichte auf diesem Knoten — Summe der tatsächlichen Größen nach dem Laden, nicht der gesamte RAM des Rechners. | `/healthz → hosts[].used_bytes_measured (Summe models[].hosts[].actual_size, oMLX /v1/models/status)` |
 | **belegter Speicher, geschätzt** | Summe der geschätzten Modellgrößen auf diesem Knoten — der Wert, mit dem oMLX und der Guard rechnen. | `/healthz → hosts[].used_bytes (oMLX /health → engine_pool.current_model_memory)` |
@@ -752,12 +772,28 @@ RIPPLE.
 | **Zielanteil** | Anteil der Thread-Slots, den dieser Knoten nach seiner Gewichtung bekommen soll (M5 3 : M3 2). | `/healthz → hosts[].target_share` |
 | **relative Last** | Anteil der Einzelstrom-Rate, der gerade verloren geht: `1 − aktuelle Rate / Einzelstrom-Rate`. 0 % heißt, die Maschine liefert noch ihre Einzelstrom-Geschwindigkeit; `—` heißt noch nicht gemessen. | `/healthz → hosts[].relative_load` |
 | **RTT** | Gemessene Antwortzeit eines Probe-Requests zu diesem Knoten; ein WAN-Knoten wäre hier sofort sichtbar. | `/healthz → hosts[].rtt_ms` |
-| **tok/s** | Live: die Dekodierrate je Anfrage für das Modell mit den meisten Messproben auf diesem Knoten, vom Dienst geglättet — sie fällt mit der Parallelität. Die kalibrierte Kapazität der Maschine ist keine Rate eines Modells; sie steht im Tooltip der tok/s-Zelle der Modelltabelle (§5), nicht in der Karte. | `/healthz → hosts[].metrics[<modell>].tg_tps`, `/config → hosts[].tg_tps` |
+| **tok/s je Thread** | Live: die Dekodierrate je Anfrage — `per_thread` der Reihe, aus **demselben Bucket** wie die Zelle daneben und die Kurve darunter. Steht als einziger Wert der Karte in der Wartungsfarbe `--maint` (Betreiberwunsch 21.11., #145). | `/healthz → hosts[].series[].per_thread` |
+| **tok/s gesamt** | Die Summe über alle Ströme des Knotens (`total = n · per_thread`), im Vordergrundton, damit die zwei Zellen nicht um dieselbe Aufmerksamkeit konkurrieren. Die kalibrierte Kapazität der Maschine ist keine Rate eines Modells; sie steht im Tooltip der tok/s-Zelle der Modelltabelle (§5), nicht in der Karte. | `/healthz → hosts[].series[].total`, `/healthz → hosts[].metrics[<modell>].tg_tps` |
 | **Messproben** | Wie viele abgeschlossene Anfragen in die Rate eingehen; unter zehn ist die Zahl eine Momentaufnahme. | `/healthz → hosts[].metrics[<modell>].tg_samples` |
 | **Messalter** | Wie lange die letzte Messung zurückliegt. Eine Rate von vor einer Stunde ist keine Aussage über jetzt. | `/healthz → hosts[].metrics[<modell>].measured_at` |
 | **Anfragen** | Anfragen, die RIPPLE seit dem Start an diesen Knoten geschickt hat. | `/healthz → hosts[].requests_total` |
 | **Fehler** | Fehlgeschlagene Anfragen an diesen Knoten seit dem Start. | `/healthz → hosts[].errors_total` |
 | **Modelle verfügbar** | Modelle, die der Knoten anbietet — nicht: gerade geladen. | `/healthz → hosts[].models_available` |
+
+**Fünf gleich breite Zellen, zwei Raten (issue #145).** Die Karte trug vier
+Kennzahlen und **eine** tok/s-Zahl — die geglättete Rate je Anfrage —, die
+Cache-Zelle darunter über die volle Breite. Seit #145 stehen fünf Zellen gleicher
+Breite nebeneinander (`inflight`, `thread slots`, `RTT`, `tok/s je Thread`, `tok/s
+gesamt`); die Cache-Zelle bleibt die volle Zeile darunter. Beide Raten kommen aus
+**demselben Bucket**, dem letzten mit einer `total`-Probe: `lastNum()` je Reihe
+zeigte im Leerlauf „0,0" neben „23,9" aus einem 20 s alten Bucket, und die Karte
+widersprach sich selbst. `per_thread` steht in `--maint`, `total` im
+Vordergrundton, damit die zwei Zellen nicht um dieselbe Aufmerksamkeit
+konkurrieren. Bei 1440 px sind fünf Spalten 117 px breit; die längste Unterzeile
+(„Ziel 60 % · Last 0,36") braucht gemessen 130 px und darf deshalb umbrechen —
+sie ist die kleinste Zeile der Karte, und zwei Zeilen kosten Höhe nur dort, wo
+der Text sie braucht. Die Karten bleiben pixelgleich, weil beide Knoten dieselbe
+Beschriftung tragen.
 
 **Relative Last neben dem Gewicht (issue #80).** Das Gewicht ist die **Absicht**:
 `target_share` sagt, welchen Anteil der Thread-Slots der Optimierer diesem Knoten
@@ -803,8 +839,9 @@ dieselbe Regel wie bei der relativen Last darüber. Der Tip ist derselbe Layer w
 jeder andere (`data-tip`), und er sagt weiterhin, wie viele abgeschlossene
 Anfragen in die Rate eingegangen sind (`fleet.samples`). Alle 16 Kataloge tragen
 die vier Einheiten-Ids; `fleet.ago` gibt es nicht mehr, damit die Sekunden nicht
-zurückkommen. Das Grid bleibt unverändert `repeat(4,minmax(0,1fr))` — der Text
-war die Ursache, nicht die Spalte.
+zurückkommen. Das Grid stand bis #145 bei `repeat(4,minmax(0,1fr))` — der Text war
+die Ursache, nicht die Spalte; seit den zwei Rate-Zellen sind es
+`repeat(5,minmax(0,1fr))` (siehe „Fünf gleich breite Zellen" oben).
 
 ### Der Fahrtenschreiber je Knoten (issue #83)
 
@@ -846,12 +883,23 @@ keine Nulllinie.
 höchsten Wert des Fensters; es gibt kein Gitternetz und keine Skalenstriche.
 Beschriftet ist nur, was eine Zahl trägt: die Einheit `tok/s` links oben und das
 Fenster rechts (`15 min`, bei krummen Fenstern `90 s`). Der Spitzenwert wird
-nicht gedruckt — die Zahl für „jetzt“ steht in der tok/s-Zelle der Karte direkt
-darüber, und die Grafik ist die Form, nicht die Tabelle. Der Block ist **48 px**
-hoch (14 px Kopfzeile mit Einheit, Legende und Fenster + 34 px Fläche); mit 2 px
-Abstand darüber und 6 px darunter belegt er 56 px, damit der Flotten-Tab bei
-1440 px nicht wächst — das ist der Platz, den #80 beim Deckel auf Block 2
-freigelassen hat.
+nicht gedruckt — die Zahl für „jetzt" steht in den zwei tok/s-Zellen der Karte
+direkt darüber, und die Grafik ist die Form, nicht die Tabelle. Der Block ist
+**60 px** hoch (14 px Kopfzeile mit Einheit, Legende und Fenster + 46 px Fläche);
+mit 2 px Abstand darüber belegt er 62 px — 6 px mehr als die 56 px aus #83. Die
+46 px sind #145: 34 px war die Höhe, die der Tab „ohne zu wachsen" hatte, aber bei
+einem Verhältnis von 1,5 zwischen den zwei Reihen lagen sie 8 px auseinander, und
+die Trennung war nicht ablesbar.
+
+**Die Null ist die Trennlinie der Karte (issue #145).** Die Fläche hat kein
+unteres Padding mehr; ihre Unterkante ist die `border-top` des Fußes. Vorher lagen
+6 px Padding plus die 3 px Fußluft des viewBox zwischen echter Null und der Linie,
+die das Auge als Horizont nimmt — der Betreiber las die graue Linie als Null, sie
+lag 9 px darunter, und die zwei Reihen wirkten wie zwei Skalen. Jetzt ist die
+Linie, die man sieht, die Null: ein Wert von 0 verschmilzt mit ihr, was für „kein
+Verkehr" das richtige Bild ist. Dieselbe Linie ist einen Ton heller als die
+übrigen (`--line-2` statt `--line`), damit sie als Achse liest und nicht als
+Dekoration.
 
 **Graustufen.** Die Strichart trägt die Aussage, nicht die Farbe: `total` ist
 durchgezogen, `per_thread` gestrichelt (`stroke-dasharray: 4 3`), und die Marke
@@ -861,7 +909,7 @@ und für Rot-Grün-Schwäche bleiben die beiden unterscheidbar; die Farbe
 
 **Gezeichnet wird das Modell der Karte.** `hosts[].series` ist je Modell ein
 Eintrag, weil sich `rate(n)` je Modell unterscheidet. Die Karte zeichnet den
-Eintrag des Modells, dessen Rate in ihrer tok/s-Zelle steht; hat sie keine
+Eintrag des Modells, dessen Rate in ihren zwei tok/s-Zellen steht; hat sie keine
 Messung, den ersten Eintrag — dann ist die Kurve die einzige Auskunft über den
 Knoten.
 
@@ -877,9 +925,9 @@ breiten Karte gestrichelt statt gestreckt.
 `fleet.series_per_thread`. Die Einheit `tok/s` und das Fenster (`min`, `s`) sind
 Einheiten der Achse und bleiben unübersetzt.
 
-**Der Zeiger auf der Fläche (issue #102).** Die Fläche ist 34 px hoch; eine
-y-Achse wäre dort kleiner als ihre Beschriftung. Der Zeiger ersetzt sie: er
-nennt **beide** Zahlen des Buckets, auf den er zeigt — `total` und
+**Der Zeiger auf der Fläche (issue #102).** Die Fläche ist 46 px hoch (34 px bis
+#145); eine y-Achse wäre dort kleiner als ihre Beschriftung. Der Zeiger ersetzt
+sie: er nennt **beide** Zahlen des Buckets, auf den er zeigt — `total` und
 `per_thread` —, und zwar in der Kopfzeile, in den zwei Legendenmarken, die
 ohnehin dort stehen. Kein Kasten über der Fläche (er verdeckte genau die Form,
 nach der man fragt), kein neues Wort: die zwei ids der Legende sind die zwei ids
@@ -1149,6 +1197,35 @@ Abstand (8 px `margin-top`) wird aus dem unteren Padding des Blocks bezahlt
 (287 px) und bei 741 px (422,56 px) vor und nach der Änderung gemessen, nicht
 geschätzt.
 
+**Die Summenzeile ist eine Stufe heller, nicht höher (issue #142).** #138 hatte die
+Summe über die Höhe markiert: der Balken 14 → 21 px, 50 % höher als der seiner
+Teile. Die Betreiberprüfung am 21.11.2026 hat das zurückgenommen, aus zwei
+messbaren Gründen: der 21-px-Balken ist das einzige hohe Element in `#load`, also
+landet der Blick zuerst auf der Summe statt auf den Knoten; und die Achse saß 8 px
+über dem Balken, aber 12 px unter der Zeile darüber — sie klebte an der Summe,
+statt zwischen den Zeilen zu schneiden. Sie steht jetzt auf `top:-10px`, also 9 px
+über der Summe und 11 px unter der Zeile darüber.
+
+Drei Rahmenbreiten wurden auf der laufenden Seite gerendert und verworfen: 1 px in
+`--fg` ist neben dem Leerlauf-Grau nicht zu sehen, 2 px liest sich als
+konkurrierender Rahmen, 3 px in `#fff` lassen von 14 px Balkenhöhe nur 8 px Farbe
+(57 %) und sind der hellste Wert der Palette — der Rahmen ruft lauter als die
+Summe. Wer einen Innenring baut: `box-shadow: inset` ist hier wirkungslos, die
+Segmente sind Kinder mit `height:100%` und decken ihn zu; nur `outline` mit
+negativem `outline-offset` malt über den Inhalt.
+
+Was bleibt, ist eine **Helligkeitsstufe**: dieselben fünf Farbtöne, eine
+Wahrnehmungsstufe heller bei gleichem Farbton (CIE Lab, `--sum-idle` …
+`--sum-mixed`). HSL-Lichtigkeit +8 % war der erste Versuch und ist nicht
+gleichmäßig — gemessen +4,9 (prefill) bis +9,0 (decode, gemischt) —, die Zeile
+wirkte damit ungleichmäßig aufgehellt statt eine Stufe heller. Ziel sind +9 L\* bei
+gleichem a\*/b\*; vier Farben treffen das auf eine Nachkommastelle, das Orange
+(`--warn`) sitzt am Rand von sRGB und kommt mit `#ffbb55` (ΔE76 2,1 zur idealen
+Farbe) auf +8,4. +6 L\* war im Vergleich zu subtil; +9 ist die Obergrenze, darüber
+kippt das Leerlauf-Grau auf `--fg-2` und die Summe sähe aus wie eine fremde
+Farbfamilie. Die Legende zeigt weiter die Grundfarben der Knoten — sie beschreibt
+die Teile, nicht die Summe.
+
 | Kennzahl | Definition | Quelle |
 |---|---|---|
 | **Leerlauf** | Exklusive Zeit ohne jede Anfrage auf diesem Knoten. | `/healthz → load.hosts[].idle` (oMLX `/admin/api/activity`, ein Takt je 10 s) |
@@ -1267,6 +1344,18 @@ keine Zelle läuft über. Beide Tabellen tragen ihn — die mit Feldern und die
 read-only-Liste eines älteren Servers. Unter 1100 px wandern zwölf Pixel von
 der Parameterspalte in die Scope-Spalte: „placement" lag dort schon vorher
 knapp über dem Innenraum, und der Streifen darf die Wertespalte nicht kosten.
+
+**Der Satz zu einer Zeile kommt aus dem Schema, die Übersetzung aus dem Katalog
+(issue #144).** Jede Zeile trägt einen Tooltip, der sagt, was der Parameter tut
+und wann er greift. Der englische Satz steht in `FIELD_HELP` (`ripple/config.py`)
+neben dem Schema und reist als `/config → help` mit — eine umbenannte Einstellung
+kann ihre Erklärung damit nicht vergessen, weil beides im selben Commit liegt
+(#139). Seit #144 fragt die Seite zuerst den Katalog (`params.help.<pfad>`, für
+Knotenzeilen `params.help.hosts.*.<feld>`) und nimmt den Schematext nur, wenn
+diese Sprache den Satz nicht kennt. Der Rückfall ist die Bedingung dafür, dass
+eine neue Einstellung nicht in 15 Sprachen gleichzeitig erklärt sein muss, bevor
+sie ausgeliefert werden darf; `en.json` führt dieselben 29 Sätze wortgleich,
+damit die zwei Quellen nicht auseinanderlaufen.
 
 ### Gründe im Entscheidungsstrom
 

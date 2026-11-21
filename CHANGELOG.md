@@ -5,6 +5,95 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-21
+
+Six changes and three fixes. Patch, not minor: nothing new to configure, only
+what the page shows and how it reaches the browser.
+
+### Changed
+
+- **Five equal metric cells, and the rate is split into what a thread gets and
+  what the node gives** (issue #145). The card had four cells and one tok/s
+  figure — the smoothed decode rate per request — with the cache as a full-width
+  row underneath. The row is five cells of equal width now: `inflight`, `thread
+  slots`, `RTT`, `tok/s per thread` and `tok/s total`, with `cache` still the
+  full-width row. Both rate cells are read from **the same bucket**, the last one
+  with a `total` sample: reading each row's last number separately showed `0.0`
+  next to `23.9` from a twenty-second-old bucket whenever the node was idle, and
+  the card contradicted itself. `per thread` is set in the maintenance tone at
+  the operator's request; `total` keeps the foreground, so the two cells do not
+  compete for the same attention. Five columns at 1440 px are 117 px wide, and
+  the longest subline (`target 60 % · load 0.36`) measured 130 px: it wraps onto
+  a second line instead of being shortened — #80 had shortened the same line
+  once and paid for it with the unit.
+
+- **The plot is 46 px high, and its zero is the card's separator line** (issue
+  #145). 34 px was the height the tab had without growing; at a ratio of 1.5
+  between the two rows they sat 8 px apart and the separation could not be read.
+  The block is 14 px head plus 46 px area now, 60 px in all. The 6 px padding
+  under the area is gone for a measured reason: the eye took the grey rule 9 px
+  below the true zero for the zero, so the two lines looked like two scales.
+  Now the rule the operator already sees is the zero — a value of 0 merges with
+  it, which is the right picture for "no traffic".
+
+- **The sum row is one lightness step brighter, not taller** (issue #142). #138
+  had marked the sum by height: 14 → 21 px, 50 % taller than the rows it sums.
+  The operator's check on 21.11. took that back, for two measurable reasons: the
+  21-px bar is the only tall element in `#load`, so the eye lands on the sum
+  instead of the nodes; and the axis sat 8 px above the bar but 12 px below the
+  row above, so it stuck to the sum instead of cutting between the rows. The
+  axis stands at `top:-10px` now — 9 px above the sum, 11 px below the row
+  above — and the five segments are one CIE-Lab step (+9 L\*) brighter at the
+  same hue (`--sum-*`). HSL lightness +8 % was the first attempt and is not
+  even: measured +4.9 (prefill) to +9.0 (decode, mixed), which looked unevenly
+  lit rather than one step brighter. The orange sits at the edge of sRGB and
+  lands at +8.4 (`#ffbb55`, ΔE76 2.1). The legend keeps the base colours — it
+  describes the parts, not the sum.
+
+- **The thread list goes one column at 1100 px, not at 1200** (issue #143). At
+  1100 px the two columns are 518 px each and the key keeps 205 px — measured,
+  nothing truncates, no line overflows; at 1060 px three of four keys do. The
+  old 1200 was above what an iPad 10.9"/11" reports in landscape (1180–1194 CSS
+  px), so those screens got one column although two would have carried.
+
+- **The parameter help is translated, with the schema sentence as the fallback**
+  (issue #144). The 29 `params.help.*` sentences live in all sixteen catalogs
+  now; the page asks the catalog first and takes `/config → help` only when the
+  language does not know the sentence. The fallback is what makes a new setting
+  shippable before fifteen translations exist, and `en.json` carries the same 29
+  sentences word for word so the two sources cannot drift.
+
+- **The page's own CSS and JS carry their mtime** (no issue). Both links read
+  `/static/dashboard.css?v=<mtime>` and `/static/dashboard.js?v=<mtime>`.
+  `StaticFiles` sends `ETag` and `Last-Modified` but no `Cache-Control`, and a
+  plain reload then does not necessarily refetch: on 21.11. the old sum colour
+  stayed on screen although the server had long served the new file (compared by
+  md5), and the operator would have had to clear the cache by hand. With the
+  mtime in the URL every change is a new URL — the one kind of cache a browser
+  cannot ignore.
+
+### Fixed
+
+- **A comment terminator inside a comment swallowed `--sum-idle`** (issue #142).
+  The Lab explanation wrote `a*/b*`; the `*/` closed the CSS comment, the rest of
+  the line was read as declarations, and `--sum-idle` was never defined — the
+  idle segment of the sum row was drawn with no fill at all. It reads `a* and
+  b*` now, and a test reads the custom properties out of the stylesheet instead
+  of trusting the render.
+
+- **The oMLX version in the foot was as muted as the counters beside it** (issue
+  #145). It is the only value in the foot that says something about the node's
+  build, so it is set in `--fg`, the foreground tone, while the counters keep the
+  dimmed grey.
+
+- **The replication section called itself "the third and last exception"** (issue
+  #145). The list had grown with every amendment, and the sentence was true only
+  when #13 was written. Manual and module docstring now say what is true:
+  replication is the one write path that touches another machine's filesystem;
+  calibration, maintenance, model policy, parameters, restart and the node list
+  all stay on this host. The sentence lives in all sixteen catalogs — `de` and
+  `en` with the code, the other fourteen in a follow-up.
+
 ## [0.2.0] - 2026-11-21
 
 Eight new capabilities, four changes and eleven fixes. Minor, not patch: the
