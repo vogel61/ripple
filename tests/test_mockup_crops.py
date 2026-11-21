@@ -84,8 +84,9 @@ def test_every_picture_the_install_guides_show_is_a_crop():
         assert not missing, "%s shows pictures no crop produces: %s" % (name, missing)
 
 
-def test_the_fifteen_manual_crops_are_the_ones_the_manual_names():
-    # The issue names fifteen; the tool must produce exactly those plus the
+def test_the_sixteen_manual_crops_are_the_ones_the_manual_names():
+    # The issue named fifteen; #131 added the parameter table, so it is sixteen.
+    # The tool must produce exactly those plus the
     # four install views. A crop nobody shows is as much a drift as a picture
     # nobody produces.
     manual = ROOT / "docs" / "manual-en.md"

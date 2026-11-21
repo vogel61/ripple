@@ -314,11 +314,50 @@ deploy/install-launchd.command
 
 The script frees port 8010, renders `deploy/ai.ripple.plist` (a template with `__REPO__` and `__HOME__` placeholders) into `~/Library/LaunchAgents/`, writes the oMLX key from `~/.omlx/api_key.txt` into it, sets the file to `0600`, loads the agent and checks `/healthz`. `--dry-run` prints what it would do and changes nothing; it fails loudly if the key file is not readable, because the agent cannot start without it.
 
+The same install from the CLI, without the script:
+
+```bash
+ripple -perm        # autostart on: install the job from THIS checkout and start it
+ripple shutdown -perm   # autostart off: stop the proxy, then remove the job
+```
+
+`ripple -perm` renders the template for the directory the command runs from — `ProgramArguments`, `WorkingDirectory` and the config path are this checkout, never a copy of an older plist — writes the oMLX key into it with `plutil`, sets it to `0600`, bootstraps it, and reports only after `/healthz` answered:
+
+```
+autostart: on (ai.ripple, /Users/you/Projects/ripple)
+  verified: launchctl print gui/501/ai.ripple → loaded, pid 49841; /healthz answered after 0.6 s
+```
+
+A manual instance holding the port is **not** killed: the plist is installed, that process keeps running, and launchd takes over at the next login (`ripple restart` does it immediately). Running `-perm` twice is a no-op while the job is loaded and answering. A missing `config.yaml` or a missing `~/.omlx/api_key.txt` is refused by name, and nothing is written; a process that is not RIPPLE holding the port is named and left alone.
+
+`ripple shutdown -perm` is the way back. It stops first — the launchd job if there is one, otherwise the listener — then removes the plist, then reads both facts back: `launchctl print gui/$(id -u)/ai.ripple` fails with `Could not find service`, and nothing listens on the port. It prints `autostart: off (ai.ripple)` plus which of the two it stopped. `ripple shutdown` **alone** stops the service but leaves the job installed, so it returns at the next login; that difference is the whole point of the flag.
+
+Exit codes for the two words: `0` the state was reached and read back, `2` missing `config.yaml` or key file (and `-perm` combined with the wrong word), `3` the port belongs to something that is not RIPPLE, or launchd refused the plist, `4` a stop did not stop, `5` the installed job never answered `/healthz`, `6` the plist could not be written or does not lint.
+
 ```bash
 launchctl print gui/$(id -u)/ai.ripple | head -20
 ```
 
 The agent starts at login and restarts after a crash, but not after a clean exit. Details, the manual sequence and how to unload it: [`deploy/README.md`](../deploy/README.md).
+
+### The `ripple` command
+
+```bash
+deploy/install-cli.command     # writes the wrapper; no sudo, no shell-profile edit
+ripple status                  # running/stopped, pid, port, version, uptime, log path
+ripple restart                 # stop, start, wait for the dashboard, print the seconds
+ripple shutdown                # stop (the launchd job if there is one, else the listener)
+ripple                         # start in this terminal, or report that it already runs
+ripple update                  # fetch, run the suite, restart — only if the suite is green
+ripple -perm                   # autostart on: install the job from this checkout
+ripple shutdown -perm          # autostart off: stop, then remove the job
+```
+
+The installer writes a two-line wrapper into `/usr/local/bin` when that directory is writable, otherwise into `~/.local/bin`; in the second case it prints the `PATH` line to add and does not edit any profile. It is idempotent, needs no sudo, and `deploy/install-launchd.command` runs it as its last step — a fresh checkout gets the command too.
+
+Both modes are supported and they do not fight over the port: with the launchd job loaded, `ripple` reports it and exits `0`; without a job it starts the same foreground process as `deploy/start-ripple.command`; if something else holds the port, it names the PID and exits non-zero without touching it. `ripple restart` returns only once the dashboard answers, because the socket is open before the app is ready. `ripple update` refuses a dirty tree, and a red suite leaves the running build in place. `ripple -perm` and `ripple shutdown -perm` switch autostart on and off — see §5 above; `-perm` with `start`, `status`, `restart` or `update` is a usage error, because none of them changes autostart.
+
+The label and the port come from `RIPPLE_LABEL` (default `ai.ripple`) and `RIPPLE_PORT` (default: `listen_port` from the config), so a second instance on another port can be driven without touching the service. `RIPPLE_CONFIG`, `RIPPLE_PLIST` and `RIPPLE_UPDATE_SUITE` (the suite `update` runs, for tests) override the rest.
 
 ---
 

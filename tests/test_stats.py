@@ -211,12 +211,14 @@ def test_two_adjacent_probes_are_one_segment_and_not_two_stray_marks():
 
 
 def test_a_probe_that_did_not_happen_still_breaks_the_line():
-    """Two empty buckets in a row are not resolution, they are a lost probe.
+    """Three empty buckets in a row are not resolution, they are a lost probe.
 
     A node that went away must not be drawn as a node that kept its rate: the
-    pen lifts, and the two stretches are two subpaths.
+    pen lifts, and the two stretches are two subpaths. The threshold moved from
+    two to three when the hold grew to the cadence (#129): a gap of two is one
+    probe arriving late, a gap of three is ≥ 15 s without a sample at all.
     """
-    entry = series_entry("m", [1, None, None, 2], [30.0, None, None, 31.0])
+    entry = series_entry("m", [1, None, None, None, 2], [30.0, None, None, None, 31.0])
     x, y = _axes(entry["total"], entry["per_thread"])
 
     d = series_path(entry["total"], x, y)
@@ -231,7 +233,7 @@ def test_the_hold_is_the_only_thing_that_bridges_a_hole():
     entry = series_entry("m", [1, None, 2], [30.0, None, 31.0])
     x, y = _axes(entry["total"], entry["per_thread"])
 
-    assert SERIES_HOLD_BUCKETS == 1
+    assert SERIES_HOLD_BUCKETS == 2          # the cadence plus one probe of slack
     assert series_path(entry["total"], x, y, hold=0).count("M") == 2
     assert series_path(entry["total"], x, y, hold=1).count("L") == 1
     # a longer hole needs a longer hold; the default never invents one

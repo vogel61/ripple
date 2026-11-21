@@ -296,18 +296,35 @@ const history = {
 /* `sessionStorage['ripple_admin']` is the switch the page reads for the two
    operator actions. Flipping it between renders is how the stub measures both
    states of the maintenance control: without a key (disabled, with a reason)
-   and with one (live buttons). */
+   and with one (live buttons).
+
+   Since #130 the page also *writes* it: the admin chip stores a key only after
+   `GET /admin/models` answered 200, and signing out removes it. A no-op
+   `setItem` would make that invisible, so the store keeps the value and the
+   `adminKey` variable stays the single source the existing measurements read. */
 let adminKey = null;
 
 /* Every admin call the page makes, with its body: the node tab is measured
    through what it actually sent, not through what it meant to send (#71). */
 const calls = [];
 
+/* What the chip said while a `/admin/models` request was in flight (#130):
+   `checking` is a state of the *display*, so it can only be measured from
+   inside the call. */
+const adminDuring = [];
+
 async function fetchStub(url, init) {
   const key = String(url).replace(/^\//, '');
   const method = (init && init.method) || 'GET';
   calls.push({method: method, path: key,
-              body: init && init.body ? JSON.parse(init.body) : null});
+              body: init && init.body ? JSON.parse(init.body) : null,
+              /* The header the page sent (#130): the admin key goes out as a
+                 bearer token, and the test reads it here instead of trusting
+                 the call site. */
+              headers: (init && init.headers) || null});
+  if (key === 'admin/models') {
+    adminDuring.push(document.getElementById('adminChip').getAttribute('data-state'));
+  }
   /* A fixture may name a status per (method, path) — the node tab needs the
      refusals as well as the successes: a drain that runs out of time answers
      409, a node from `config.yaml` answers 409 too, and both are states the
@@ -375,7 +392,8 @@ const sandbox = {
   history,
   window: windowStub,
   sessionStorage: {getItem: k => (k === 'ripple_admin' ? adminKey : null),
-                   setItem: () => {}, removeItem: () => {}},
+                   setItem: (k, v) => { if (k === 'ripple_admin') adminKey = String(v); },
+                   removeItem: k => { if (k === 'ripple_admin') adminKey = null; }},
   fetch: fetchStub,
   setInterval: () => 0,
   setTimeout: (fn) => { if (typeof fn === 'function') return 0; return 0; },
@@ -937,6 +955,133 @@ function rendered() {
     adminKey = 'test-admin-key';
   }
 
+  /* ── Der Admin-Chip im Masthead (#130) ─────────────────────────────────────
+   * Der Zustand des Tabs war bisher unsichtbar. Gemessen wird hier der ganze
+   * Weg: der Klick öffnet das eine Feld, Escape schliesst ohne zu schreiben,
+   * ein 401 schreibt nichts und sagt es, ein 200 schreibt den Schlüssel und
+   * malt die Betreiberblöcke neu, Abmelden nimmt beides zurück. `adminDuring`
+   * belegt, dass der Chip während der Anfrage `checking` sagt — die Anzeige
+   * folgt dem Server, nicht dem Klick. */
+  const admin = {};
+  adminKey = null;
+  api.adminSignOut();
+  const chipEl = document.getElementById('adminChip');
+  const wordEl = document.getElementById('adminWord');
+  const askEl = document.getElementById('adminAsk');
+  const outEl = document.getElementById('adminOut');
+  const fieldEl = document.getElementById('adminKey');
+  const msgEl = document.getElementById('adminMsg');
+  const chipState = () => ({
+    state: api.adminState,
+    attr: chipEl.getAttribute('data-state'),
+    word: wordEl.textContent,
+    word_id: wordEl.getAttribute('data-i18n'),
+    label: chipEl.getAttribute('aria-label'),
+    tip: chipEl.getAttribute('data-tip'),
+    expanded: chipEl.getAttribute('aria-expanded'),
+    ask_open: !askEl.hasAttribute('hidden'),
+    out_visible: !outEl.hasAttribute('hidden'),
+    msg: msgEl.textContent,
+  });
+
+  /* Der Ausgangszustand: read-only, kein Feld, kein Abmelden. */
+  api.adminPaint();
+  admin.readonly = chipState();
+
+  /* Ein Klick öffnet genau ein Feld — und sagt es (`aria-expanded`). */
+  api.adminToggle();
+  admin.opened = chipState();
+
+  /* Escape: zu, ohne zu schreiben. Was getippt war, steht nicht mehr im DOM. */
+  fieldEl.value = 'typed-but-abandoned';
+  api.adminOpen(false);
+  admin.escaped = chipState();
+  admin.escaped_field = fieldEl.value;
+  admin.escaped_storage = adminKey;
+
+  /* 401: der Chip bleibt read-only, das Feld bleibt offen, der Satz steht da,
+     und der falsche Schlüssel landet NICHT im Speicher. */
+  api.adminOpen(true);
+  fieldEl.value = 'wrong-key';
+  fixture.responses['GET admin/models'] = {status: 401,
+    body: {error: {message: 'invalid admin key'}}};
+  let adminMark = calls.length;
+  admin.rejected_return = await api.adminSubmit();
+  admin.rejected = chipState();
+  admin.rejected_storage = adminKey;
+  admin.rejected_calls = calls.slice(adminMark).map(c => c.method + ' ' + c.path);
+  admin.rejected_header = (calls.slice(adminMark)
+    .filter(c => c.path === 'admin/models')[0] || {}).headers;
+
+  /* 200: erst jetzt in `sessionStorage`, der Chip wird `admin`, das Feld
+     schliesst, Abmelden erscheint. */
+  fixture.responses['GET admin/models'] = {status: 200, body: {locks: [], models: []}};
+  api.adminOpen(true);
+  fieldEl.value = 'right-key';
+  adminMark = calls.length;
+  admin.accepted_return = await api.adminSubmit();
+  admin.accepted = chipState();
+  admin.accepted_storage = adminKey;
+  admin.accepted_calls = calls.slice(adminMark).map(c => c.method + ' ' + c.path);
+  admin.accepted_header = (calls.slice(adminMark)
+    .filter(c => c.path === 'admin/models')[0] || {}).headers;
+  admin.during = adminDuring.slice();
+  /* Die Betreiberblöcke sind mit dem Schlüssel neu gezeichnet: die Felder von
+     6.5 sind jetzt bedienbar (ohne Schlüssel tragen sie `disabled`). */
+  admin.params_with_key = document.getElementById('params').__html;
+  admin.lock_with_key = (admin.params_with_key.match(/class="pedit"/g) || []).length;
+  admin.disabled_with_key = (admin.params_with_key.match(/ disabled/g) || []).length;
+
+  /* Ein Sprachwechsel: dasselbe Wort aus dem anderen Katalog, nicht aus dem
+     Skript. Deutsch und Englisch teilen `read-only`/`admin` — der Tooltip und
+     das türkische Wort zeigen, dass es wirklich aus dem Katalog kommt. */
+  const adminLang = api.lang;
+  api.chooseLang(adminLang === 'de' ? 'en' : 'de');
+  admin.admin_other_lang = chipState();
+  api.adminSignOut();
+  api.chooseLang('tr');
+  admin.readonly_turkish = chipState();
+  api.chooseLang(adminLang);
+  /* Der Chip ist wieder `admin`, damit der Abmeldeweg unten denselben Zustand
+     vorfindet wie im Betrieb. */
+  adminKey = 'right-key';
+  api.adminBooted(true);
+
+  /* Abmelden: Speicher leer, Chip read-only, Abmelden verschwindet, und die
+     Felder sind wieder aus. */
+  admin.signout_return = api.adminSignOut();
+  admin.signed_out = chipState();
+  admin.signed_out_storage = adminKey;
+  admin.params_without_key = document.getElementById('params').__html;
+  admin.disabled_without_key = (admin.params_without_key.match(/ disabled/g) || []).length;
+
+  /* Ein Schlüssel, der schon im Tab lag (von `/keys`): der Start prüft ihn mit
+     demselben GET /admin/models, das die Machbarkeit der Schlösser liest —
+     genau ein Request für beides. Was nicht mit 200 antwortet, wird gelöscht
+     statt angezeigt. */
+  adminKey = 'stale-key';
+  fixture.responses['GET admin/models'] = {status: 401,
+    body: {error: {message: 'invalid admin key'}}};
+  await api.loadFeasibility();
+  admin.boot_stale_chip = chipState().state;
+  admin.boot_stale_storage = adminKey;
+
+  adminKey = 'good-key';
+  fixture.responses['GET admin/models'] = {status: 200, body: {locks: [], models: []}};
+  await api.loadFeasibility();
+  admin.boot_good_chip = chipState().state;
+  admin.boot_good_storage = adminKey;
+
+  /* Kein Klartext im DOM: der Schlüssel steht in keinem gerenderten Container. */
+  const adminHtml = Object.values(rendered()).join('') + chipEl.outerHTML +
+                    document.getElementById('adminMode').outerHTML;
+  admin.key_in_dom = ['right-key', 'good-key', 'wrong-key'].filter(k => adminHtml.indexOf(k) !== -1);
+  admin.location_reads = locationReads;
+
+  /* Zurück auf den Ausgangszustand, damit die Reihenfolge der Messungen
+     darunter/darüber nichts verschiebt. */
+  api.adminSignOut();
+
   process.stdout.write(JSON.stringify({
     containers: first,
     unchanged_templates: unchangedTemplates,
@@ -958,6 +1103,7 @@ function rendered() {
     skew: {now: skewNow, text: skewText, deadline: skewDeadline},
     nodes,
     params,
+    admin,
     parts,
   }));
 })().catch(err => {

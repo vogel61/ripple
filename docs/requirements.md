@@ -1146,7 +1146,7 @@ its capabilities.
 | M1 | Requirements specification accepted | sign-off by the operator |
 | M2 | Balancer with FA-1…FA-15, tests green | `pytest` green, AS-1…AS-5 evidenced |
 | M3 | Commissioning on the M5, measurement AS-6 | weights confirmed or corrected by measurement |
-| M4 | Continuous operation as a launchd service | 7 days without intervention, logs evaluated |
+| M4 | Continuous operation as a launchd service | 7 days without intervention, logs evaluated — refined 21.11.2026: **fewer than ten process starts per seven days**, see `docs/acceptance.md` (the weekly relocation between the two sites stops the service by design, so zero is not the goal) |
 | M5 | **Expansion stage (not part of acceptance):** second site over WAN | only after a separate decision; presupposes tunnel, RTT weighting and model copy per site |
 | M6 | **Expansion stage (not part of acceptance):** remote providers as a policy target (OpenRouter et al., §6.2, NZ-8) | allow-list, overflow threshold and cost budget take effect; demonstrably unreachable without policy |
 

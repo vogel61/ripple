@@ -476,6 +476,24 @@ def test_the_only_command_the_guard_runs_is_a_read_only_query():
 # ---------------------------------------------------------------------------
 # The contract with launchd
 # ---------------------------------------------------------------------------
+def _rendered_plist() -> dict:
+    """The template as the installer renders it.
+
+    `deploy/ai.ripple.plist` carries placeholders (`__LABEL__`, `__REPO__`,
+    `__HOME__`) since #121: `deploy/install-launchd.command` fills them from the
+    environment and the label it was invoked with, so a test that parsed the raw
+    file would pin the placeholder instead of the job launchd actually sees.
+    Same substitution as the installer, and the default label is the production
+    one.
+    """
+    root = Path(__file__).resolve().parents[1]
+    text = PLIST.read_text()
+    for key, value in (("__LABEL__", "ai.ripple"), ("__REPO__", str(root)),
+                       ("__HOME__", str(Path.home()))):
+        text = text.replace(key, value)
+    return plistlib.loads(text.encode())
+
+
 def test_the_exit_code_is_one_that_launchd_restarts():
     """`KeepAlive → SuccessfulExit → false` restarts on a *failure* only.
 
@@ -483,8 +501,7 @@ def test_the_exit_code_is_one_that_launchd_restarts():
     down after the click — the one failure mode the operator would blame on the
     button. Both halves are pinned here because they only work together.
     """
-    with PLIST.open("rb") as fh:
-        job = plistlib.load(fh)
+    job = _rendered_plist()
     assert job["Label"] == "ai.ripple"
     assert job["KeepAlive"] == {"SuccessfulExit": False}
     assert RESTART_EXIT_CODE != 0

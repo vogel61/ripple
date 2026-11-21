@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -67,17 +68,21 @@ def test_calibrate_asks_before_loading_anything(page, de):
 
 def test_calibrate_is_disabled_while_the_node_holds_a_thread(page, de):
     assert "t('fleet.cal_held')" in page
-    assert de["fleet.cal_held"] == "der Knoten hält einen aktiven Thread"
+    # the sentence grew the force hint in #128, so the test pins the reason and
+    # not the wording: a translated string is not a contract, its first clause is
+    assert de["fleet.cal_held"].startswith("der Knoten hält einen aktiven Thread")
+    assert "force" in de["fleet.cal_held"]
     assert "x.thread_slots" in page
     assert "disabled" in page
 
 
 def test_calibrate_cannot_fire_twice(page):
     # A second click while a job runs must be impossible: early return plus a
-    # disabled button that survives the 2 s re-render.
+    # disabled button that survives the 2 s re-render. #128 added the model lock
+    # as a third reason, so the guard is a list and not a pair.
     assert "if (calibBusy[name]) return;" in page
     assert "const calibBusy = {}" in page
-    assert "busy || held ? ' disabled'" in page
+    assert re.search(r"busy \|\| held( \|\| locked\.length)? \? ' disabled'", page)
 
 
 def test_calibration_panel_shows_models_and_evictions(page, de):
@@ -122,11 +127,17 @@ def test_admin_key_is_sent_as_a_bearer_header(page):
     assert "'Authorization': 'Bearer ' + key" in page
 
 
-def test_dashboard_never_writes_or_renders_the_admin_key(page):
-    # Unlike /keys, this page only reads the key: it is never stored here and
-    # never put into the markup.
-    assert "sessionStorage.setItem('ripple_admin'" not in page
+def test_dashboard_never_renders_the_admin_key(page):
+    # Bis #130 galt hier „die Seite speichert den Schlüssel nie". Seit dem
+    # Masthead-Feld speichert sie ihn — aber genau einmal und erst hinter einer
+    # bestandenen Prüfung; diese Reihenfolge nagelt
+    # `test_dashboard.py::test_the_key_is_written_in_one_place_and_only_after_the_check`
+    # fest, und `test_a_rejected_key_is_not_stored_and_the_field_says_so` den 401.
+    # Was hier bleibt und weiter gilt: der Schlüssel kommt nicht ins Markup und
+    # nicht in eine URL.
+    assert "sessionStorage.setItem('ripple_admin'" not in page   # nur über ADMIN_STORE
     assert "Authorization: Bearer ' + adminKey()" not in page
+    assert "?key=" not in page and "&key=" not in page
 
 
 def test_missing_key_explains_where_to_set_it(page, de):

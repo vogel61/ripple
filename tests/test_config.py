@@ -26,9 +26,10 @@ from typing import Any
 import pytest
 import yaml
 
-from ripple.config import (EDITABLE_PATHS, ConfigError, FleetOverlay, apply_overlay,
-                           load_config, load_overlay, policy_assign, policy_read,
-                           policy_refusal, policy_target, policy_value, save_overlay)
+from ripple.config import (EDITABLE_PATHS, FIELD_HELP, ConfigError, FleetOverlay,
+                           apply_overlay, load_config, load_overlay, policy_assign,
+                           policy_read, policy_refusal, policy_target, policy_value,
+                           save_overlay)
 
 from tests.support import closed_port
 
@@ -406,3 +407,44 @@ def test_the_config_view_says_what_is_editable_and_what_is_overridden(tmp_path):
     assert "hosts.*.weight" in view["editable"]
     assert "listen_port" not in view["editable"]
     assert view["affinity"]["ttl_seconds"] == 900
+
+
+# -- the sentence that travels with every field (issue #139) ----------------
+#
+# The parameter table shows a row per field and a reader who does not know the
+# name; the sentence that explains it is part of the schema, not of the page,
+# so a rename has to carry it along. These three tests are what makes that
+# true: a value that is missing, empty or a restatement of its own path fails
+# here, and a new entry in the allow-list without a sentence fails with it.
+
+def _squash(text: str) -> str:
+    """`hosts.*.spill_threshold` and `HOSTS * SPILL THRESHOLD` compare equal."""
+    return text.lower().replace(".", "").replace("_", "")
+
+
+def test_every_help_sentence_is_a_sentence(tmp_path):
+    """Non-empty, at least 20 characters, and it ends in a full stop."""
+    cfg = load_config(write_config(tmp_path))
+    help_text = cfg.summary()["help"]
+
+    assert help_text, "the parameter table has no help at all"
+    assert help_text == FIELD_HELP, "summary() must ship the table, not a copy"
+    for path, sentence in help_text.items():
+        assert isinstance(sentence, str) and sentence.strip(), path
+        assert sentence.endswith("."), f"{path}: no full stop"
+        assert len(sentence) >= 20, f"{path}: too short to explain anything"
+
+
+def test_every_editable_path_has_its_own_sentence():
+    """The allow-list is the list; a new path without a sentence fails here."""
+    for path in EDITABLE_PATHS:
+        assert path in FIELD_HELP, f"{path} may be set at the page but is unexplained"
+        assert FIELD_HELP[path].strip(), f"{path} has an empty sentence"
+
+
+def test_no_sentence_just_repeats_its_path():
+    """`spill_threshold.` is a name twice, not an explanation."""
+    for path, sentence in FIELD_HELP.items():
+        assert _squash(sentence) != _squash(path), f"{path}: the sentence is the path"
+        assert len(_squash(sentence)) > len(_squash(path)), \
+            f"{path}: the sentence says nothing beyond the name"

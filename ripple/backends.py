@@ -18,6 +18,15 @@ import httpx
 ALL_CAPABILITIES = ("availability", "residency", "capacity", "lifecycle",
                     "identity", "prefix_cache")
 
+#: How long a *connect* may take before an address counts as unreachable.
+#: A refused connect answers at once; a blackholed one costs the whole timeout,
+#: and `HostRuntime.resolve()` walks the address list — measured 20.11.2026:
+#: 5.00 s per unreachable address, i.e. 15 s per pass over the four alpha
+#: addresses (issue #117). A LAN connect is milliseconds, so the cap is the
+#: difference between "unreachable" and "slow" and nothing else; the *read*
+#: timeout keeps `timeout`, because a node in a cold load answers late.
+CONNECT_TIMEOUT_SECONDS = 1.5
+
 
 @dataclass
 class Health:
@@ -41,6 +50,11 @@ class ModelInfo:
     actual_size: int | None = None
     context_len: int | None = None
     vision: bool = False
+    # oMLX's own word for what serves the id (`/v1/models/status`): `llm`, `vlm`,
+    # `markitdown`… Kept raw and uninterpreted — the transport parses, the fleet
+    # decides what an engine type means (`Host.model_builtin`, issue #118). An
+    # empty string is "the node did not say", never "an ordinary model".
+    engine_type: str = ""
     last_access: float | None = None
     # oMLX's own loading signals (`/v1/models/status`). None = the backend does
     # not report them, which is not the same as "not loading" — a caller must
@@ -64,11 +78,17 @@ class Backend:
     capabilities: frozenset[str] = frozenset()
 
     def __init__(self, base_url: str, api_key: str = "", *,
-                 client: httpx.AsyncClient, timeout: float = 5.0) -> None:
+                 client: httpx.AsyncClient, timeout: float = 5.0,
+                 connect_timeout: float | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.client = client
         self.timeout = timeout
+        # One cap for every adapter: the connect is the phase an unreachable
+        # address burns, and the resolution pays it once per address in the
+        # list (issue #117).
+        cap = CONNECT_TIMEOUT_SECONDS if connect_timeout is None else connect_timeout
+        self.connect_timeout = min(float(timeout), float(cap))
 
     # -- helpers -----------------------------------------------------------
     def _headers(self) -> dict[str, str]:
@@ -78,8 +98,11 @@ class Backend:
         return h
 
     async def _get(self, path: str, timeout: float | None = None) -> Any:
+        limit = timeout or self.timeout
+        # Connect capped, read at `limit`: an unreachable address must cost the
+        # cap and not the whole probe budget (issue #117).
         r = await self.client.get(self.base_url + path, headers=self._headers(),
-                                  timeout=timeout or self.timeout)
+                                  timeout=httpx.Timeout(limit, connect=self.connect_timeout))
         r.raise_for_status()
         return r.json()
 
@@ -142,6 +165,7 @@ class OmlxBackend(Backend):
                 available=True,
                 context_len=_as_int(m.get("max_model_len")),
                 vision=str(m.get("model_type", "")).lower() in ("vlm", "vision"),
+                engine_type=str(m.get("engine_type") or ""),
             ))
         return out
 
@@ -170,6 +194,7 @@ class OmlxBackend(Backend):
                 context_len=_as_int(m.get("max_context_window") or m.get("model_context_length")),
                 vision=str(m.get("engine_type", "")).lower() in ("vlm", "vision")
                 or str(m.get("model_type", "")).lower() in ("vlm", "vision"),
+                engine_type=str(m.get("engine_type") or ""),
                 last_access=_as_float(m.get("last_access")),
                 is_loading=_as_bool_opt(m.get("is_loading")),
                 loading_started_at=_as_float(m.get("loading_started_at")),

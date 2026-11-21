@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ripple.config import (AffinityConfig, AuthConfig, Config, DiscoveryConfig,
                            FleetConfig, HostConfig, LoadingConfig, PlacementConfig,
-                           ProxyConfig, StatsConfig)
+                           ProxyConfig, StatsConfig, UpdateConfig)
 from ripple.proxy import Ripple
 
 # The M5 figures from the specification (FA-18), in bytes.
@@ -127,6 +127,11 @@ class StubState:
     # A simulated load finishes in the background, like oMLX's queued load; the
     # reference keeps the task from being collected mid-flight.
     load_tasks: list[Any] = field(default_factory=list)
+    # What a simulated load evicts on the node (issue #119): oMLX drops models
+    # in LRU order on its own when a load does not fit, and a preload has to be
+    # able to see whom it displaced. `{model_id: [ids]}` — the models that lose
+    # their residency when that model is loaded.
+    evict_on_load: dict[str, list[str]] = field(default_factory=dict)
     # What `GET /admin/api/activity` reports (issue #33): the node's own view of
     # what it is doing right now. `activity_models` replaces the whole list for a
     # test that needs a shape the two counters cannot express.
@@ -359,6 +364,12 @@ def build_stub_app(state: StubState) -> FastAPI:
         if state.load_simulates:
             # The model becomes resident the way oMLX does it: `is_loading` true
             # and `loaded` still false while it works, then both flip.
+            for gone in state.evict_on_load.get(model_id, []):
+                victim = state.model(gone)
+                if victim is not None:
+                    victim.loaded = False
+                    victim.is_loading = False
+                    victim.loading_started_at = None
             state.start_load(model_id, started_at=state.load_started_at)
             state.load_tasks.append(
                 asyncio.create_task(_finish_load_later(state, model_id)))
@@ -435,9 +446,9 @@ class StubUpstream:
         self._server: uvicorn.Server | None = None
         self._thread: threading.Thread | None = None
 
-    def start(self) -> "StubUpstream":
+    def start(self, port: int = 0) -> "StubUpstream":
         server = uvicorn.Server(uvicorn.Config(
-            self.app, host="127.0.0.1", port=0, log_config=None,
+            self.app, host="127.0.0.1", port=port, log_config=None,
             access_log=False, lifespan="off", timeout_graceful_shutdown=1))
         thread = threading.Thread(target=server.run, name="stub-upstream",
                                   daemon=True)
@@ -528,6 +539,12 @@ def make_config(hosts: list[HostConfig], *,
     # The background refresh must not change state in the middle of a test.
     cfg.discovery = discovery or DiscoveryConfig(interval_seconds=3600.0,
                                                  timeout_seconds=2.0)
+    # The start-up update check (issue #123) reaches the internet, so it is OFF
+    # for every test that does not ask for it: a suite must not depend on
+    # GitHub being reachable, and a test that measures start-up must not pay a
+    # timeout for a hint. `tests/test_update.py` turns it back on with a stub.
+    if cfg.update.check and cfg.update.url == UpdateConfig().url:
+        cfg.update = replace(cfg.update, check=False)
     if proxy is not None:
         cfg.proxy = proxy
     return cfg

@@ -17,7 +17,18 @@ from .config import Config, ConfigError, load_config
 
 #: `ripple <word>` — the first-run commands. Each module owns its own flags and
 #: returns an exit code; `main()` only decides which one runs.
-SUBCOMMANDS = ("init", "discover", "doctor")
+FIRST_RUN_WORDS = ("init", "discover", "doctor")
+
+#: `ripple <word>` — the service commands (#121). One module owns all five, and
+#: `ripple` with no word at all is `start`.
+SERVICE_WORDS = ("start", "status", "shutdown", "restart", "update")
+
+#: `ripple -perm` (#122) — autostart, which is a flag rather than a word because
+#: it qualifies `shutdown` too. It has to be routed before argparse sees it,
+#: otherwise the foreground parser would answer "unrecognized arguments".
+AUTOSTART_FLAG = "-perm"
+
+SUBCOMMANDS = FIRST_RUN_WORDS + SERVICE_WORDS
 
 
 def _same_file(stream: object, path: Path) -> bool:
@@ -132,19 +143,102 @@ async def run_check(cfg: Config) -> int:
         await fleet.stop()
 
 
+def run_foreground(cfg: Config) -> int:
+    """Run the proxy in this process until it stops — the blocking code path.
+
+    This is what launchd calls (`python -m ripple --config …`), what
+    `deploy/start-ripple.command` ends up in, and what `ripple` alone runs when
+    no launchd job owns the service (#121). One function, so the three cannot
+    drift apart.
+    """
+    import uvicorn
+    from .proxy import Ripple
+
+    # Issue #81: one line, once, at start-up — the same sentence `ripple
+    # doctor` reports, built in one place (`Config.rebind_cannot_fire`). A
+    # rebind that can never fire is otherwise invisible: the proxy runs,
+    # requests are served, and only the balancing between nodes is missing.
+    _rebind_finding = cfg.rebind_cannot_fire()
+    if _rebind_finding is not None:
+        logging.getLogger("ripple").warning("%s", _rebind_finding)
+
+    app = Ripple(cfg).app
+    # `proxy_headers=False`: uvicorn's own middleware rewrites `scope["client"]`
+    # from `X-Forwarded-For` for every loopback peer — so any local process could
+    # write its own origin into the request log, and slip past the loopback auth
+    # exemption (observed live: `X-Forwarded-For: 1.2.3.4` from 127.0.0.1 was
+    # logged as `from=1.2.3.4` and answered 401). The one trust list is
+    # `proxy.trusted_proxies`, applied in `Ripple.client_address`; uvicorn must
+    # not decide this behind it.
+    uvicorn.run(app, host=cfg.listen_host, port=cfg.listen_port,
+                log_config=None, access_log=False, timeout_keep_alive=65,
+                proxy_headers=False)
+    return 0
+
+
+_HELP_EPILOG = """\
+service commands (issue #121) — every one of them reads RIPPLE_LABEL (default
+ai.ripple) and RIPPLE_PORT (default: listen_port from the config):
+  ripple              start here, or report that it already runs (exit 0)
+  ripple status       running/stopped, pid, port, version, uptime, log path
+  ripple shutdown     stop now — the launchd job if there is one, else the
+                      listener; the job stays installed, so it returns at login
+  ripple restart      stop, start, wait until the dashboard answers, report seconds
+  ripple update       fetch, run the suite, restart — only if the suite is green
+
+autostart (issue #122) — the switch for "runs by itself after a login":
+  ripple -perm        autostart ON: render the launchd job from THIS checkout,
+                      install it and start it. It starts at login and is kept
+                      running. A manual instance on the port keeps running;
+                      launchd takes over at the next login. Prints one line:
+                      autostart: on (ai.ripple, /path/to/checkout)
+  ripple shutdown -perm
+                      autostart OFF: stop the proxy first, then remove the job,
+                      then verify both (launchctl print fails, no listener).
+                      Prints one line: autostart: off (ai.ripple)
+  -perm alone is ON; -perm after `shutdown` is OFF; with start/status/restart/
+  update it is refused, because none of them changes autostart.
+
+first-run commands: ripple init, ripple discover, ripple doctor
+
+The flags above belong to the foreground run (`ripple` alone, and exactly what
+the launchd job calls). `ripple update` runs the suite named by
+RIPPLE_UPDATE_SUITE (default: `<venv python> -m pytest -q`); RIPPLE_CONFIG and
+RIPPLE_PLIST override the config file and the LaunchAgent path.
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
     # Subcommands first, and by hand rather than through argparse subparsers:
     # `ripple --config x` has to keep working exactly as before, and a subparser
     # would swallow the flags that come before the word. One word, one module —
-    # `ripple init`, `ripple discover`, `ripple doctor`.
+    # `ripple init`, `ripple discover`, `ripple doctor` for the first run, and
+    # `ripple start|status|shutdown|restart|update` for the service (#121).
     raw = list(sys.argv[1:] if argv is None else argv)
-    if raw and raw[0] in SUBCOMMANDS and not raw[0].startswith("-"):
-        name = raw[0]
-        module = importlib.import_module(f".{name}", __package__)
-        return int(module.main(raw[1:]))
+    if AUTOSTART_FLAG in raw:
+        # `ripple -perm` and `ripple shutdown -perm` (#122). Routed here, before
+        # the foreground parser, because `-perm` is not one of its options — and
+        # before the word dispatch, because service.main() is the one place that
+        # decides whether the flag fits the word (`shutdown`) or not.
+        from . import service
+        return service.main(raw)
+    if raw and not raw[0].startswith("-"):
+        if raw[0] in SERVICE_WORDS:
+            from . import service
+            return service.main(raw)
+        if raw[0] in FIRST_RUN_WORDS:
+            module = importlib.import_module(f".{raw[0]}", __package__)
+            return int(module.main(raw[1:]))
+    if not raw:
+        # `ripple` alone means start: report a running launchd job, or run in
+        # the foreground. It must not race a second instance onto the port.
+        from . import service
+        return service.main([])
 
     p = argparse.ArgumentParser(prog="ripple", description="RIPPLE — thread-based "
-                                "placement proxy in front of several oMLX instances")
+                                "placement proxy in front of several oMLX instances",
+                                epilog=_HELP_EPILOG,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-c", "--config", default="config.yaml",
                    help="path to the YAML configuration (default: config.yaml)")
     p.add_argument("--check", action="store_true",
@@ -183,29 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_reinit())
         return 0
 
-    import uvicorn
-    from .proxy import Ripple
-
-    # Issue #81: one line, once, at start-up — the same sentence `ripple
-    # doctor` reports, built in one place (`Config.rebind_cannot_fire`). A
-    # rebind that can never fire is otherwise invisible: the proxy runs,
-    # requests are served, and only the balancing between nodes is missing.
-    _rebind_finding = cfg.rebind_cannot_fire()
-    if _rebind_finding is not None:
-        logging.getLogger("ripple").warning("%s", _rebind_finding)
-
-    app = Ripple(cfg).app
-    # `proxy_headers=False`: uvicorn's own middleware rewrites `scope["client"]`
-    # from `X-Forwarded-For` for every loopback peer — so any local process could
-    # write its own origin into the request log, and slip past the loopback auth
-    # exemption (observed live: `X-Forwarded-For: 1.2.3.4` from 127.0.0.1 was
-    # logged as `from=1.2.3.4` and answered 401). The one trust list is
-    # `proxy.trusted_proxies`, applied in `Ripple.client_address`; uvicorn must
-    # not decide this behind it.
-    uvicorn.run(app, host=cfg.listen_host, port=cfg.listen_port,
-                log_config=None, access_log=False, timeout_keep_alive=65,
-                proxy_headers=False)
-    return 0
+    return run_foreground(cfg)
 
 
 if __name__ == "__main__":

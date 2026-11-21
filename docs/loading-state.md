@@ -108,6 +108,55 @@ Rules:
 3. **Ceiling.** `loading` ends at the latest after `placement.loading.max_seconds`
    (default 900 s), so a hung load cannot suspend probes forever.
 
+## 5a. Preload of a locked model (issue #119)
+
+A lock (issue #21) promises that a model stays resident. Until now nothing
+delivered that promise: after an oMLX restart, or after the end of a maintenance
+window, the node was healthy and empty, so the first thread paid the cold load
+(65,8 s measured on the M5, ~2 min on the M3) although the operator's intent was
+"this model is always there".
+
+The rule: **a locked model is loaded as soon as its host is healthy** — at
+start-up and after every maintenance window — on every host whose allow-list
+contains it. It is a fourth way into the loading state, and it uses the same
+representation as the other three (`source: "preload"`):
+
+1. **The trigger is the health transition**, not a poller of its own. The
+   transition into a healthy verdict already marks `relearn_due` (issue #86);
+   `preload_due` is set on the same line. The probe tick that then re-reads the
+   model list hands the pass to `Fleet.schedule_preload()`. A second trigger is
+   the end of a maintenance window (`proxy._apply_windows`): the node was healthy
+   all through the window, so no probe transition would ever fire for it.
+2. **Never in the request path, never in the lifespan.** The pass is a background
+   task (`ripple-preload-<host>`, one task per model inside it), and the loading
+   state suspends the node's probes exactly as it does for a dispatched load. A
+   432 GB warm load inside the startup would be the defect of issue #117 at a
+   larger scale.
+3. **The gates**: the model must be locked, present on the node, permitted by the
+   allow-list and the policy, not a builtin (a virtual engine has no weights), not
+   resident, not already loading, the node must not be in a maintenance window and
+   no other load may be running on it.
+4. **The lock wins an eviction.** If the load displaces an unlocked model, that is
+   intended — oMLX evicts in LRU order on its own. What it displaced is read back
+   from the residency answer, logged (`preload_evict host=… model=… displaced=…`)
+   and kept in `hosts[].displaced` / `models[].hosts[].evicted_by`, so the model
+   view says why a model went instead of just showing it cold.
+5. **What does not fit fails loudly, once.** Two 400 GB models do not fit on one
+   512 GB host. The forecast (`HostRuntime.preload_forecast`, the same arithmetic
+   as FA-18) names the shortfall — `does not fit: 400.0 GB needed, 40.8 GB free;
+   DeepSeek… is locked and cannot be evicted` — and the attempt is recorded as
+   `failed` in `hosts[].preloads`. **There is no retry loop**: the next attempt is
+   the next healthy transition, not the next probe tick.
+6. **One attempt per (host, model) per healthy transition.** A pass runs at most
+   once per transition, models are loaded one after another (two at once would
+   make oMLX thrash instead of reporting which one lost), and a pass that finds a
+   load already running on the node does nothing.
+7. **Routing is unchanged.** A locked, cold model stays non-routable (issue
+   #116); preloading changes residency, not dispatch.
+
+Tests: `tests/test_preload.py` — all of it against the stub, and
+`fleet.await_preloads()` instead of a sleep long enough for a 432 GB load.
+
 ## 6. Calibration
 
 ### 6.1 UI

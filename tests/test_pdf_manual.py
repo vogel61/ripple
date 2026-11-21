@@ -7,7 +7,7 @@ the manual it claims to be. This file is the thing that notices, in two layers:
 
 **(a) Always, in every pytest run, in under a second.** The preconditions: the
 tool exists and has a `--help` that runs without building anything; the manual and
-all 15 pictures it references exist; `dist/` — where the PDF lands — is ignored by
+all 16 pictures it references exist; `dist/` — where the PDF lands — is ignored by
 git, so a run leaves `git status` clean; the style sheet still carries the print
 contract (A4, 20 mm, 10.5 pt, 1.45); and the two pure helpers behave.
 
@@ -16,7 +16,7 @@ it) or an existing `dist/ripple-manual-en.pdf` (check what is there). This layer
 needs Chrome and poppler and takes a couple of seconds, which is why it is not in
 every run. It checks the *product* against the *source*: the page count is
 plausible, the last chapter of the manual is in the PDF, the two sentences the
-manual is accepted on are in it, all 15 pictures are embedded, no page is empty,
+manual is accepted on are in it, all 16 pictures are embedded, no page is empty,
 and every page carries its number.
 
 The markers are read from `docs/manual-en.md` where they can be — the last
@@ -49,7 +49,7 @@ PDF = ROOT / "dist" / "ripple-manual-en.pdf"
 # The manual's own count. It is a constant because a change in it is a change to
 # the manual's shape, and that is worth seeing in a diff rather than discovering
 # as a smaller PDF.
-PICTURES = 15
+PICTURES = 16
 
 
 def _tool(name: str) -> str | None:

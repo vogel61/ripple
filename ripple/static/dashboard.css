@@ -147,6 +147,18 @@
      font-size:40px;font-weight:400;letter-spacing:.02em;line-height:1.05;
      color:#9BBA7D;text-transform:uppercase}
   .tagline{margin:6px 0 0;color:var(--fg-3);font-size:var(--t-s);letter-spacing:.01em}
+  /* The update offer (issue #123): one line under the tagline, and only when a
+     newer release exists — `:empty` is what makes the placeholder cost no height
+     in the normal case, without the page toggling a class. It is a link (the
+     release page) plus the command to run; nothing here installs anything. */
+  .update-hint{margin:8px 0 0;font-size:var(--t-s);line-height:1.5}
+  .update-hint:empty{display:none}
+  .update-hint a{color:var(--ok-bright);text-decoration:none;
+                 border-bottom:1px dotted var(--ok-bright);cursor:pointer}
+  .update-hint a:hover{color:var(--fg);border-bottom-color:var(--fg-3)}
+  .update-hint code{color:var(--fg-2);background:var(--surface-2);
+                    border:1px solid var(--line-2);border-radius:4px;
+                    padding:0 5px;white-space:nowrap}
   /* Sprache, Beschriftung und Uhr in einer Zeile (#57): darunter stand die
      Herkunft in drei Zeilen und machte den Kopf 163 px hoch, obwohl die
      Wortmarke nur 67 braucht. */
@@ -166,6 +178,52 @@
     padding:3px 6px;cursor:pointer;max-width:11em}
   .lang select:hover{color:var(--fg);border-color:var(--line-3)}
   .lang select:focus-visible{outline:2px solid var(--ok-bright);outline-offset:1px}
+  /* ── Admin-Modus im Masthead (issue #130) ───────────────────────────────── */
+  /* Drei Zustände, drei Aussagen — und der Unterschied liegt in der FORM, nicht
+     nur im Ton: `read-only` trägt einen offenen Bügel (der nach rechts
+     weggeschoben ist und den Körper nicht berührt), `admin` einen
+     geschlossenen. Das hält in Graustufen, wie die sieben Knotenzustände. Das
+     Schloss ist mit zwei Rahmen gezeichnet, nicht als Emoji: ein Emoji-Lock
+     bringt seine eigene Farbe mit und würde neben `--accent` schmutzig. */
+  .adminmode{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;
+             justify-content:flex-end}
+  .adminchip{appearance:none;-webkit-appearance:none;display:inline-flex;
+    align-items:center;gap:6px;font:inherit;font-size:var(--t-xs);
+    letter-spacing:.02em;color:var(--fg-3);background:var(--surface-2);
+    border:1px solid var(--line-2);border-radius:6px;padding:3px 8px;
+    cursor:pointer;white-space:nowrap}
+  .adminchip:hover{color:var(--fg-2);border-color:var(--line-3)}
+  .adminchip:focus-visible{outline:2px solid var(--ok-bright);outline-offset:1px}
+  /* Der geschlossene Bügel ist die Ausnahme: nur im Admin-Modus ist der Chip
+     der Akzent der Seite, und nur dort ist er eine Aussage über Rechte. */
+  .adminchip[data-state="admin"]{color:var(--accent);background:var(--accent-dim);
+    border-color:var(--accent)}
+  .adminchip[data-state="checking"]{color:var(--fg-2);opacity:.75;cursor:progress}
+  .adminchip .lock{position:relative;display:inline-block;width:9px;height:7px;
+    border:1.5px solid currentColor;border-radius:2px;flex:0 0 auto}
+  .adminchip .lock::before{content:"";position:absolute;left:1px;top:-5px;
+    width:5px;height:4px;border:1.5px solid currentColor;border-bottom:0;
+    border-radius:3px 3px 0 0}
+  .adminchip[data-state="readonly"] .lock::before{left:4px}
+  .adminchip[data-state="checking"] .lock::before{left:2px;opacity:.6}
+  .adminout{font-size:var(--t-xs);padding:3px 8px}
+  /* Das Feld steht unter dem Chip und wächst nur, solange es offen ist; die
+     Meldung sitzt darin, weil sie genau dann gebraucht wird, wenn das Feld
+     offen bleibt (401). */
+  .adminask{display:flex;flex-direction:column;gap:4px;align-items:flex-end;
+            text-align:right}
+  .adminask[hidden]{display:none}
+  .adminrow{display:flex;align-items:center;gap:6px}
+  .adminlbl{font-size:var(--t-xs);color:var(--fg-3);white-space:nowrap}
+  .adminask input{font:inherit;font-size:var(--t-xs);color:var(--fg);
+    background:var(--surface-3);border:1px solid var(--line-2);border-radius:6px;
+    padding:3px 6px;width:13em;max-width:42vw}
+  .adminask input:focus-visible{outline:2px solid var(--ok-bright);outline-offset:1px}
+  /* Die abgelehnte Eingabe ist ein Hinweis, kein Fehler der Seite: `--warn`,
+     nicht `--down` — nichts ist kaputt, der Schlüssel passt nur nicht. */
+  .adminmsg{margin:0;font-size:var(--t-xs);line-height:1.4;color:var(--warn);
+            max-width:22em}
+  .adminmsg:empty{display:none}
   .snap-label{font-size:var(--t-xs);text-transform:uppercase;letter-spacing:.10em;color:var(--fg-3);font-weight:600}
   .snap-time{font-size:var(--t-l);font-weight:600;letter-spacing:.01em;margin-top:2px}
   /* Nicht sichtbar: der Text ist der Tooltip der Uhr (siehe `snapWhen` in
@@ -474,27 +532,44 @@
   /* Seit #73 teilt sich `2` die Zeile nicht mehr mit der Thread-Registry (die
      hat einen eigenen Tab): was bleibt, ist der Vergleich der Modelle
      untereinander. `auto-fit` legt sie nebeneinander, solange ein Block seine
-     Mindestbreite bekommt — bei 1440 px sind das zwei Blöcke zu je 660 px,
-     ein dritter Modellblock geht in die zweite Zeile. Unter 900 px stapeln sie
-     (siehe Media-Query): dort sind zwei halbe Spalten zwei unlesbare Spalten.
+     Mindestbreite bekommt; unter 900 px stapeln sie (siehe Media-Query): dort
+     sind zwei halbe Spalten zwei unlesbare Spalten.
 
-     Die Spur ist seit #80 oben begrenzt (`660px` statt `1fr`): ein Modell mit
-     Arbeit bekam vorher die ganze Zeile — 1361 px Block, 1061 px Balken für
-     eine Zahl zwischen 0 und 100 %, und der Betreiber las die Zeile wie ein
-     Lineal. Was rechts frei bleibt, ist gewollt: zwei Blöcke teilen sich die
-     Zeile, ein einzelner bleibt schmal.
-     `width:max-content` ist der Grund, warum rechts keine graue Fläche steht:
-     `--line` ist der Grund des Containers, und der Container endet jetzt an
-     der letzten Spur statt am Rand der Seite (gemessen: rechts vom Block steht
-     die Seite, `#12161c`/`#0b0d11`, nicht `--line`). `max-width:100%` hält den
-     Leer-Hinweis davon ab, die Seite zu schieben. */
-  #dist{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,660px));
+     Die Spur ist seit #80 oben begrenzt: ein Modell mit Arbeit bekam vorher die
+     ganze Zeile — 1361 px Block, 1061 px Balken für eine Zahl zwischen 0 und
+     100 %, und der Betreiber las die Zeile wie ein Lineal. Der Deckel bleibt,
+     aber er sitzt seit #127 auf dem **einzelnen** Block (`:only-child`), nicht
+     auf jeder Spur.
+
+     Bis #127 stand hier `width:max-content` mit Spuren `minmax(380px,660px)`:
+     der Container schrumpfte auf seinen Inhalt (660 + 1 + 660 = 1321 px) in
+     einer 1361 px breiten Sektion, und die 38 px rechts las der Betreiber als
+     Lücke neben dem zweiten Block. Gemessen vorher/nachher bei 1440 px:
+     Container 1323 → 1361 px, Spuren 660+660 → 679+679, rechter Blockrand =
+     Zeilenrand; bei 1100 px 1021 → 1021, Spuren 509+509. Drei Blöcke bleiben
+     zwei Spalten, der dritte bricht um; ein einzelner bleibt bei 660 px.
+
+     `minmax(470px,1fr)` statt `380px`: die Zeile im Block ist
+     81 + 1fr + 82 + 71 + 89 + 95 = 418 px fix plus Innenabstand — bei drei
+     gleich breiten Spalten von ~453 px kollabierte die Knotenspalte. 470
+     erzwingt bei 1361 px zwei Spalten und hält die Innenzeile heil.
+
+     `--line` ist der Grund des Containers, und die Haarlinie zwischen zwei
+     Blöcken ist genau diese Fläche: deshalb bleibt `gap:1px` mit
+     `background:var(--line)`. Dass eine leere Zelle in der zweiten Zeile (drei
+     Blöcke in zwei Spalten) als graues Feld steht, ist seit #80 so und nicht
+     Teil dieser Änderung. */
+  #dist{display:grid;grid-template-columns:repeat(auto-fit,minmax(470px,1fr));
         gap:1px;background:var(--line);overflow:hidden;
-        width:max-content;max-width:100%}
+        width:100%;max-width:100%}
   /* Die Blöcke tragen die Fläche, die Lücke zwischen ihnen ist die Haarlinie —
      so stimmt die Trennung bei zwei Blöcken, bei dreien und in der zweiten
      Zeile, ohne dass eine Regel zählen muss, wer in welcher Spalte steht. */
   #dist > .dist-block{background:var(--surface)}
+  /* Ein einzelner Modellblock bleibt schmal (#80, #127): er bekommt die volle
+     Spur, aber nicht die volle Zeile. `:not(.dist-solo)` ist nötig, weil der
+     Leer-Hinweis dieselbe Klasse trägt — der soll die Zeile behalten. */
+  #dist > .dist-block:only-child:not(.dist-solo){max-width:660px}
   /* Ein einzelner Block (keine Modelle mit Arbeit) nimmt die ganze Zeile —
      sonst sähe die halbe Spalte daneben wie ein fehlender Block aus. */
   #dist > .dist-solo{grid-column:1/-1}
@@ -527,34 +602,66 @@
   tbody tr:last-child td{border-bottom:0}
   tbody tr:hover td{background:rgba(255,255,255,.022)}
   td.num{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+  /* tok/s ist die Zahl, für die man die Modelltabelle öffnet (seit 21.11.2026
+     direkt hinter LOADED): sie steht als einzige in Fettdruck und in voller
+     Kontrastfarbe. Rechtsbündig bleibt sie trotzdem — fett und rechtsbündig ist
+     eine Zahlenkolonne, fett und linksbündig wäre eine zweite Flucht. */
+  td.dtps{font-weight:600;color:var(--fg)}
+  /* `vertical-align:top` ist keine Kosmetik: eine Tabellenzelle zentriert ihren
+     Inhalt von Haus aus, und weil die Namenszelle eines Modells über mehrere
+     Knotenzeilen läuft, hing die Höhe des Schlosses an der Zellhöhe — gemessen
+     am 21.11.2026 lag es in kurzen Zellen 2 px unter dem Zellrand, in langen
+     18 px. Mit `top` steht der Inhalt in jeder Zelle an derselben Stelle. */
   .model-cell{font-family:var(--mono);font-size:var(--t-s);color:var(--fg);
-              overflow:hidden}
+              overflow:hidden;vertical-align:top}
   /* Der Modellname kürzt weiter mit „…“, jetzt auf seiner eigenen Zeile: über
      ihm steht seit #23 das Schloss, und eine Zeile mit zwei Blöcken kann nicht
      mehr am `td` abgeschnitten werden. Das Abzeichen „nicht routbar“ wandert
      mit in die Zeile, damit es wie bisher an den Namen anschließt. */
   .model-line{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-  /* ── Das Schloss des Locks (Betreiberaktion, issue #23) ─────────────────── */
+  /* ── Das Schloss des Locks (Betreiberaktion, issue #23/#118) ────────────── */
   /* Eine Zeile ist ein (Modell, Knoten)-Paar, der Lock gilt aber je Modell —
      deshalb steht das Schloss in der Modellzelle, linksbündig über dem Namen,
-     und nicht in der Knotenspalte. Offen ist es `--ok` (RIPPLE darf verdrängen),
-     geschlossen `--down`, und der Modellname nimmt dann die Farbe der
-     Ladephase (`--load`): das Modell ist gesperrt, nicht kaputt. Kein Icon-Set
-     (FA-22) — das SVG bringt seine Pfade mit und nimmt die Farbe aus
-     `currentColor`, also aus diesen Regeln. Keine Animation: für das Schloss
-     gibt es nichts zu blinken, und `prefers-reduced-motion` bleibt unberührt. */
-  /* 26 px statt 13 (Betreiberkorrektur 16.11.: „winzig") und optisch höher.
-     `top` verschiebt nur die Malposition, nicht den Fluss; das negative
-     `margin-bottom` nimmt dem Modellnamen genau die Höhe wieder weg, die das
-     größere Icon ihm sonst nach unten zuschieben würde. Mehr als 9 px nach oben
-     geht nicht: die Zelle hat oben 5 px Innenabstand und der Knopf sitzt 4,6 px
-     darunter — bei 15 px (4 mm) malt das Schloss in die Zeile darüber. */
-  .model-lock{display:inline-block;position:relative;top:-5px;margin:0 0 -11px;padding:0;border:0;
-              background:none;color:var(--ok);line-height:0;cursor:pointer}
+     und nicht in der Knotenspalte, und deshalb trägt **jede** Modellzeile eins
+     (issue #118: sperrbar ist ein Modell, ob geladen, routbar oder in der
+     Allow-List — oder nicht). Offen ist es neutral (`--fg-2`): ein ungesperrtes
+     Modell ist der ungeschützte Zustand, keine gute Nachricht, und Grün wäre
+     hier ein Lob für das Fehlen einer Entscheidung. Geschlossen ist es `--down`
+     (rot), und der Modellname nimmt dann die Farbe der Ladephase (`--load`): das
+     Modell ist gesperrt, nicht kaputt. Kein Icon-Set (FA-22) — das SVG bringt
+     seine Pfade mit und nimmt die Farbe aus `currentColor`, also aus diesen
+     Regeln. Keine Animation: für das Schloss gibt es nichts zu blinken, und
+     `prefers-reduced-motion` bleibt unberührt. */
+  /* 26 px statt 13 (Betreiberkorrektur 16.11.: „winzig"). `top` verschiebt nur
+     die Malposition, nicht den Fluss; das negative `margin-bottom` nimmt dem
+     Modellnamen die Höhe wieder weg, die das größere Icon ihm sonst zuschieben
+     würde. `top:1px` setzt es mittig in den Streifen zwischen dem oberen
+     Zellrand und dem Modellnamen (Betreiberkorrektur 21.11.: „sie kleben
+     oben"); mit `vertical-align:top` an der Zelle ist der Abstand in jeder
+     Zelle derselbe, gemessen 8 px über und 8 px unter dem Schloss. */
+  /* Das Schloss erbt die Punktlinie von `.tip`, und die hat hier keine Funktion:
+     sie sagt „hier steht Text, den man lesen sollte", und unter einem Glyph ist
+     das eine Unterstreichung von nichts. Der Betreiber hat sie am 21.11.2026
+     abgelehnt — sie macht das Schloss außerdem breiter als die Zeichen daneben. */
+  .model-lock.tip{border-bottom:0}
+  .model-lock{display:inline-block;position:relative;top:1px;margin:0 0 -11px;padding:0;border:0;
+              background:none;color:var(--fg-2);line-height:0;cursor:pointer}
   .model-lock svg{display:block}
   .model-lock[data-locked="1"]{color:var(--down)}
-  /* Ohne Admin-Schlüssel sichtbar, aber wirkungslos — der Tooltip sagt warum. */
+  /* Der dritte Zustand (issue #126): gesperrt, aber auf keinem Host resident
+     machbar. Amber statt Rot — der Lock ist gespeichert und bleibt es, er wirkt
+     nur gerade nicht; Rot hieße „abgelehnt", und abgelehnt wird hier nichts.
+     Zwei Träger ohne Farbkanal: die Kontur um das Schloss und das
+     Ausrufezeichen oben rechts. Die Regel steht **nach** der geschlossenen,
+     damit ihr Ton deren Rot überstimmt; `data-warn` setzt nur der Warnzustand. */
+  .model-lock[data-warn="1"]{color:var(--warn);
+                             box-shadow:0 0 0 2px var(--warn-bg),0 0 0 3px var(--warn-bd)}
+  .model-lock[data-warn="1"]::after{content:"!";position:absolute;top:-4px;right:-5px;
+                                    font-size:12px;font-weight:700;line-height:1;
+                                    color:var(--warn)}
+  /* Ohne Admin-Schlüssel sichtbar, aber wirkungslos — der Tooltip sagt warum.
+     Dasselbe für ein oMLX-Builtin (#118), das nie aufhebbar ist. */
   .model-lock[aria-disabled="true"]{cursor:not-allowed;opacity:.55}
   .model-lock[data-locked="1"] ~ .model-line .model-name{color:var(--load)}
   tr.group-start td{border-top:2px solid var(--line-2)}
@@ -597,6 +704,31 @@
   /* „nicht routbar“ ist ein Ausfall dieses (Modell, Knoten)-Paares und trägt
      deshalb das Rot des Zustands `down` — dieselbe Farbe wie die Marke oben,
      nicht das neutrale Grau von vorher (#19). */
+  /* Seit #139 steht hier ein Zeichen statt eines Kastens: `not routable` war als
+     Chip 84 x 35 px in einer 100 px breiten Zelle und brach auf zwei Zeilen. Das
+     Tabler-`route-off` sagt dasselbe, in derselben Farbe; der Grund steht im
+     Tooltip. Es steht neben dem Schloss und in derselben Aufhängung: das Schloss
+     sitzt inline vor dem Namen, um -5 px gehoben und mit -11 px Unterkante, damit
+     es keine Zeilenhöhe kostet. Das Zeichen ist 24 px hoch (14 x 1,7) und braucht
+     deshalb eine eigene Hebung und einen eigenen negativen Rand, sonst schiebt es
+     die Zeile um seine Höhe auseinander.
+
+     Die Höhe ist gemessen, nicht geschätzt: das Zeichen saß in seiner statischen
+     Lage 3 px unter dem Schloss, und beide Glyphen tragen rund 3 px Leerfläche
+     über der Tusche in ihrem 24er Kasten (Schloss 3,3 px, Route 3,0 px) — die
+     Leerfläche war also nicht die Ursache, die Kastenlage war es. Schloss und
+     Zeichen tragen deshalb dieselbe Malposition (`top:1px`, seit der
+     Betreiberkorrektur vom 21.11. mittig im Streifen über dem Namen), und ihre
+     gezeichneten Flächen liegen aufeinander: Oberkante 0,3 px, Unterkante
+     0,7 px Unterschied. Der Dotted-Unterstrich von `.tip` gehört nicht an ein
+     Zeichen — es ist keine Textstelle, die man unterstreicht. */
+  .nrt{display:inline-block;vertical-align:top;position:relative;top:1px;
+       margin:0 2px -18px 3px;color:var(--down);cursor:help;line-height:0}
+  /* Grün heißt: RIPPLE liefert dieses Modell an diesen Knoten aus — `--ok-bright`
+     ist der Partner des roten `--down`, gleiche Helligkeit auf demselben Grund. */
+  .nrt.ok{color:var(--ok-bright)}
+  .nrt svg{display:block}
+  .nrt.tip{border-bottom:0}
   .badge{display:inline-block;padding:1px 7px;border-radius:999px;background:var(--down-bg);
          border:1px solid var(--down-bd);font-size:var(--t-xs);color:var(--down);font-weight:500;
          letter-spacing:0;text-transform:none}
@@ -672,6 +804,14 @@
   #load .lr-lead b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}
   #load .loadbar{display:flex;height:14px;border-radius:3px;overflow:hidden;
                  background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--line)}
+  /* Die Summenzeile bekommt einen 50 % höheren Balken (14 → 21 px): die graue
+     Linie allein trägt den Schnitt nicht — sie ist 1 px in `--line-3` über die
+     volle Breite und liest sich als Tabellenlinie, nicht als „hier endet die
+     Aufzählung, hier beginnt die Summe" (Betreiber-Fund 21.11.2026). Die Höhe
+     ist der Unterschied, den man ohne Hinsehen sieht: die Summe ist die Zeile,
+     die mehr Fläche beansprucht. Die Segmentfarben bleiben gleich — sonst wäre
+     die Summe eine andere Größe, nicht dieselbe Größe größer. */
+  #load .loadrow.total .loadbar{height:21px}
   #load .loadbar .seg{display:block;height:100%;transition:filter .12s}
   #load .loadbar .seg:hover{filter:brightness(1.35)}
   #load .loadbar.empty{background:repeating-linear-gradient(
@@ -811,6 +951,23 @@
      dem Blinken vorbehalten. Das Attribut setzt der Renderer; es fehlt bei
      einem ruhenden Thread, deshalb nur `[data-busy="true"]`. */
   .thread-item[data-busy="true"] .th-model{color:var(--ok)}
+  /* A thread that has been silent past `THREAD_SILENT_SECONDS` (#93) still
+     holds its slot, but it is not "running" — the operator reads the thread
+     count that way. The chip carries the word (colour alone never carries the
+     meaning) and the row steps back so a silent thread does not compete with a
+     working one for attention. `data-silent` is absent, not "false", for a
+     thread that is fine: a second truth would have to be kept in step. */
+  .thread-item[data-silent="true"] .th-key,
+  .thread-item[data-silent="true"] .th-model{color:var(--fg-3)}
+  .th-silent{color:var(--warn);border-color:var(--warn-bd);background:var(--warn-bg)}
+  /* Ein `.chip` in der Metazeile wird sonst auf die Höhe des Löschknopfs
+     gestreckt (25,4 px statt 21,4 px): Hintergrund und Rahmen malen die
+     zusätzlichen 4 px unter dem Text mit, und der Kasten steht schief in der
+     Zeile — „still" sah aus wie ein Fehler, „löschen" (ein Knopf mit eigener
+     Polsterung) nicht (Betreiber-Fund 21.11.2026, gemessen: 3 px über, 7,4 px
+     unter dem Text). Chips behalten ihre eigene Höhe und werden mittig gesetzt;
+     gestreckt werden nur Textfelder, deren `.tip` innen sitzt. */
+  .th-meta > .chip{align-self:center}
   .th-meta{font-size:var(--t-xs);color:var(--fg-3);margin-top:5px;display:flex;flex-wrap:wrap;
            gap:0 10px}
   /* Die Felder der Metazeile werden auf die Hoehe des Loeschknopfs gestreckt
@@ -899,6 +1056,15 @@
      in `content` verhält sich nicht in jedem Browser gleich. Der Text kommt aus
      demselben `data-tip`, das die Tests prüfen. */
   .tip{position:relative;cursor:help;border-bottom:1px dotted var(--line-3)}
+  /* Ein Chip ist selbst eine Box mit Rahmen — an ihm ist die punktierte
+     Unterkante des Tooltips doppelt: `.tip` steht später in der Datei als
+     `.chip` und ersetzt dessen unteren Rahmen durch eine graue Punktlinie in
+     `--line-3`. Solange der Chip auf Knopfhöhe gestreckt war (#136), fiel das
+     nicht auf; seit er seine eigene Höhe hat, sitzt die Linie direkt unter dem
+     Text und liest sich als Unterkante des Kastens (Betreiber-Fund 21.11.2026).
+     Der Chip behält seinen Rahmen, den Tooltip trägt weiter `data-tip`. */
+  .chip.tip{border-bottom:1px solid var(--line-2)}
+  .th-silent.tip{border-bottom-color:var(--warn-bd)}
   .tip:hover{border-bottom-color:var(--fg-3)}
   /* Zelle als Ganzes ist der Hover-Zielbereich; nur die Zahl wird markiert. */
   .tip.cell{border-bottom:0;cursor:help}
@@ -936,6 +1102,13 @@
            font-size:var(--t-xs);color:var(--load)}
   .loading b{font-weight:600}
   .loading .src{color:var(--fg-3)}
+  /* Der Preload eines gesperrten Modells (issue #119): der laufende Vorgang
+     bleibt der Ladestreifen oben, diese zwei Zeilen sagen, was nicht ging oder
+     was er gekostet hat. Die Warnfarbe, nicht die Ladefarbe — es ist eine
+     Auskunft an den Betreiber, kein Fortschritt. */
+  .loading.preload-fail,.loading.preload-evict{color:var(--warn)}
+  .loading.preload-fail b,.loading.preload-evict b{font-weight:600}
+  .node-cell .evicted{color:var(--warn);font-size:var(--t-xs);margin-left:4px;cursor:help}
   .card .btn{margin-left:2px}
 
   /* ── Wartung (Betreiberaktion, issue #10) ───────────────────────────────── */
@@ -1104,6 +1277,24 @@
   details.params .ptable col.c-source{width:150px}
   details.params .ptable col.c-reset{width:132px}
   details.params .ptable th,details.params .ptable td{overflow-wrap:break-word}
+  /* Der Knoten-Streifen in der Scope-Zelle (#131). Dieselben sechs Pixel wie in
+     der Flottenkarte, aber im Textfluss statt absolut am Kartenrand: die Zelle
+     ist kein positionierter Block, und ein `position:absolute` müsste hier erst
+     einen Bezugsrahmen erfinden. Der Platz steht in BEIDEN Zeilenarten — ein
+     Knoten bekommt den Streifen, `global`/`placement`/`affinity` einen leeren
+     Slot von genau 6 px + 6 px Abstand, damit der Text aller Zeilen auf
+     derselben Flucht beginnt. Kein Umbruch: die Zelle bleibt einzeilig, auch
+     wenn der Name lang ist. */
+  details.params td.pscope{white-space:nowrap;position:relative;padding-left:12px}
+  /* Der Streifen läuft über die GANZE Zeilenhöhe, nicht über die Textzeile:
+     als 1,1-em-Marke stand er in jeder Zeile als eigener Strich, und die
+     Padding-Lücken machten aus dem Knotenband eine gestrichelte Linie
+     (Betreiber-Fund 21.11.2026). Absolut im Padding-Kasten der Zelle, oben und
+     unten um 1 px über den Rand hinaus, damit auch die Zeilentrennlinie
+     (border-collapse) das Band nicht durchschneidet. */
+  details.params .pscope .host-stripe,details.params .pscope .pslot{
+    position:absolute;left:0;top:-1px;bottom:-1px;width:6px;height:auto;
+    margin:0;border-radius:0;vertical-align:baseline}
   details.params .ptable td.pv{text-align:right}
   details.params .ptable td.pv .pval{margin-right:8px;font-variant-numeric:tabular-nums}
   /* Ein Feld, kein Dialog: die Zahl steht im Wert der Zelle, das Feld daneben
@@ -1130,8 +1321,13 @@
      Wertspalte ihr Feld noch halten kann. Die Tabelle scrollt nicht — sie
      bricht um; ein Feld ist 92 px breit und lässt sich nicht schrumpfen. */
   @media (max-width:1100px){
-    details.params .ptable col.c-scope{width:72px}
-    details.params .ptable col.c-param{width:168px}
+    /* Die Scope-Spalte gibt seit #131 zwölf Pixel an den Streifen ab: bei 72 px
+       lag „placement" (59 px) schon vorher 7 px über dem Innenraum, mit dem Slot
+       wären es 19 px und der Text liefe in die Nachbarspalte. Die zwölf Pixel
+       kommen aus der Parameterspalte, nicht aus der Wertespalte — die trägt das
+       Feld und darf nicht schrumpfen. Summe unverändert 476 px. */
+    details.params .ptable col.c-scope{width:84px}
+    details.params .ptable col.c-param{width:156px}
     details.params .ptable col.c-source{width:108px}
     details.params .ptable col.c-reset{width:128px}
   }
@@ -1158,19 +1354,21 @@
     /* 2.1 untereinander: auf einem Telefon sind zwei Spalten zwei halbe Spalten. */
     #load .load-split{grid-template-columns:minmax(0,1fr)}
     #load .load-side{padding-top:0}
-    /* 2 Verteilung untereinander: ein Block je Modell, in einer Spalte. */
+    /* 2 Verteilung untereinander: ein Block je Modell, in einer Spalte. Die
+       Breite braucht hier keine Ausnahme mehr: bis #127 stand `#dist` auf
+       `max-content` und schrumpfte bei 900 px auf 516 px statt 853 px, was
+       diese Zeile mit `width:auto` überschrieb. Seit #127 ist der Container
+       ohnehin 100 % breit. */
     #dist{grid-template-columns:minmax(0,1fr)}
-    /* Die Spalte nimmt die volle Breite: `max-content` (siehe oben) würde den
-       Block hier auf die Breite seines Inhalts schrumpfen — bei 900 px gemessen
-       516 px statt 853 px. Die graue Fläche kann nicht zurückkommen, weil der
-       einzige Block die Zeile füllt. */
-    #dist{width:auto}
     .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
     .legend{grid-template-columns:repeat(2,minmax(0,1fr))}
     .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s3) var(--s4)}
     .masthead{flex-direction:column;gap:var(--s3)}
     .snapshot{text-align:left}
     .lang{justify-content:flex-start}
+    /* Der Chip folgt der Sprachwahl: auf einem gestapelten Kopf steht die
+       Reihe links, nicht rechts am Rand (#130). */
+    .adminmode{justify-content:flex-start}
   }
   @media (max-width:820px){
     table{font-size:var(--t-xs)}
@@ -1203,8 +1401,16 @@
     .log{overflow-x:auto}
     .log thead th{position:static}
     /* Auf schmalen Fenstern bricht der Modellname um, statt abgeschnitten zu werden:
-       ein halber Modellname ist keine Information. */
-    .model-cell,.model-line{white-space:normal;overflow:visible;overflow-wrap:anywhere;line-height:1.3}
+       ein halber Modellname ist keine Information. Aber nicht beliebig weit: ein
+       Name über vier Zeilen macht die Zeile 127 px hoch, einer über zwei 53 px —
+       in der Liste stechen dann einzelne Einträge heraus (gemessen am 21.11.2026
+       bei 756 px: Höhen 53 · 55 · 77 · 94 · 110 · 126 · 127 px in 24 Zeilen).
+       Zwei Zeilen reichen für rund 40 Zeichen; den Rest tragen `title` und der
+       Tooltip am Schloss. Die Mindesthöhe hält alle Zeilen auf derselben Höhe,
+       damit keiner mehr heraussticht. */
+    .model-cell,.model-line{white-space:normal;overflow:hidden;overflow-wrap:anywhere;line-height:1.3}
+    .model-line{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+                min-height:2.6em}
     /* Das Spaltenraster der Modelltabelle bleibt stehen — die Modellspalte gibt
        die Breite ab, die Unterzeilen bleiben in ihren Spalten. Die zwei
        Prozent-Spalten geben 4 px ab (58 statt 62), die Spalte der Abweichung
@@ -1223,6 +1429,108 @@
     .th-top{grid-template-columns:minmax(0,1fr) auto;row-gap:var(--s2)}
     .th-top > .chip:not(:last-child){grid-column:1;grid-row:2}
     .th-top > .chip:last-child{grid-column:2;grid-row:2}
+  }
+  /* ── Unter 700 px: Tabellen werden Blöcke, keine gequetschten Spalten (#134) ─ */
+  /* Auf einem Telefon war die Tabelle keine Tabelle mehr. `table-layout:fixed`
+     verteilt die Breite nach dem `colgroup`; ist das Panel schmaler als die
+     Summe der festen Spalten, bekommt die eine `auto`-Spalte den negativen Rest
+     — auf 0 geklemmt. Gemessen an einer Live-Instanz (CDP): 6.5 bei 492 px
+     Viewport hatte eine Wertspalte von 0 px und einen `scrollWidth` von 20 px;
+     im Verlauf (390 px, Panel 356) stand eine 622-px-Tabelle in einem 356-px-
+     Kasten, das Modell war 0 px breit, und die Kopfzeilen lagen übereinander.
+     Der Inhalt lief in einem 0-px-Kasten über, und `overflow-wrap:break-word`
+     brach mitten im Token (`0.0.0` / `.0:80` / `10`) — ein Umbruch, der wie ein
+     Tippfehler aussieht.
+
+     Unter 700 px ist deshalb eine Zeile ein Block und ein Wert eine Zeile:
+     `display:block` auf Tabelle, `thead`, `tbody`, `tr` und `td`, die
+     Kopfzeile fort. Das kostet die Tabellensemantik für Screenreader — bewusst
+     hingenommen, weil jeder Wert sein `data-label` behält (aus demselben
+     Katalog wie `thead`, keine neuen Ids) und im Block der Bezeichner sichtbar
+     davor steht. Eine Tabelle, in der die halbe Information in einer
+     abgeschnittenen Kopfzelle hängt, ist für niemanden lesbar.
+
+     Ab 1440 px ändert sich nichts: jede Regel hier steht hinter der 700-px-
+     Grenze, die Spaltenbreiten oben bleiben unberührt. */
+  @media (max-width:700px){
+    /* Beide Tabellen des Betriebsblocks (6.5 mit Feldern und die
+       schreibgeschützte Liste eines älteren Backends) und der Verlauf. */
+    details.params table,details.params table thead,details.params table tbody,
+    details.params table tr,details.params table td,
+    .log table,.log table thead,.log table tbody,.log table tr,.log table td{
+      display:block}
+    details.params table colgroup,details.params table thead,
+    .log table colgroup,.log table thead{display:none}
+
+    /* ── 6.5: eine Zeile = Streifen · Bereich · Parameter / Wert / Herkunft ── */
+    details.params table tr{padding:10px 0;border-top:1px solid var(--line)}
+    details.params table tr:first-child{border-top:0}
+    details.params table td{padding:0;border:0;text-align:left}
+    /* Zeile 1: der Streifen sitzt schon in der Scope-Zelle (#131), der
+       Parameter folgt mit einem `·` und trägt das Gewicht. */
+    details.params table td.pscope{display:inline;color:var(--fg-3);
+                                   white-space:normal;overflow-wrap:anywhere}
+    /* Im Block hängt der Streifen an keiner Zeilenhöhe mehr: er steht wieder als
+       kurze Marke vor dem Namen (die Zelle ist hier inline, ein absolutes Band
+       hätte keinen Bezug). */
+    details.params table td.pscope{position:static;padding-left:0}
+    details.params table td.pscope .host-stripe,
+    details.params table td.pscope .pslot{
+      position:static;display:inline-block;width:6px;height:1.1em;
+      margin-right:6px;vertical-align:-.2em;border-radius:2px}
+    details.params table td.pname{display:inline;font-weight:600;color:var(--fg)}
+    details.params table td.pname::before{content:"· ";color:var(--fg-3);
+                                          font-weight:400}
+    /* Zeile 2: der Wert, Mono, über die volle Panelbreite. `anywhere` ist die
+       Zusage, dass auch ein langer Pfad im Kasten bleibt; ein Token, das passt
+       (`0.0.0.0:8010`), wird nicht gebrochen. Der „Neustart nötig"-Hinweis
+       (`.pwhy`, `display:block`) bleibt beim Wert und steht auf eigener Zeile. */
+    details.params .ptable td.pv,details.params table td.pv,
+    details.params table tr > td:last-child:not(.pr){
+      display:block;margin-top:4px;font-family:var(--mono);font-size:var(--t-s);
+      text-align:left;color:var(--fg);overflow-wrap:anywhere}
+    details.params table td.pv .pwhy{margin-top:3px;font-family:inherit}
+    /* Zeile 3: Herkunft und Zurücksetzen als kleine Chips. Die Herkunft trägt
+       ihren Bezeichner aus `data-label`, der Knopf sagt selbst, was er tut. */
+    details.params table td.ps,details.params table td.pr{
+      display:inline-block;margin-top:8px;vertical-align:middle}
+    details.params table td.ps::before{content:attr(data-label);color:var(--fg-3);
+                                       font-size:var(--t-xs);margin-right:6px}
+    details.params table td.ps .psrc{display:inline-block;padding:0 7px;
+      border-radius:999px;border:1px solid var(--line-2);
+      background:var(--surface-3);color:var(--fg-2)}
+    details.params table td.ps .psrc.page{color:var(--maint);
+      background:var(--maint-bg);border-color:var(--maint-bd)}
+    details.params table td.pr{margin-left:8px}
+    details.params table td.pr:empty{display:none}
+
+    /* ── Verlauf: Zeit + Thread-Schlüssel, darunter beschriftete Paare ─────── */
+    .log table tbody tr{display:flex;flex-wrap:wrap;align-items:baseline;
+                        gap:3px 10px;padding:9px 10px;
+                        border-top:1px solid var(--line)}
+    .log table tbody tr:first-child{border-top:0}
+    .log table td{padding:0;border:0;text-align:left;min-width:0}
+    /* Jeder Wert nennt sich selbst: der Bezeichner steht gedämpft davor. */
+    .log table td[data-label]::before{content:attr(data-label);color:var(--fg-3);
+                                      font-size:var(--t-xs);margin-right:6px}
+    /* Zeile 1: Zeit (so breit wie sie ist) und der Schlüssel daneben. Der
+       Schlüssel ist ein Bezeichner, kein Satz — er bricht erst, wenn er nicht
+       mehr passt (`anywhere`), nicht zeichenweise in einer 0-px-Spalte. Die
+       `order`-Werte holen die Zeit vor das Modell: im Markup steht sie an
+       erster Stelle, der Schlüssel aber an dritter (er gehörte in der Tabelle
+       hinter das Modell). */
+    .log table td.t{flex:0 0 auto;order:1}
+    .log table td.sid{flex:1 1 auto;order:2;white-space:normal;overflow:visible;
+                      text-overflow:clip;overflow-wrap:anywhere;line-height:1.35}
+    /* Jedes weitere Paar hat seine Zeile für sich — bei 356 px Panel wäre eine
+       halbe Zeile wieder eine gequetschte Spalte. */
+    .log table tbody td:not(.t):not(.sid){flex:1 1 100%;order:3}
+    .log table td.m{white-space:normal;overflow:visible;text-overflow:clip;
+                    overflow-wrap:anywhere}
+    .log table td.num{text-align:left}
+    .log table .dur{justify-content:flex-start}
+    .log table .chip{white-space:normal;overflow-wrap:anywhere}
+    .log table tr.log-none{padding:14px 10px}
   }
   @media (prefers-reduced-motion:reduce){
     *{transition:none!important}

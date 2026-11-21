@@ -3,7 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>ai.ripple</string>
+	<!-- __LABEL__ is rendered by deploy/install-launchd.command from
+	     RIPPLE_LABEL (default ai.ripple) — one place for the production label,
+	     and the one knob that lets the CLI and its tests drive a throwaway job
+	     (#121). The rendered file is what launchd reads. -->
+	<string>__LABEL__</string>
 
 	<key>ProgramArguments</key>
 	<array>

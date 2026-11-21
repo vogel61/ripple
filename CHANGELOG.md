@@ -5,6 +5,307 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-21
+
+Eight new capabilities, four changes and eleven fixes. Minor, not patch: the
+capabilities change what RIPPLE does, the changes and the fixes ride along. No
+intermediate patch release — that would only produce two exports of the same
+tree.
+
+### Added
+
+- **Every tooltip opens on a tap, `not routable` became a symbol, and 6.5 explains
+  its own parameters** (issue #139). Three gaps with one cause: the page showed
+  values and abbreviations without saying what they mean, and the tooltip layer
+  opened on hover and focus only — `pointerover` fires on a touch, and the global
+  click handler closed the box in the next instant, so on a phone no tooltip was
+  reachable at all. A click now shows the box instead of hiding it, except
+  within 400 ms of a pointer-show (that is the end of a tap, not a second wish)
+  and except a second tap on the same owner. The `not routable` chip was
+  84 × 35 px inside a 100 px model cell and wrapped onto two lines, twenty-one of
+  them in the table; it is now the tabler `route-off` at 14 px in the colour of
+  the failure, and the tooltip carries the reason the chip never named —
+  `dispatch` false (the node does not offer the model) or listed but not loaded
+  (the first request pays a cold load) — with `role="img"` and an `aria-label`,
+  so a screen reader gets the sentence and not a picture. Section 6.5's forty
+  rows of bare field names carry a sentence each: `FIELD_HELP` in the config
+  schema, one entry per path, served as `help` in `GET /config` and rendered as
+  the parameter's tooltip. It lives in the schema and not in `dashboard.js`,
+  where the text would go stale the first time a field is renamed; 29 paths,
+  every one of `EDITABLE_PATHS` held by a test, in English like the `Source:`
+  lines. Four of the forty rows stay without a tooltip because they are not
+  settings: the config file's path, the `loading` aggregate of four settings, and
+  the two measured prefill rates.
+
+- **The lock is a property of the model, not of its routability** (issue #118).
+  `POST /admin/models/{model}/lock` now succeeds for a cold model, for one the
+  allow-list keeps out of routing, and for one no node lists yet — the operator
+  locking ahead of a start. The `409 lock_not_dispatchable` refusal from #28 is
+  gone; it asked whether the lock could refuse something *right now* about a
+  thing that is an attribute. The page carries one padlock per **model** row, in
+  the cell with the `rowspan` and never in a node cell, because the lock has no
+  host in its key; the open state is the neutral `--fg-2`, not the success
+  colour, because an unlocked model is the *unprotected* state and not a good
+  one. `MarkItDown` is a virtual oMLX engine — derived from `engine_type` in
+  `/v1/models/status`, never from a list of ids in this repository: always
+  locked, never releasable (`409 lock_builtin`), resident without weights, and
+  its node cells offer no policy control.
+
+- **A locked model is preloaded when its host becomes healthy** (issue #119).
+  At startup and at the end of a maintenance window, on every host whose
+  allow-list contains it, so the first thread after an oMLX restart no longer
+  pays a cold load the operator had explicitly ruled out. The trigger is the
+  healthy transition that already sets `relearn_due` (#86) — no second poller —
+  and nothing awaits a load inside the health path or the lifespan: startup stays
+  under 3 s while a 400 GB load runs. A preload that displaces a model reports
+  what went (`hosts[].displaced`, `models[].hosts[].evicted_by`, a `▼` in the
+  row); one that does not fit ends in a visible `failed` state with the numbers
+  ("400.0 GB needed, 40.8 GB free") instead of a retry loop. Locking a cold model
+  does not load it on the spot — that is a separate decision, not this issue's.
+
+- **`ripple start | status | shutdown | restart | update`** (issue #121). The
+  five operations in one module, with label, port, plist and config taken from
+  `RIPPLE_LABEL`/`RIPPLE_PORT`/`RIPPLE_PLIST`/`RIPPLE_CONFIG` and the production
+  values as defaults — which is what makes them testable without touching a
+  running service. `restart` returns only once the dashboard answers (0.3 s
+  measured on a warm node) and waits for the launchd job to be *gone* as well as
+  the port to be free, because `bootout` is asynchronous and assuming otherwise
+  left the service down. A process on the port that is not RIPPLE is named and
+  left alone. `update` refuses on a dirty tree, runs the suite, and restarts only
+  if it is green. `deploy/install-cli.command` installs the wrapper into
+  `/usr/local/bin` if writable, else `~/.local/bin`, with no sudo.
+
+- **Autostart on and off from the command line** (issue #122). `ripple -perm`
+  renders the plist from the checkout it runs in, writes the oMLX key with
+  `plutil`, bootstraps the job and waits for `/healthz`, then prints
+  `autostart: on (ai.ripple, /path/to/repo)`. `ripple shutdown -perm` stops
+  first, then removes the job and the plist, then verifies both. A running manual
+  instance is never killed: the job is installed and launchd takes over at the
+  next login, which the command says in one line instead of leaving it to be
+  discovered.
+
+- **The dashboard header offers a newer release** (issue #123). Checked once at
+  startup against the public GitHub releases API, unauthenticated, in a
+  background task; `unknown` (no network, no release yet, a 404) is silent, and
+  `update.check` turns the check off for a machine without internet. A local
+  build newer than the newest release reads as `current`, never as an offer
+  pointing backwards. The comparison is semantic (`0.10.0 > 0.9.0`). Nothing is
+  downloaded or installed — the header names `ripple update`, which is #121.
+
+- **A lock that cannot be kept says so at the click** (issue #126). The lock is
+  model-wide, so the question is not "does it fit on this host" but "does it fit
+  on at least one host that permits it" — and the answer now travels with the
+  view: per model `feasible` with `feasible_reason` and `feasible_host`, per host
+  `fits` and `fit_reason`. The arithmetic is `HostRuntime.preload_forecast()`
+  through one helper, so the padlock and the preload cannot drift apart, and the
+  forecast stays read-only: nothing is evicted, unlocked or pinned to make room.
+  Measured on the live fleet: `GLM-5.2-oQ4` needs 448.9 GB where 37.3 GB are free
+  after evicting MarkItDown, `POST` returns 200, and the model reads back
+  `feasible=False` with `feasible_host=alpha` — the lock is stored, and it is
+  visible that it can be resident nowhere right now. A warning state, not a
+  refusal, because the operator may be mid-reconfiguration (unlock DeepSeek, then
+  lock GLM) and the intent is legitimate, only not satisfiable yet; refusing
+  would be a dead end. The padlock has a third state for it — amber outline and
+  an `!` badge, `aria-label` from the catalog, so it is carried by shape and text
+  and not by colour alone — with the forecast's own sentence plus the next step
+  in its tooltip. `feasible: null` (no host offers the model) and `locked` but
+  not routed here (the drain pattern of #120) stay silent, and a builtin never
+  warns.
+
+- **The admin key is entered where the operator is** (issue #130). After a
+  restart, a new tab or a browser restart every operator control was inert and
+  the only hint was a tooltip pointing at `/keys`, so the operator found out by
+  clicking something and reading the refusal. The masthead now carries a chip
+  next to the language selector with three states — `read-only` (open shackle,
+  muted), `checking`, `admin` (closed shackle, accent) — distinguishable by shape
+  rather than tone, in the shell so the 2-s tick cannot eat what is being typed.
+  Nothing is written before the key is verified: `GET /admin/models` has to
+  answer 200 first, a 401 leaves the field open and `sessionStorage` untouched,
+  and there is exactly one `setItem` in the whole script, standing behind that
+  check. The verification is the request the padlock warnings already make
+  (#126), so it costs one request and not two. Signing out clears the key and
+  repaints the keyed blocks inert. No `localStorage` and no "loopback is admin":
+  the first would put the secret on disk in plain text, the second would let any
+  local script stop the process and write the policy file without a credential.
+
+### Changed
+
+- **The four statements about a model are documented, and separated** (issue
+  #120). Capability (the allow-list: this host may serve it at all), rule (the
+  policy, per host and model: RIPPLE routes here), lock (per model: it may not be
+  unloaded) and residency (`loaded`: the weights are here now) are four
+  independent axes, and #116 was one of them being read as another. The documents
+  now carry the axis table with a code reference each, the combination matrix —
+  including `locked` + not routed here, which is the *drain* pattern and
+  legitimate — and the rule that two intents belong in two places: "exists on
+  this SSD but must not be routed" is the allow-list, "should not exist on this
+  machine" is oMLX. Seven statements in the manual and the design document were
+  no longer true and are corrected, among them "the page is read-only" and "a
+  locked model refuses the calibration run entirely".
+
+- **The parameters table shows where one node's settings end** (issue #131).
+  Section 6.5 was thirty rows with the node name repeated as plain text and
+  nothing grouping them, so the eye had to parse the first column to find the
+  boundary — while the rest of the page had solved that with the stripe from #89.
+  Every node row now carries that stripe in its scope cell, the same `data-slot`
+  as the same node in the fleet card, taken from the node object in `/config`
+  instead of a name rebuilt in the renderer; `global`, `placement` and `affinity`
+  get an empty slot of the same width, so all 40 scope texts start at x = 78.5.
+  Six pixels, `aria-hidden`, no new id: the name is in the cell next to it, and
+  the pattern still separates two nodes that share a tone. Below 1100 px, 12 px
+  move from the parameter column into the scope column (the sum stays 476) —
+  without that the stripe would have been paid for by the value column, which was
+  already 7 px over its inner width.
+
+- **The model table reads left to right as what runs, how fast, how much, how
+  big** (issue #137). `Size` and `Context` are static and sat in the middle of the
+  row while `tok/s` — the one number that changes second by second, and the reason
+  to open the table at all — was the last column. The order is `Model · Node ·
+  Loaded · tok/s · Req · Threads · Size · Context`, and `tok/s` is the only column
+  in bold: weight 600 and full contrast, still right-aligned, because bold and
+  right-aligned is a column of numbers while bold and left-aligned would be a
+  second alignment edge in the same table. The fixed widths follow the content and
+  still sum to 740 px, so the phone measurement in #135 is unchanged. `_tps_cell()`
+  in the tests found the cell as `cells[-1]`; it now finds it by class — five tests
+  would otherwise have stayed green against the Context column.
+
+- **The sum in 2.1 is the taller row, not the quieter one** (issue #138). The 1-px
+  rule above it is `--line-3` on the panel background, **2.22:1** — that is a table
+  line, and a table line means "another row follows", not "the enumeration ends and
+  the sum begins". The sum bar is 50 % taller than the bars it sums (14 → 21 px)
+  and keeps their segment colours, so it reads as the same quantity, larger,
+  instead of as a different one. What #106 decided stands: no ring, no second
+  colour, no opacity.
+
+### Fixed
+
+- **A not-loaded model is not routable, lock or no lock** (issue #116). The
+  availability column read `model_available()` — allow-list membership — and
+  called it residency, so a listed-but-cold model claimed it could serve a
+  request that would in fact cost a several-hundred-GB load. `HostRuntime.
+  model_routable()` answers the stronger question, `routable` is reported in
+  `/healthz` and `/admin/models`, and the eviction lock is deliberately not an
+  input: a lock forbids an unload, it never proves a load.
+
+- **The dashboard waited for a reachable node before it could be served** (issue
+  #117). The app's lifespan awaited the whole host resolution, and the dashboard
+  is served by that same app: with oMLX on the M5 switched off and only the M3
+  reachable, uvicorn accepted no connection for 30 s (measured; the live log has
+  the same shape at 45 s) and the page appeared only once a node answered.
+  Resolution now runs in a background task, `alpha` reads `down` as soon as
+  its address list is exhausted, and the walk probes the addresses concurrently
+  with a 1.5 s connect cap instead of 5 s per entry — the startup itself no
+  longer waits at all. A failed host is no longer resolved a second time by the
+  refresh that follows it.
+
+- **The tok/s column no longer presents the machine's capability as a model's
+  rate** (issue #124). Two numbers lived in one cell: the per-(host, model) EMA
+  over measured decode rates, and `hosts[].tg_tps` from `config.yaml`, which is a
+  measurement of the *machine* from an AS-6 run. With no measurement for the
+  model, the cell fell back to the machine's number, so a model that had never
+  been served inherited a plausible rate belonging to a different model. The cell
+  now shows the measured rate or a dash, and `MarkItDown` never shows a value.
+  "Not measured yet" and "measured zero" look different and say different
+  things; the machine capability stays in the tooltip, labelled as a property of
+  the machine.
+
+- **A thread with no traffic is visible as such** (issue #93). A conversation
+  whose client session id changed mid-conversation can never be resumed, yet it
+  kept a slot and a row until the TTL expired — indistinguishable from a live
+  idle thread, while the operator reads the thread count as "what is running".
+  The Threads tab now marks a thread silent after 900 s (the placement thread
+  decay window, half the default TTL) with its age in its unit, and the host card
+  splits its slot figure into active and idle. No backend field was added: the
+  payload already carried `idle_seconds`, `turns` and `active`, and the TTL
+  behaviour is unchanged.
+
+- **A red full suite means something again** (issue #125).
+  `test_streaming` failed intermittently in the full suite and never in
+  isolation, and the failing assertion was a `200` that came back `503` — not the
+  double upstream call the issue had assumed. Since #117 `Fleet.start(blocking=
+  False)` resolves the hosts in a background task, so the fixture's
+  `server.started` only meant the socket was open, and a request arriving before
+  the first probe found no healthy host; it only lost on a busy machine, which is
+  why the same tree produced three failures in six runs.
+  `live_proxy_factory` gained `wait_healthy=True` — polls `/healthz` until every
+  configured host has a verdict, 15 s deadline, and raises with the last payload
+  instead of timing out silently. The default stays `False`, because
+  `test_doctor` and `test_coldstart` deliberately observe the unresolved state.
+  Full suite after the fix: 1406 passed in 241.98 s, twice green in a row.
+
+- **The distribution fills its row instead of ending 38 px short** (issue #127).
+  `#dist` was `width:max-content` with tracks capped at 660 px, so the container
+  shrank to its content — 1323 px inside a 1361 px section — and the operator
+  read the dead strip on the right as a layout error while the fleet cards below
+  filled their row. `width:100%` with `minmax(470px,1fr)` fills it: 679 + 679 at
+  1440 px, 509 + 509 at 1100, 0 px dead at either width, and three blocks wrap
+  instead of squeezing. 470 and not the old 380 because the inner row is 418 px
+  of fixed columns plus padding — three equal columns of ~453 px would have
+  collapsed the host column. The 660 px cap did not disappear, it moved from the
+  track to `:only-child`, so a single block still does not stretch across the
+  page.
+
+- **A button that could only produce a 409 is greyed, with the reason** (issue
+  #128). The Calibrate button was disabled by two conditions — a running job, a
+  bound thread — while the endpoint refuses on a third one the button never read
+  (`host.locked_loaded()`), so it was enabled exactly when the click would be
+  refused: measured on 21.11., `alpha` greyed for its thread while `beta`
+  looked free with DeepSeek locked *and* resident on it. The page already carried
+  the fact in `models[].hosts[].lock`, the same predicate, so no new field and no
+  second computation. The lock is the third reason in the endpoint's order — job
+  → thread → lock — and the tooltip names the one that would refuse first, so
+  the page never promises a different cause than the answer names. `force=1`
+  overrides the thread, never the lock, and both tooltips say so: that is the
+  difference between "wait" and "unlock".
+
+- **The sparkline no longer tears on one late probe** (issue #129). `SPARK_HOLD
+  = 1` bridged exactly one empty bucket, and with a 5 s bucket against a 10 s
+  probe one empty bucket is the *normal* cadence — the threshold sat on the
+  boundary, so a few seconds of jitter lifted the pen. Measured on the M5
+  DeepSeek series over 180 buckets: 88 gaps of length 1 and one of length 2, and
+  that single gap broke the line into two subpaths at `dy 0` — a break at the
+  same height, carrying nothing about the traffic. The hold is 2 now, the cadence
+  plus one probe of slack, and a gap of 3 or more still tears, so "a probe that
+  did not happen breaks the line" holds; the readout bridges with the same
+  constant, and `stats.py`'s reference constant follows instead of documenting
+  the old rule.
+
+- **On a phone the two tables stop being tables** (issue #134). Measured on the
+  operator's Android at a 492 px viewport: the value column of 6.5 was 0 px wide,
+  so `0.0.0.0:8010` broke into three lines and read as three numbers, and the log
+  table was 622 px in a 356 px panel with `Modell` and `Thread` headers at the
+  same x, 95 = 95. One cause for both: `table-layout:fixed` with `<colgroup>`
+  widths tuned for ≥1100 px hands the auto column a negative remainder, clamped
+  to 0, and its content then overflows a box that is not there. Below 700 px both
+  tables are one block per row now: the identity on the first line (scope and
+  parameter with the #131 stripe in front, timestamp and thread key for the log),
+  the rest as labelled pairs from `data-label`, values over the full panel width.
+  Measured at 390 px: all 40 value cells 358 px (min = max), no token broken
+  character-wise, `documentElement.scrollWidth == innerWidth`. Above the
+  breakpoint nothing moved — 96/280/703/150/132 for 6.5 — and the desktop widths
+  are pinned by a test. `display:block` costs the table semantics for assistive
+  technology, which is why every value keeps its own label instead of leaning on
+  a header row that is gone.
+
+- **A chip is as tall above the text as below it** (issue #136). `.th-meta` is a
+  flex row whose items stretch to the height of the delete button — deliberate,
+  because the dotted underline of a `.tip` sits at the edge of its own box — but a
+  `.chip` paints a background and a border, so the stretch became 4 px of empty box
+  below the text: `still` measured 3.0 px above and 7.4 px below, while the button
+  next to it was symmetric. A chip keeps its own height and is centred; only text
+  fields stretch. The fix exposed a second defect in the same element: `.tip`
+  stands later in the stylesheet than `.chip`, and its shorthand had replaced the
+  chip's bottom border with a grey dotted line that the stretch had hidden 7.4 px
+  below the text. A chip now keeps its own border and the tooltip stays on
+  `data-tip`; measured after both: 21.4 px, 3.0 / 3.4, bottom edge identical to the
+  top.
+
+- **The work table's headers carry their own explanation** (issue #138). `RQ`,
+  `PTK` and `CTK` are readable only to someone who already knows them, and the
+  sentence stood on the number below and nowhere on the head. The header now
+  carries the same tooltip (`tip.load_requests`, `tip.load_prompt_tokens`,
+  `tip.load_completion_tokens`) — no new string, no second source that can age.
+
 ## [0.1.1] - 2026-11-20
 
 ### Added

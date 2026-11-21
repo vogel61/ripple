@@ -58,7 +58,10 @@ and `StubState.finish_load(model_id)`; `/v1/models/status` emits both fields.
 ```python
 loading: dict | None = None
 # {"model": str, "size_gb": float, "started_at": float,
-#  "eta_seconds": float, "source": "dispatch" | "omlx" | "calibration"}
+#  "eta_seconds": float,
+#  "source": "dispatch" | "omlx" | "calibration" | "preload"}
+# `preload` is the fourth value and the only one added after the freeze — see
+# §9 (issue #119).
 
 @property
 def in_pool(self) -> bool:
@@ -317,3 +320,39 @@ Both are about a number telling the truth.
    decision count; the name and §5/§8 now say which number it is, and
    `test_the_degraded_counter_counts_decisions_not_requests` pins the difference
    (two decisions, one request).
+
+## 9. Amendment 2026-11-20 — preload of locked models (issue #119)
+
+The freeze exists so three waves can touch one object without disagreeing. This
+amendment adds a **fourth way into the loading state** and nothing else: every
+existing meaning stays exactly as §3–§8 define it.
+
+What it adds:
+
+* `loading.source` gains the value `preload` (§3). A preload is a load RIPPLE
+  starts itself, on a *locked* model, because the host became healthy — not
+  because a request asked for it.
+* `HostRuntime.preload_due: bool` — set on the transition into a healthy verdict
+  (beside `relearn_due`, §3.5 of the spec) and on the end of a maintenance
+  window; cleared by the probe tick that schedules the pass. It is the trigger,
+  not a second health poller.
+* `HostRuntime.preloads: dict[str, dict]` — the last attempt per model:
+  `{"model", "state": "loading"|"loaded"|"failed", "reason", "size_gb",
+  "started_at", "finished_at", "evicts", "displaced", "by"}`. One entry per
+  model, the newer attempt replacing the older one. A failure is a **state**:
+  there is no retry loop, and the next attempt is the next healthy transition.
+* `HostRuntime.displaced: dict[str, dict]` — `{model: {"by", "at", "reason"}}`,
+  the models a preload took the memory from. Cleared when the model is resident
+  again.
+* `/healthz` grows two keys, both on structures that already exist:
+  `hosts[].preloads` (the list above) and `hosts[].displaced`;
+  `models[].hosts[].evicted_by` names the model whose preload displaced this one
+  on this host. The dashboard renders them in the host card and in the model
+  row — no new endpoint, and no key without a place on the page.
+* `Fleet.schedule_preload(host)` / `Fleet.await_preloads(timeout=None)` — the
+  task handle and the deterministic seam. Tests await the in-flight preloads;
+  they never sleep long enough for a 432 GB load.
+
+Unchanged on purpose: `in_pool` (a loading host stays in it), the status
+vocabulary, the three signals of §5, and routing — a locked, cold model stays
+non-routable (issue #116). The full rules are in `docs/loading-state.md` §5a.

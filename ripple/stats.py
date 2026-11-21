@@ -32,7 +32,7 @@ def series_points(window_s: float, bucket_s: int = BUCKET_SECONDS) -> int:
 
 
 # -- the drawn line (issue #96) ----------------------------------------------
-# How many empty buckets the pen crosses without lifting: one.
+# How many empty buckets the pen crosses without lifting: two.
 #
 # The probe runs every 10 s (`discovery.interval_seconds`) and a bucket is 5 s
 # wide, so *every* pair of consecutive samples has exactly one empty bucket
@@ -42,14 +42,21 @@ def series_points(window_s: float, bucket_s: int = BUCKET_SECONDS) -> int:
 # on the live page, six `M` and no `L`, a chart that had been invisible for days
 # while it held data.
 #
-# Two empty buckets in a row are something else: a probe that did not happen
-# (a failed tick, a node that went down). There the line ends, because an absent
-# node must not look like a busy one.
+# One was the whole allowance, and it sat exactly on the cadence: any jitter of
+# a few seconds made two empty buckets in a row and the pen lifted for nothing.
+# Measured on alpha (DeepSeek series, 180 buckets, 21.11.): 88 gaps of length
+# 1 and one gap of length 2 — that single gap tore the line into two subpaths at
+# the same height (`dy 0`), a break that carried no information at all. So the
+# hold is the cadence plus one probe of slack: 10 s probe / 5 s bucket = 2.
+#
+# Three empty buckets in a row are something else: a probe that did not happen
+# (a failed tick, a node that went down, ≥ 15 s without a sample). There the
+# line ends, because an absent node must not look like a busy one.
 #
 # The bucket itself stays at 5 s: `SeriesRing` and the concurrency curve (#80)
 # are built on that width, and a 10 s bucket would halve the resolution of the
 # curve to paper over a drawing bug.
-SERIES_HOLD_BUCKETS = 1
+SERIES_HOLD_BUCKETS = 2
 
 
 def _is_number(value: Any) -> bool:

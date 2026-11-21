@@ -14,9 +14,9 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 PLIST_SRC="deploy/ai.ripple.plist"
-PLIST_DST="$HOME/Library/LaunchAgents/ai.ripple.plist"
+LABEL="${RIPPLE_LABEL:-ai.ripple}"
+PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
 KEY_FILE="$HOME/.omlx/api_key.txt"
-LABEL="ai.ripple"
 PORT="${RIPPLE_PORT:-8010}"
 DOMAIN="gui/$(id -u)"
 DRY=0
@@ -36,7 +36,7 @@ say "─────────────────────────
 say "repo:  $(pwd)"
 
 # --- 1 -------------------------------------------------------------------
-step "1/5  free port $PORT"
+step "1/6  free port $PORT"
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     if [ "$DRY" = "1" ]; then
         plan "stop the instance holding port $PORT (deploy/stop-ripple.command)"
@@ -53,17 +53,18 @@ else
 fi
 
 # --- 2 -------------------------------------------------------------------
-step "2/5  install the plist"
+step "2/6  install the plist"
 if [ ! -f "$PLIST_SRC" ]; then
     bad "$PLIST_SRC is missing — wrong directory?"
 else
     if [ "$DRY" = "1" ]; then
-        plan "render $PLIST_SRC -> $PLIST_DST (repo $(pwd), home $HOME)"
+        plan "render $PLIST_SRC -> $PLIST_DST (repo $(pwd), home $HOME, label $LABEL)"
     else
         mkdir -p "$HOME/Library/LaunchAgents"
-        if sed -e "s|__REPO__|$(pwd)|g" -e "s|__HOME__|$HOME|g" "$PLIST_SRC" > "$PLIST_DST"; then
+        if sed -e "s|__REPO__|$(pwd)|g" -e "s|__HOME__|$HOME|g" \
+               -e "s|__LABEL__|$LABEL|g" "$PLIST_SRC" > "$PLIST_DST"; then
             chmod 600 "$PLIST_DST"
-            if grep -q '__REPO__\|__HOME__' "$PLIST_DST"; then
+            if grep -q '__REPO__\|__HOME__\|__LABEL__' "$PLIST_DST"; then
                 bad "$PLIST_DST still contains a placeholder"
             else
                 ok "rendered to $PLIST_DST (repo $(pwd))"
@@ -75,7 +76,7 @@ else
 fi
 
 # --- 3 -------------------------------------------------------------------
-step "3/5  write the API key into the plist"
+step "3/6  write the API key into the plist"
 if [ ! -r "$KEY_FILE" ]; then
     bad "$KEY_FILE is not readable — the agent cannot start without the key"
 elif [ ! -f "$PLIST_DST" ] && [ "$DRY" = "0" ]; then
@@ -99,7 +100,7 @@ if [ "$DRY" = "0" ] && [ -f "$PLIST_DST" ]; then
 fi
 
 # --- 4 -------------------------------------------------------------------
-step "4/5  load the agent"
+step "4/6  load the agent"
 if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
     if [ "$DRY" = "1" ]; then
         plan "unload the agent that is already loaded, then load the new one"
@@ -119,7 +120,7 @@ else
 fi
 
 # --- 5 -------------------------------------------------------------------
-step "5/5  verify"
+step "5/6  verify"
 if [ "$DRY" = "1" ]; then
     plan "wait for the port, then check /healthz"
 else
@@ -145,12 +146,27 @@ print("  ok    no warnings" if not w else "  FAIL  warnings: " + "; ".join(w))
     fi
 fi
 
+# --- 6 -------------------------------------------------------------------
+# The `ripple` command (#121): start/status/shutdown/restart/update without the
+# launchctl incantation. A fresh checkout gets it here, so nobody has to know
+# that the step exists. Its own script does the work — one implementation.
+step "6/6  install the ripple command"
+if [ "$DRY" = "1" ]; then
+    plan "deploy/install-cli.command (wrapper in /usr/local/bin, else ~/.local/bin)"
+elif deploy/install-cli.command --quiet </dev/null; then
+    ok "ripple command installed"
+else
+    bad "deploy/install-cli.command failed — run it on its own to see why"
+fi
+
 say ""
 say "──────────────────────────────────────────────────────────────"
 if [ "$DRY" = "1" ]; then
     say "Result: dry run — nothing was changed."
 elif [ "$FAIL" = "0" ]; then
     say "Result: the agent is installed. It starts at login and restarts after a crash."
+    say "Control it with: ripple status | ripple restart | ripple shutdown"
+    say "Autostart on/off from the CLI: ripple -perm | ripple shutdown -perm"
     say "Check anytime with: deploy/verify-ripple.command (double-click)"
 else
     say "Result: FAILED — see the lines marked FAIL above."

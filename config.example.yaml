@@ -207,6 +207,25 @@ stats:
   flush_seconds: 30            # write interval; a reset writes at once, whatever
                                # this says. Reset: POST /admin/stats/reset (admin key)
 
+# The start-up update check (issue #123): RIPPLE asks the public GitHub releases
+# API once, in the background after the listeners are up, whether a newer release
+# exists. If one does, the dashboard header shows the offer in the page's language
+# plus the command to run (`ripple update` — it fetches, runs the suite and
+# restarts only if the suite is green). Nothing is downloaded or installed here.
+# A local build NEWER than the newest release (a GitHub checkout) is `current` and
+# shows nothing: the hint never points backwards. No answer — no internet, a
+# timeout, a 404 because no release exists yet — is a silent `unknown`: no warning
+# in the log, no line in the header. The check runs once per start, never on a
+# timer.
+update:
+  check: true                  # false = no request at all. For a machine without
+                               # internet: otherwise every start pays a DNS lookup
+                               # and a timeout for a hint that cannot arrive.
+  url: https://api.github.com/repos/vogel61/ripple/releases/latest
+                               # unauthenticated on purpose: a private source would
+                               # need a token on every installation to show a hint.
+  timeout_seconds: 3           # short: it is a hint, and it runs in the background.
+
 # The runtime fleet (issue #70): what the operator adds or disables at the page,
 # merged over `hosts` at start-up. `config.yaml` stays the hand-written baseline
 # and is never written by RIPPLE — this overlay is where a click lands.

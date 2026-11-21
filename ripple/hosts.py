@@ -50,6 +50,14 @@ log = logging.getLogger("ripple.hosts")
 PHASE_PP = "pp"
 PHASE_TG = "tg"
 
+# The `engine_type` values oMLX uses for what is **not** a model but a builtin:
+# a tool that is resident without occupying weights (MarkItDown, the document
+# converter). Issue #118: the list is oMLX's own vocabulary, not a list of model
+# ids — a hand-maintained id list is what once put `*-drafter` entries into
+# client configs, and it would have to be edited on every rename. A builtin is
+# always locked (see `ripple/proxy.py:_builtin`) and never unlockable.
+VIRTUAL_ENGINES = frozenset({"markitdown"})
+
 # Placeholder load rate: the worst slope measured on the AS-5 night run,
 # 0.311 s per GB (docs/loading-state.md §3). It is the same for every host,
 # which is wrong for a node whose storage path differs — the calibration engine
@@ -349,6 +357,22 @@ class HostRuntime:
     # The load this host is running, if RIPPLE caused it:
     # {"model", "size_gb", "started_at", "eta_seconds", "source"}.
     loading: dict | None = None
+    # The preload pass this host owes (issue #119): a locked model is loaded
+    # without a request having to arrive first, once per healthy transition.
+    # Set on the transition, on the end of a maintenance window and at start-up;
+    # cleared by the tick that schedules the pass. A *failed* preload is a
+    # recorded state (`preloads`) and not a new flag — there is no retry loop.
+    preload_due: bool = True
+    # The last preload attempt per model (issue #119):
+    # {model: {"model", "state", "reason", "size_gb", "started_at",
+    #          "finished_at", "displaced", "evicts", "by"}}.
+    # `state` is `loading`, `loaded` or `failed`; `reason` is the operator's
+    # sentence for a failure ("does not fit: …"), None otherwise.
+    preloads: dict[str, dict] = field(default_factory=dict)
+    # Models a preload displaced on this node (issue #119): {model: {"by",
+    # "at", "reason"}}. Kept until the model is resident again, so the node's
+    # model view can say why it is gone instead of just showing it cold.
+    displaced: dict[str, dict] = field(default_factory=dict)
     # Operator-declared maintenance window (`ripple/maintenance.py`), or None.
     # Not a health verdict: `status` keeps saying what the probes saw, and only
     # `in_pool` and the reporting `state` change.
@@ -425,40 +449,81 @@ class HostRuntime:
         return OmlxBackend(address, self.cfg.api_key, client=self.client)
 
     # -- resolution --------------------------------------------------------
+    async def _identity_probe(self, address: str) -> tuple[Backend, str | None, str | None]:
+        """Ask one address who it is. No health probe, no state written.
+
+        Returns `(backend, node_id, error)`; `error` is the sentence that would
+        land in `last_error` if this address is not usable. A separate step
+        because the walk asks every address at once (issue #117).
+        """
+        backend = self._make_backend(address)
+        if self.cfg.backend != "omlx":
+            return backend, None, None
+        try:
+            nid = await backend.identity()
+        except (httpx.HTTPError, ValueError, OSError) as exc:
+            return backend, None, f"{address}: {type(exc).__name__}: {exc}"
+        if self.cfg.node_id and nid and nid != self.cfg.node_id:
+            return backend, nid, (f"identity_mismatch: {address} reports {nid}, "
+                                  f"expected {self.cfg.node_id}")
+        if self.cfg.node_id and nid is None:
+            return backend, None, f"{address}: node_id unreadable"
+        return backend, nid, None
+
+    async def _health_probe(self, backend: Backend) -> "Health | str":
+        """One health request. The exception comes back as the sentence, not as
+        a raise — the walk reports it and moves on."""
+        try:
+            return await backend.health()
+        except (httpx.HTTPError, ValueError, OSError) as exc:
+            return f"{backend.base_url}: {type(exc).__name__}: {exc}"
+
     async def resolve(self) -> bool:
-        """Walk the address list in order. The first address with a confirmed
-        identity wins."""
+        """Ask every address who it is, then take the first usable one in order.
+
+        Both probes run **concurrently**, and the walk keeps the configured
+        order when it picks the winner: which address wins is decided by
+        `ordered_addresses()`, not by which answer arrives first (FA-21 rule 1).
+        Sequentially, an unreachable address costs its whole connect timeout
+        before the next one is even tried — measured 20.11.2026: 5.00 s per
+        blackholed address, 15 s per pass over the four alpha addresses, and
+        the startup walked the list twice (issue #117: the HTTP server accepted
+        no connection for 30 s while oMLX on the M5 was off).
+
+        A probe that fails with a read timeout still answers `identity() ==
+        None`, so the second phase cannot be skipped for it: both phases are
+        gathered, otherwise a silent address would pay the read timeout once
+        more in the health step.
+        """
         # A host that had to be re-resolved is not loading: whatever was running
         # on the old address is not running on the new one (contract §4). Logged
         # like any other end, because a vanished state in the log is a mystery.
         self.end_loading("resolved")
         old = self.resolved_address
-        for idx, address in enumerate(self.ordered_addresses()):
-            backend = self._make_backend(address)
-            try:
-                if self.cfg.backend == "omlx":
-                    nid = await backend.identity()
-                    if self.cfg.node_id and nid and nid != self.cfg.node_id:
-                        self.identity_ok = False
-                        log.error("identity_mismatch host=%s addr=%s expected=%s seen=%s",
-                                  self.cfg.name, address, self.cfg.node_id, nid)
-                        self.last_error = (f"identity_mismatch: {address} reports {nid}, "
-                                           f"expected {self.cfg.node_id}")
-                        continue
-                    if self.cfg.node_id and nid is None:
-                        self.last_error = f"{address}: node_id unreadable"
-                        continue
-                    if nid:
-                        self.node_id_seen = nid
-                        self.identity_ok = True
-                health = await backend.health()
-                if not health.healthy:
-                    self.last_error = f"{address}: {health.error or 'not healthy'}"
-                    continue
-            except (httpx.HTTPError, ValueError, OSError) as exc:
-                self.last_error = f"{address}: {type(exc).__name__}: {exc}"
+        addresses = self.ordered_addresses()
+        probes = await asyncio.gather(*(self._identity_probe(a) for a in addresses))
+        usable: list[tuple[str, Backend, str | None]] = []
+        for address, (backend, nid, error) in zip(addresses, probes):
+            if error is not None:
+                if error.startswith("identity_mismatch"):
+                    self.identity_ok = False
+                    log.error("identity_mismatch host=%s addr=%s expected=%s seen=%s",
+                              self.cfg.name, address, self.cfg.node_id, nid)
+                self.last_error = error
+                continue
+            usable.append((address, backend, nid))
+        healths = await asyncio.gather(*(self._health_probe(b) for _, b, _ in usable))
+        for idx, ((address, backend, nid), health) in enumerate(zip(usable, healths)):
+            if isinstance(health, str):
+                self.last_error = health
+                continue
+            if not health.healthy:
+                self.last_error = f"{address}: {health.error or 'not healthy'}"
                 continue
 
+            if nid:
+                self.node_id_seen = nid
+                self.identity_ok = True
             self.backend = backend
             self.resolved_address = address
             self.resolved_at = time.time()
@@ -555,8 +620,12 @@ class HostRuntime:
             self.consecutive_failures = 0
             if not was_healthy:
                 # `down`/`loading`/`degraded` → healthy: everything the node can
-                # tell us is re-read, once (`_relearn`).
+                # tell us is re-read, once (`_relearn`). The same moment is when
+                # a locked model has to be there again (issue #119): after an
+                # oMLX restart the node is healthy and empty, and the first
+                # thread would pay the cold load the lock exists to avoid.
                 self.relearn_due = True
+                self.preload_due = True
             # `healthy` is the verdict of the last probe; `loading` is reported on
             # top of it for the operator and never replaces the verdict.
             self.status = "loading" if self.loading is not None else "healthy"
@@ -629,6 +698,13 @@ class HostRuntime:
             # talking to :8000 directly). Without it the state would only ever
             # cover loads RIPPLE caused itself.
             self._note_external_load(residency)
+        if self.preload_due and self.fleet is not None:
+            # Issue #119: the node is back and the model list is fresh — the one
+            # moment a locked model may be loaded on it. Scheduled, never
+            # awaited: a 432 GB warm load inside the probe tick would be the
+            # startup block of #117 at a larger scale.
+            self.preload_due = False
+            self.fleet.schedule_preload(self)
         if self.ceiling_bytes is None or self.used_bytes is None:
             try:
                 cap: Capacity | None = await self.backend.capacity()
@@ -681,6 +757,11 @@ class HostRuntime:
             residency = None
         if residency is not None:
             self.models = residency
+            # A model that is resident again is not a displaced one any more
+            # (issue #119): the note says why it went, not that it is gone.
+            for gone in [m for m in self.displaced
+                         if (residency.get(m) is not None and residency[m].loaded)]:
+                self.displaced.pop(gone, None)
             self._note_model_list(None)
             return residency
         try:
@@ -868,6 +949,19 @@ class HostRuntime:
         log.info("loading_end host=%s model=%s reason=%s seconds=%.1f",
                  self.cfg.name, entry.get("model"), reason,
                  max(0.0, time.time() - started))
+        # A preload that oMLX queued (the `/load` call returned before the model
+        # was resident) is settled here, where the residency answer that ended
+        # the state is already in `models` (issue #119). A load that ends
+        # without the model — oMLX dropped it, the ceiling expired, the address
+        # was re-resolved — is a failure with a reason, never a silent retry.
+        record = self.preloads.get(str(entry.get("model")))
+        if record is not None and record.get("state") == "loading":
+            info = self.models.get(str(entry.get("model")))
+            if info is not None and info.loaded:
+                record.update(state="loaded", finished_at=time.time(), reason=None)
+            else:
+                record.update(state="failed", finished_at=time.time(),
+                              reason=f"the load ended without the model ({reason})")
 
     def loading_expired(self, now: float | None = None) -> bool:
         """Has the load outlived `placement.loading.max_seconds`?
@@ -1366,6 +1460,146 @@ class HostRuntime:
         """
         return self.model_permitted(model) and model in self.models
 
+    def model_routable(self, model: str) -> bool:
+        """Can this host serve `model` *right now* — the availability column?
+
+        A different question from `model_available()`, and the difference is the
+        whole of issue #116: `model_available()` answers "would RIPPLE send a
+        request here", which includes a cold load (placement accepts a host that
+        lists the model and has room — `placement.rebind` adds the residency
+        gate itself). The page's availability column claims something stronger:
+        that this node holds the model. A listed-but-cold entry therefore read as
+        routable next to a `loaded: false` in the residency column — and for a
+        several-hundred-GB model that claim is the difference between a rebind
+        and a cold load.
+
+        Three gates, all of them facts about *now*: the dispatch predicate, the
+        node's own `loaded` flag, and a readable model list (issue #53 — a list
+        that could not be read says nothing about residency, and "unknown" is not
+        "yes").
+
+        The eviction lock (issue #21) is deliberately **not** an input. A lock is
+        a veto on an unload, never evidence that something is loaded; reading it
+        here would make a locked, cold model look resident, which is exactly the
+        report this predicate exists to answer.
+        """
+        if not self.model_available(model):
+            return False
+        if self.model_list_unreadable:
+            return False
+        info = self.models.get(model)
+        return bool(info is not None and info.loaded)
+
+    def model_builtin(self, model: str) -> bool:
+        """Is `model` an oMLX builtin rather than a model — a virtual engine?
+
+        Derived from what the node itself reports (`/v1/models/status` →
+        `engine_type`, kept on `ModelInfo`), never from a list of ids in this
+        repository (issue #118). MarkItDown is the only such engine today: it is
+        resident everywhere, occupies no weights, is in no allow-list, and no
+        request is ever routed to it.
+
+        Three consequences, all of them elsewhere: it is reported as locked
+        everywhere without an entry in the policy file, `DELETE
+        /admin/models/{model}/lock` refuses with `409 lock_builtin`, and the
+        dashboard disables its padlock and offers no policy control for it.
+
+        An empty `engine_type` is "the node did not say", so a node whose model
+        list could not be read reports nothing as a builtin — the same honest
+        "unknown" the rest of this class uses for an unreadable list.
+        """
+        info = self.models.get(model)
+        return bool(info is not None
+                    and info.engine_type.strip().lower() in VIRTUAL_ENGINES)
+
+    # -- preload forecast (issue #119) --------------------------------------
+    def preload_forecast(self, model: str) -> tuple[list[str], str | None]:
+        """What loading `model` here would displace — or why it cannot fit.
+
+        The arithmetic is oMLX's own (`placement.residency_tier`, FA-18): the
+        `estimated_size` of everything resident plus the model, against
+        `hard_threshold × ceiling`, evicting in LRU order until it fits. A
+        preload of a *locked* model is allowed to displace an unlocked one —
+        that is the operator's intent, the lock is the promise that the model is
+        there — but a second locked or pinned model is never taken for it, and
+        the operator has to hear about both outcomes.
+
+        Returns `(evicts, None)` when the load fits (evicting `evicts` first),
+        `([], None)` when there is no forecast to make (unknown size, no ceiling,
+        guard off — the node then decides), and `([...], reason)` when it does
+        not fit, with the sentence the dashboard and the log show.
+        """
+        info = self.models.get(model)
+        if info is None or not info.estimated_size:
+            return [], None
+        if not self.ceiling_bytes or not self.guard_enabled:
+            return [], None
+        target = self.cfg.hard_threshold * self.ceiling_bytes
+        loaded = [m for m in self.models.values() if m.loaded and m.id != model]
+        needed = sum(m.estimated_size or 0 for m in loaded) + info.estimated_size
+        if needed <= target:
+            return [], None
+        evicts: list[str] = []
+        blocked_locked: list[str] = []
+        blocked_pinned: list[str] = []
+        remaining = needed
+        for m in sorted(loaded, key=lambda entry: entry.last_access or 0.0):
+            if remaining <= target:
+                break
+            if self.policy is not None and self.policy.locked(m.id):
+                blocked_locked.append(m.id)
+                continue
+            if m.pinned:
+                blocked_pinned.append(m.id)
+                continue
+            evicts.append(m.id)
+            remaining -= m.estimated_size or 0
+        if remaining <= target:
+            return evicts, None
+        # Everything that can go is gone and the model still does not fit. The
+        # number an operator can act on is what would be left for it.
+        free = max(0, target - (remaining - info.estimated_size))
+        reason = (f"does not fit: {info.estimated_size / 1e9:.1f} GB needed, "
+                  f"{free / 1e9:.1f} GB free")
+        if evicts:
+            reason += f" after evicting {', '.join(evicts)}"
+        if blocked_locked:
+            reason += f"; {', '.join(blocked_locked)} is locked and cannot be evicted"
+        if blocked_pinned:
+            reason += f"; {', '.join(blocked_pinned)} is pinned on the node"
+        return evicts, reason
+
+    def note_preload(self, model: str, *, state: str, reason: str | None = None,
+                     size_gb: float | None = None, evicts: list[str] | None = None,
+                     displaced: list[str] | None = None, by: str = "preload") -> dict:
+        """Record one preload attempt for the dashboard and the log (issue #119).
+
+        One entry per model, the newer attempt replacing the older one: a page
+        that showed every attempt of the day would bury the one that matters.
+        `state` is `loading`, `loaded` or `failed`; a failure carries the
+        sentence the operator acts on, and there is no retry — the next attempt
+        is the next healthy transition, not a loop.
+        """
+        record = self.preloads.get(model) or {"model": model, "started_at": time.time(),
+                                              "finished_at": None, "reason": None,
+                                              "displaced": [], "evicts": [],
+                                              "size_gb": None}
+        record.update(state=state, by=by)
+        # A new attempt starts without the sentence of the last one: a failure
+        # text left over from an earlier transition would read as if this load
+        # had already failed.
+        record["reason"] = reason
+        if size_gb is not None:
+            record["size_gb"] = size_gb
+        if evicts is not None:
+            record["evicts"] = list(evicts)
+        if displaced is not None:
+            record["displaced"] = list(displaced)
+        if state in ("loaded", "failed"):
+            record["finished_at"] = time.time()
+        self.preloads[model] = record
+        return record
+
     @property
     def model_list_unreadable(self) -> bool:
         """Is the node's model list unusable as evidence of what it carries?
@@ -1477,6 +1711,13 @@ class HostRuntime:
             "drain_remaining_seconds": self.drain_remaining_seconds,
             "maintenance": dict(self.maintenance) if self.maintenance is not None else None,
             "loading": dict(self.loading) if self.loading is not None else None,
+            # The last preload attempt per model (issue #119) — the dashboard
+            # line that says "preload failed: does not fit …" instead of leaving
+            # the operator with a cold locked model and no reason.
+            "preloads": [dict(record) for _, record in sorted(self.preloads.items())],
+            # Models a preload displaced here, and which preload did it. The
+            # model view reads the same note (`models[].hosts[].evicted_by`).
+            "displaced": {mid: dict(note) for mid, note in sorted(self.displaced.items())},
             "healthy": self.healthy,
             "node_id": self.node_id_seen,
             "node_id_expected": self.cfg.node_id,
@@ -1569,6 +1810,12 @@ class Fleet:
         self.capability_notes: list[str] = []
         self._task: asyncio.Task | None = None
         self._warmup_task: asyncio.Task | None = None
+        # The background resolution of a non-blocking `start()` (issue #117).
+        self._start_task: asyncio.Task | None = None
+        # The in-flight preloads (issue #119), keyed by task name — one pass per
+        # host plus one task per (host, model). Kept so `await_preloads()` can
+        # wait for them deterministically instead of a test sleeping.
+        self._preload_tasks: dict[str, asyncio.Task] = {}
 
     # -- views -------------------------------------------------------------
     def get(self, name: str) -> HostRuntime | None:
@@ -1589,9 +1836,37 @@ class Fleet:
         return self.healthy_hosts()[0] if self.healthy_hosts() else None
 
     # -- lifecycle ---------------------------------------------------------
-    async def start(self, *, warmup: bool = True) -> None:
+    async def start(self, *, warmup: bool = True, blocking: bool = True) -> None:
+        """Resolve the fleet, then start the background loops.
+
+        `blocking=False` hands the resolution to a background task and returns
+        at once. The HTTP server must accept connections and serve the dashboard
+        before any node has answered: measured 20.11.2026, with oMLX on the M5
+        switched off, the synchronous walk held uvicorn's startup for 30 s and
+        the GUI appeared only once a reachable node existed (issue #117).
+
+        The default stays blocking because that is what `--check` and
+        `--reinit` want: they exist to print the answer, not to serve a page.
+        """
+        if blocking:
+            await self._resolve_all()
+        else:
+            self._start_task = asyncio.create_task(self._resolve_all(),
+                                                   name="ripple-resolve")
+        self._task = asyncio.create_task(self._refresh_loop(), name="ripple-refresh")
+        if warmup:
+            self._warmup_task = asyncio.create_task(self._warmup(), name="ripple-warmup")
+
+    async def _resolve_all(self) -> None:
+        """One resolution pass over the fleet, then the capability intersection.
+
+        The refresh runs for the hosts that answered only: a host whose
+        `resolve()` just failed has no backend, and `_refresh_once()` would
+        resolve it a second time — that is half of the startup blocking in
+        issue #117, and it doubled the `unresolved` line in the log.
+        """
         await asyncio.gather(*(h.resolve() for h in self.hosts))
-        await asyncio.gather(*(h.refresh() for h in self.hosts))
+        await asyncio.gather(*(h.refresh() for h in self.hosts if h.backend is not None))
 
         # The intersection over the nodes that have a voice — the same
         # computation `add()`, `remove()` and a node's own capability change run
@@ -1606,14 +1881,12 @@ class Fleet:
         if "identity" not in self.capabilities:
             log.warning("identity: false — address counts as identity (RB-9 violated)")
 
-        self._task = asyncio.create_task(self._refresh_loop(), name="ripple-refresh")
-        if warmup:
-            self._warmup_task = asyncio.create_task(self._warmup(), name="ripple-warmup")
-
     async def stop(self) -> None:
-        for t in (self._task, self._warmup_task):
+        for t in (self._task, self._warmup_task, self._start_task):
             if t:
                 t.cancel()
+        for t in list(self._preload_tasks.values()):
+            t.cancel()
         await self.client.aclose()
 
     async def _refresh_loop(self) -> None:
@@ -1630,10 +1903,239 @@ class Fleet:
 
     async def _warmup(self) -> None:
         """FA-16 is optional and **not implemented**: NZ-4 forbids RIPPLE to load
-        models, and the only exception is an operator-initiated calibration
-        (`ripple/calibration_api.py`). The `warmup:` key is accepted and warned
+        models, and the only two exceptions are an operator-initiated calibration
+        (`ripple/calibration_api.py`) and the preload of a *locked* model
+        (`schedule_preload`, issue #119). The `warmup:` key is accepted and warned
         about in `config.py`; nothing may act on it here."""
         return
+
+    # -- preload of locked models (issue #119) -------------------------------
+    def request_preload(self, host: HostRuntime) -> asyncio.Task | None:
+        """This host owes a preload pass — start it now if a loop is running.
+
+        The second trigger beside the healthy transition: a maintenance window
+        that ends hands the machine back (`proxy._apply_windows`), and a locked
+        model must be resident again without waiting for the next probe to decide
+        the node "became" healthy — it was healthy the whole time. Without a
+        running loop (the constructor) the flag stays set and the first probe
+        tick picks it up.
+        """
+        host.preload_due = True
+        return self.schedule_preload(host)
+
+    def schedule_preload(self, host: HostRuntime) -> asyncio.Task | None:
+        """Start the preload pass for one host as a named background task.
+
+        Never awaited by the caller: the probe tick and the lifespan must not
+        wait for a load that takes minutes (`#117` was exactly that mistake at
+        the startup). One pass per host at a time — a second request while one
+        runs returns the running task instead of stacking a second pass.
+        """
+        name = f"ripple-preload-{host.cfg.name}"
+        running = self._preload_tasks.get(name)
+        if running is not None and not running.done():
+            return running
+        self._prune_preloads()
+        try:
+            task = asyncio.create_task(self._preload_host(host), name=name)
+        except RuntimeError:
+            # No running loop (a bare `Fleet` built in a test, the constructor):
+            # `preload_due` keeps the debt and the next refresh pays it.
+            return None
+        self._preload_tasks[name] = task
+        return task
+
+    async def await_preloads(self, timeout: float | None = None) -> None:
+        """Wait for every in-flight preload — the deterministic seam for tests.
+
+        The alternative is a `sleep` long enough for a 432 GB load, which is
+        either flaky or slow. The pass is a task and it awaits its own per-model
+        tasks, so gathering what is pending and repeating until nothing is left
+        covers both. `timeout` turns a stuck load into an assertion instead of a
+        hung test.
+        """
+        async def _drain() -> None:
+            while True:
+                pending = [t for t in self._preload_tasks.values() if not t.done()]
+                if not pending:
+                    return
+                await asyncio.gather(*pending, return_exceptions=True)
+                self._prune_preloads()
+
+        if timeout is None:
+            await _drain()
+        else:
+            await asyncio.wait_for(_drain(), timeout)
+
+    def preload_tasks(self) -> dict[str, asyncio.Task]:
+        """The in-flight preloads, by name — for a test that wants to look."""
+        return {name: t for name, t in self._preload_tasks.items() if not t.done()}
+
+    def _prune_preloads(self) -> None:
+        for name in [n for n, t in self._preload_tasks.items() if t.done()]:
+            self._preload_tasks.pop(name, None)
+
+    async def _await_preload_settled(self, host: HostRuntime, model: str) -> None:
+        """Wait until the loading state this preload started is over.
+
+        oMLX's `/load` blocks until the model is resident on the instances
+        measured so far, but a queued load answers at once — and then the state
+        machine (`_poll_loading`) is the only thing that knows when it ended. The
+        backoff is the point: a 432 GB load takes minutes, and polling the node
+        every 50 ms for it would cost thousands of requests for one answer.
+        """
+        delay = 0.05
+        while host.loading is not None and host.loading.get("model") == model:
+            await asyncio.sleep(delay)
+            delay = min(5.0, delay * 2)
+            if host.loading is None or host.loading.get("model") != model:
+                return
+            await host._poll_loading()
+
+    async def _preload_host(self, host: HostRuntime) -> None:
+        """One preload pass over a host's locked models — the whole of #119.
+
+        Triggered by the transition into a healthy verdict, by the end of a
+        maintenance window and once at start-up. The gates, in this order: the
+        node has to be an oMLX one that answers, no other load may be running,
+        the model has to be locked, on the node, permitted by the allow-list and
+        the policy, not a builtin, not resident and not already loading. Then the
+        forecast decides whether it fits; a model that does not fit is a recorded
+        failure and **not** an attempt.
+
+        Sequential on purpose: two 400 GB models do not fit on one 512 GB host,
+        and starting both at once would make oMLX thrash instead of reporting
+        which one lost.
+        """
+        try:
+            await self._preload_pass(host)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a background task must not die silently
+            log.exception("preload_pass_error host=%s", host.cfg.name)
+
+    async def _preload_pass(self, host: HostRuntime) -> None:
+        backend = host.backend
+        if backend is None or not host.healthy:
+            return
+        if not isinstance(backend, OmlxBackend):
+            # An `openai_compatible` node has no lifecycle route to call; a
+            # preload there would be a request to an endpoint that does not exist.
+            return
+        if host.loading is not None:
+            # A load is already running on this node (a dispatch, a calibration,
+            # a load started in the oMLX UI). Stacking a second one on top of it
+            # is what the loading state exists to prevent.
+            return
+        if host.maintenance is not None:
+            # The operator took the machine (an update, a reboot): loading 400 GB
+            # into it is the opposite of what the window is for. The end of the
+            # window is its own trigger (`proxy._apply_windows`).
+            return
+        # Fresh residency: the pass also runs when nothing was re-read (the end
+        # of a maintenance window), and "loaded" from ten minutes ago is not
+        # evidence about the node that was just handed back.
+        await host._read_models()
+        for model in self.policy.locked_models():
+            if host.loading is not None:
+                break
+            info = host.models.get(model)
+            if info is None:
+                # This node does not carry the model — the allow-list question,
+                # not a preload failure. The model view already says so.
+                continue
+            if host.model_builtin(model):
+                # A builtin has no weights and is resident without a load.
+                continue
+            if info.loaded or info.is_loading is True:
+                continue
+            if not host.model_permitted(model):
+                # The allow-list in the config, or the operator switched this
+                # (host, model) pair off: loading 400 GB for a model RIPPLE will
+                # never dispatch here is the opposite of the intent.
+                continue
+            size_gb = round((info.estimated_size or 0) / 1e9, 2) or None
+            evicts, refusal = host.preload_forecast(model)
+            if refusal is not None:
+                host.note_preload(model, state="failed", reason=refusal,
+                                  size_gb=size_gb, evicts=[])
+                log.warning("preload_refused host=%s model=%s reason=%s",
+                            host.cfg.name, model, refusal)
+                continue
+            name = f"ripple-preload-{host.cfg.name}-{model}"
+            task = asyncio.create_task(
+                self._preload_one(host, model, size_gb=size_gb, evicts=evicts),
+                name=name)
+            self._preload_tasks[name] = task
+            try:
+                await task
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — one model must not stop the pass
+                log.exception("preload_error host=%s model=%s", host.cfg.name, model)
+
+    async def _preload_one(self, host: HostRuntime, model: str, *,
+                           size_gb: float | None, evicts: list[str]) -> None:
+        """Load one locked model, report what it displaced, settle the state.
+
+        The load itself is oMLX's `POST /v1/models/{id}/load`, which blocks until
+        the model is resident on the instances measured so far. What it *does*
+        not tell us is whom it displaced — oMLX evicts in LRU order on its own —
+        so the answer is read back: the models that were resident before and are
+        not after it are exactly the price of the promise, and they are logged
+        and recorded rather than silently dropped.
+        """
+        backend = host.backend
+        if backend is None:
+            return
+        before = {mid for mid, info in host.models.items() if info.loaded}
+        record = host.note_preload(model, state="loading", size_gb=size_gb,
+                                   evicts=evicts)
+        record["started_at"] = time.time()
+        host.begin_loading(model, size_gb=size_gb,
+                           eta_seconds=host.estimate_load_seconds(size_gb),
+                           source="preload")
+        log.info("preload_start host=%s model=%s size_gb=%s evicts=%s",
+                 host.cfg.name, model, size_gb, ",".join(evicts) or "-")
+        ok = await backend.load(model, timeout=max(60.0, float(
+            host.placement.loading.max_seconds)))
+        await host._read_models()
+        info = host.models.get(model)
+        displaced = sorted(before - {mid for mid, entry in host.models.items()
+                                     if entry.loaded})
+        record["displaced"] = displaced
+        for gone in displaced:
+            host.displaced[gone] = {"by": model, "at": time.time(),
+                                    "reason": "preload"}
+        if displaced:
+            # The lock wins the eviction — that is the operator's decision — but
+            # a model that vanishes without a line in the log is a mystery, so
+            # this is a warning and not an info.
+            log.warning("preload_evict host=%s model=%s displaced=%s",
+                        host.cfg.name, model, ", ".join(displaced))
+        if info is not None and info.loaded:
+            host.note_preload(model, state="loaded", size_gb=size_gb,
+                              evicts=evicts, displaced=displaced)
+            host.end_loading("preload")
+            return
+        if info is not None and info.is_loading is True:
+            # oMLX queued it and the call returned: the load is not over. The
+            # same reconciliation the probe tick runs decides when it is
+            # (`_poll_loading`), so this waits for that verdict instead of
+            # inventing a second one — and it is bounded by the ceiling.
+            log.info("preload_queued host=%s model=%s", host.cfg.name, model)
+            await self._await_preload_settled(host, model)
+            return
+        reason = ("the node refused the load" if not ok
+                  else "the node answered the load but did not load the model")
+        host.note_preload(model, state="failed", reason=reason, size_gb=size_gb,
+                          evicts=evicts, displaced=displaced)
+        entry = host.loading
+        if entry is not None:
+            host._note_load_failed(entry, "preload")
+        host.end_loading("preload")
+        log.warning("preload_failed host=%s model=%s reason=%s",
+                    host.cfg.name, model, reason)
 
     async def reinit(self) -> dict[str, str | None]:
         old = {h.cfg.name: h.resolved_address for h in self.hosts}

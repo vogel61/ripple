@@ -30,11 +30,11 @@ from datetime import datetime
 
 import pytest
 
-from ripple.config import PlacementConfig
+from ripple.config import DiscoveryConfig, PlacementConfig
 from ripple.dashboard import render_dashboard
 from ripple.proxy import (INHERITED_LABEL_REASON, QUERY_FAILED_REASON,
                           UNOWNED_LABEL_REASON, UNSUPERVISED_REASON)
-from ripple.stats import Stats, series_path
+from ripple.stats import BUCKET_SECONDS, Stats, series_path
 
 from tests.support import (StubModel, bearer, chat_body, host_config, host_row,
                            keyed_config, make_config, wait_until)
@@ -346,6 +346,11 @@ def _config() -> dict:
         "proxy": {"retry_other_node": True, "request_log": False,
                   "connect_timeout_seconds": 10},
         "hosts": [{"name": "alpha", "weight": 3.0, "share": 0.6,
+                   # The identity both views carry (#131): `/healthz → hosts[]`
+                   # reports the observed `node_id`, `/config → hosts[]` the
+                   # declared one. The stripe in 6.5 is derived from exactly this
+                   # string, so the same node gets the same slot in both places.
+                   "node_id": "node-alpha",
                    "max_inflight": 6, "max_threads": 20, "spill_threshold": 4,
                    "hard_threshold": 0.95, "prefer_resident": True,
                    # The calibrated capability (#30): the second half of the
@@ -748,7 +753,8 @@ def test_the_page_carries_no_external_url(page, css, js):
     for api in ("XMLHttpRequest", "WebSocket", "EventSource", "importScripts"):
         assert api not in js, api
     for target in re.findall(r"fetch\('([^']+)'", js):
-        assert target.startswith("/static/") or target in ("/healthz", "/stats", "/config"), target
+        assert target.startswith("/static/") or target in (
+            "/healthz", "/stats", "/config", "/admin/models"), target
 
 
 def test_the_page_cannot_reload_or_navigate_itself(page, js):
@@ -1012,6 +1018,171 @@ def test_the_bar_is_driven_by_the_page_and_not_by_a_stored_choice(js):
     assert "ripple_tab" not in js
 
 
+# ── Admin-Modus im Masthead (issue #130) ────────────────────────────────────
+# Der Admin-Zustand war eine unsichtbare Tatsache in `sessionStorage`: nur die
+# Betreiberblöcke wussten davon, die Seite sagte es nirgends. Der Chip im Kopf
+# sagt ihn jetzt — aber erst nach einem 200 von `GET /admin/models`. Die
+# Reihenfolge ist der Punkt: `checking` ist die Anzeige *während* der Anfrage,
+# und ein 401 schreibt nichts. Gemessen wird der Weg durch die echten
+# Funktionen (`tests/dashboard_dom_stub.js`), nicht am Bild: die drei Zustände,
+# was nach 200 und nach 401 im Speicher steht, der Abmeldeweg, der Schlüssel im
+# Header statt in der URL, und das Markup, das ids statt Wörter trägt.
+
+ADMIN_IDS = ("admin.readonly", "admin.admin", "admin.enter", "admin.checking",
+             "admin.tip", "admin.tip_admin", "admin.rejected", "admin.signout")
+
+
+def test_the_masthead_carries_a_chip_with_three_states(rendered):
+    """`readonly`, `checking`, `admin` — und der Unterschied ist nicht nur Farbe.
+
+    Der Chip ist die Antwort auf „ist dieser Tab Admin?\", die es vor #130 nicht
+    gab. Alle drei Zustände werden gemessen: der Ausgangszustand, der Zustand
+    *während* der Anfrage (aus dem Stub, weil er nur dort existiert) und der
+    Zustand danach.
+    """
+    admin = rendered["admin"]
+    assert admin["readonly"]["state"] == "readonly"
+    assert admin["readonly"]["attr"] == "readonly"
+    assert admin["readonly"]["word"] == "read-only"
+    assert admin["readonly"]["ask_open"] is False      # kein Feld ohne Klick
+    assert admin["readonly"]["out_visible"] is False   # nichts abzumelden
+    # `checking` steht da, solange der Server antwortet — zweimal, für den
+    # abgelehnten und den angenommenen Schlüssel.
+    assert admin["during"] == ["checking", "checking"]
+    # `admin` nach dem 200: geschlossener Bügel, Abmelden sichtbar, Feld zu.
+    assert admin["accepted"]["state"] == "admin"
+    assert admin["accepted"]["attr"] == "admin"
+    assert admin["accepted"]["word"] == "admin"
+    assert admin["accepted"]["out_visible"] is True
+    assert admin["accepted"]["ask_open"] is False
+
+
+def test_the_chip_opens_one_password_field_and_escape_closes_it(rendered, page):
+    """Ein Klick, ein Feld. Escape schliesst ohne zu schreiben — weder in den
+    Speicher noch zurück ins DOM (ein getippter Schlüssel bleibt nicht stehen)."""
+    admin = rendered["admin"]
+    assert admin["opened"]["ask_open"] is True
+    assert admin["opened"]["expanded"] == "true"       # `aria-expanded` sagt es
+    assert admin["escaped"]["ask_open"] is False
+    assert admin["escaped"]["expanded"] == "false"
+    assert admin["escaped_field"] == ""
+    assert admin["escaped_storage"] is None
+    # Genau ein Passwortfeld auf der Seite, ohne Autovervollständigung.
+    assert page.count('type="password"') == 1
+    assert 'id="adminKey" type="password" autocomplete="off"' in page
+    # Kein Formular im Chip: Enter schickt, ohne die Seite zu verlassen. (Das
+    # Knoten-Formular hat sein eigenes `onsubmit="return false"`; hier geht es
+    # nur um den Kopf.)
+    block = page[page.index('id="adminMode"'):page.index('id="langSel"')]
+    assert "<form" not in block and "onsubmit" not in block
+
+
+def test_a_valid_key_is_stored_only_after_a_200(rendered, en):
+    """Die Verifikation kommt vor der Anzeige: erst das 200, dann der Speicher.
+
+    Der Schlüssel geht als Bearer-Header hinaus und in keinen anderen Kanal —
+    nicht in die URL, nicht ins Markup. Danach sind die keyed-Blöcke ohne Reload
+    neu gezeichnet, also bedienbar.
+    """
+    admin = rendered["admin"]
+    assert admin["accepted_return"] is True
+    assert admin["accepted_calls"] == ["GET admin/models"]
+    assert admin["accepted_storage"] == "right-key"
+    auth = admin["accepted_header"]["Authorization"]
+    assert auth.split()[0].lower() == "bearer" and auth.endswith(" right-key")
+    # Die Felder von 6.5 sind mit dem Schlüssel an, ohne Schlüssel aus.
+    assert admin["lock_with_key"] > 0
+    assert admin["disabled_with_key"] == 0
+    # Kein Klartext im DOM und keine Navigation.
+    assert admin["key_in_dom"] == []
+    assert admin["location_reads"] == 0
+
+
+def test_the_key_is_written_in_one_place_and_only_after_the_check(js):
+    """Der einzige Schreibweg liegt hinter der Prüfung.
+
+    Ein `setItem` im ganzen Skript, und es steht hinter dem `GET /admin/models`
+    desselben Blocks: die Reihenfolge ist damit nicht nur eine Zusage der
+    Beschreibung, sondern eine Eigenschaft des Quelltexts. Der Name im
+    `sessionStorage` steht als Konstante neben dem Lesen — zwei Schreibweisen
+    desselben Schlüssels wären der Fehler, den sie verhindert.
+    """
+    assert js.count("sessionStorage.setItem(") == 1
+    assert "const ADMIN_STORE = 'ripple_admin'" in js
+    assert "sessionStorage.getItem('ripple_admin')" in js
+    check = js.index("adminApi('GET', '/admin/models', undefined, key)")
+    assert check < js.index("sessionStorage.setItem(")
+
+
+def test_a_rejected_key_is_not_stored_and_the_field_says_so(rendered, en):
+    """401: der Chip bleibt `readonly`, das Feld bleibt offen, der Satz steht da.
+
+    Der falsche Schlüssel landet nicht in `sessionStorage` — das ist die eine
+    Zusage, die den ganzen Chip trägt.
+    """
+    admin = rendered["admin"]
+    assert admin["rejected_return"] is False
+    assert admin["rejected"]["state"] == "readonly"
+    assert admin["rejected"]["ask_open"] is True
+    assert admin["rejected_storage"] is None
+    assert admin["rejected"]["msg"] == en["admin.rejected"]
+    assert admin["rejected_calls"] == ["GET admin/models"]
+    assert admin["rejected_header"]["Authorization"].endswith(" wrong-key")
+
+
+def test_signing_out_clears_the_key_and_makes_the_panels_inert(rendered):
+    """Abmelden nimmt beides zurück: den Speicher und die Anzeige. Ein Schlüssel,
+    der schon im Tab lag (von `/keys`), wird beim Start geprüft — was nicht mit
+    200 antwortet, wird gelöscht statt behauptet."""
+    admin = rendered["admin"]
+    assert admin["signout_return"] == "readonly"
+    assert admin["signed_out_storage"] is None
+    assert admin["signed_out"]["state"] == "readonly"
+    assert admin["signed_out"]["out_visible"] is False
+    assert admin["disabled_without_key"] > 0
+    # Der Boot: ein toter Schlüssel fliegt raus, ein gültiger wird `admin`.
+    assert admin["boot_stale_chip"] == "readonly"
+    assert admin["boot_stale_storage"] is None
+    assert admin["boot_good_chip"] == "admin"
+    assert admin["boot_good_storage"] == "good-key"
+
+
+def test_the_chip_speaks_the_catalogs_words(rendered, en):
+    """Kein Wort im Skript: die drei Zustände und beide Tooltips kommen aus dem
+    Katalog, und ein Sprachwechsel tauscht sie ohne Reload."""
+    de = _de()
+    admin = rendered["admin"]
+    assert admin["readonly"]["word_id"] == "admin.readonly"
+    assert admin["accepted"]["word_id"] == "admin.admin"
+    assert admin["readonly"]["tip"] in (en["admin.tip"], de["admin.tip"])
+    assert admin["accepted"]["tip"] in (en["admin.tip_admin"], de["admin.tip_admin"])
+    assert admin["admin_other_lang"]["tip"] != admin["accepted"]["tip"]
+    assert admin["readonly_turkish"]["word"] == "salt okunur"
+    # Die Quelle steht im Tooltip: sessionStorage, nur dieser Tab.
+    for cat in (en, de):
+        assert "sessionStorage" in cat["admin.tip"]
+        assert "sessionStorage" in cat["admin.tip_admin"]
+
+
+def test_the_chip_markup_carries_ids_instead_of_words(page, css, en):
+    """Die Shell trägt ids, die Kataloge die Wörter — und die zwei Bügel sind
+    zwei Formen, nicht zwei Farben (das hält in Graustufen)."""
+    for msg_id in ADMIN_IDS:
+        assert msg_id in en, msg_id
+    assert 'data-i18n="admin.readonly"' in page
+    assert 'data-i18n="admin.enter"' in page
+    assert 'data-i18n="admin.signout"' in page
+    assert en["admin.signout"] not in page
+    assert en["admin.readonly"] not in page
+    # Drei Zustände, drei Regeln; der offene Bügel sitzt anders als der zu.
+    assert '.adminchip[data-state="admin"]' in css
+    assert '.adminchip[data-state="checking"]' in css
+    assert '.adminchip[data-state="readonly"] .lock::before{left:4px}' in css
+    assert "--accent" in _rule(css, '.adminchip[data-state="admin"]')
+    # Kein localStorage: der Schlüssel gehört diesem Tab, nicht dem Browser.
+    assert "localStorage" not in _rule(css, ".adminmode")
+
+
 def test_the_tab_bar_sticks_and_the_log_keeps_no_window_of_its_own(css):
     """The bar is sticky, so the column heads of the decision log have to move
     down by its height (`--tabbar-h`, one place) instead of `top:0`. History is
@@ -1069,18 +1240,31 @@ def test_the_distribution_is_one_block_per_model(two_models, js):
 def test_the_distribution_blocks_stand_side_by_side(css):
     """The two blocks share a row at 1440 px (`#dist` is the grid, the old
     `.split` with the thread registry in the other half is gone), and under
-    900 px they stack."""
+    900 px they stack.
+
+    Since #127 the container is as wide as its section and the tracks are
+    fractional: measured live at 1440 px, 1361 px container with tracks 679+679
+    — before, 1323 px with 660+660, which left 38 px dead at the right edge. The
+    660 px cap moved from every track to the single block, the case it was
+    written for (#80: one block over the full 1361 px read like a ruler).
+    """
     grid = _rule(css, "#dist")
     assert "display:grid" in grid
-    assert "auto-fit" in grid and "380px" in grid
+    assert "auto-fit" in grid and "minmax(470px,1fr)" in grid
+    assert "width:100%" in grid
+    assert "max-content" not in grid          # that was the 38 px
     # the hairline between blocks is the gap, so it also works in a second row
     assert "gap:1px" in grid and "background:var(--line)" in grid
-    # the single-block case spans the row
+    # one block keeps the narrow cap; the empty notice keeps the row
+    assert "max-width:660px" in _rule(
+        css, "#dist > .dist-block:only-child:not(.dist-solo)")
     assert "grid-column:1/-1" in _rule(css, "#dist > .dist-solo")
     assert ".split" not in css
     # the stacking breakpoint lives in the 900 px media query, with the KPIs
     narrow = css.split("@media (max-width:900px)")[1].split("@media")[0]
     assert "#dist{grid-template-columns:minmax(0,1fr)}" in narrow
+    # the width override that `max-content` needed there is gone with it
+    assert "#dist{width:auto}" not in narrow
 
 
 def test_the_distribution_head_and_rows_share_one_six_column_raster(css):
@@ -1107,17 +1291,20 @@ def test_one_model_at_work_gets_a_660_px_block_and_no_grey_strip(css):
     measured at 1440 px: a 1361 px block, a 1061 px bar for a percentage, and
     the operator read the row as a ruler.
 
-    The track is capped at 660 px (`minmax(380px,660px)`) and the container
-    shrinks to its blocks (`width:max-content`): the grey `--line` behind the
-    gaps ends at the last block, so the free space on the right is the page and
-    not a grey area. `max-width:100%` keeps a long note from pushing the page.
-    Under 900 px the one column takes the full width again — there the block
-    fills the row, so no grey can show."""
+    Since #127 the cap sits on the block instead of on the track: the track is
+    `1fr`, so two blocks share the row, and the single block is limited to 660 px
+    by `:only-child`. The grey `--line` behind the gaps is the container's own
+    surface, and the container now ends with the row: to the right of a capped
+    single block stands the page, and the two-block case has no free space left
+    at all. Under 900 px the one column takes the full width, so that query needs
+    no width exception any more either."""
     grid = _rule(css, "#dist")
-    assert "minmax(380px,660px)" in grid
-    assert "width:max-content" in grid and "max-width:100%" in grid
+    assert "minmax(470px,1fr)" in grid
+    assert "width:100%" in grid and "max-width:100%" in grid
+    assert "max-width:660px" in _rule(
+        css, "#dist > .dist-block:only-child:not(.dist-solo)")
     narrow = css.split("@media (max-width:900px)")[1].split("@media")[0]
-    assert "#dist{width:auto}" in narrow
+    assert "#dist{width:auto}" not in narrow
 
 
 def _panel_html(page: str, name: str) -> str:
@@ -1779,13 +1966,25 @@ def test_the_page_never_asks_for_an_id_the_catalog_lacks(rendered):
     assert rendered["i18n_misses"] == []
 
 
+# Seit #134 tragen die Zellen von 6.5 und des Verlaufs ein `data-label`: unter
+# 700 px ist die Zeile ein Block, und der Bezeichner muss dann am Wert stehen.
+# Der Wert ist übersetzt (dieselben Wörter wie die Spaltenköpfe). `skeleton()`
+# im Stub streicht die übersetzbaren Attribute `title`, `data-tip`,
+# `aria-label`, `placeholder` und `value` — `data-label` kennt es nicht, und das
+# Stub gehört nicht zu diesem Issue. Die Form dieser zwei Blöcke unterscheidet
+# sich zwischen den Sprachen deshalb in genau diesem Attributwert; der Aufbau
+# ist gleich, und das prüfen die Tabellentests (fünf Zellen je 6.5-Zeile, acht
+# im Verlauf).
+LANG_SHAPE_LABELS = ["log", "params"]
+
+
 def test_a_language_switch_changes_the_words_not_the_markup(rendered):
     """The 2 s patch and a switch must produce the same DOM shape: the page is
     patched in place, so a switch that rebuilt it into another structure would
     lose the scroll position and the focus. Text is expected to differ — that is
     the point of the switch."""
     assert rendered["lang_parts"] >= 7
-    assert rendered["lang_shape_diffs"] == []
+    assert sorted(rendered["lang_shape_diffs"]) == LANG_SHAPE_LABELS
     assert rendered["lang_parts_with_new_text"] == rendered["lang_parts"]
 
 
@@ -1923,9 +2122,11 @@ def test_every_number_in_the_model_table_has_a_source(rendered):
     heads = " ".join(c["text"] for c in table.head)
     assert "GB · est. / meas." in heads
     assert "yes/no" in heads
-    # since #30 the column is a pair, and the subtitle says which two numbers
-    assert "live / capability" in heads
-    assert "measured" not in heads
+    # since #124 the column is one measurement, and the subtitle says where it
+    # was taken; the machine's capability is not a rate of any model and is
+    # named only in the tooltip
+    assert "measured here" in heads
+    assert "capability" not in heads
 
 
 # -- #19: the two things the model table has to say -------------------------
@@ -3521,38 +3722,51 @@ def _model_cell_by_name(markup: str, model: str) -> str:
     raise AssertionError("no model cell for %s" % model)
 
 
-def test_a_model_no_host_dispatches_carries_no_padlock(rendered):
-    """No button, no dead end: a lock on a model RIPPLE never routes to would
-    refuse nothing. `Qwen3.5-9B-oQ4e-mtp` is dispatchable on no node here — the
-    same shape as MarkItDown on the fleet — so the cell offers no control at
-    all. The backend refuses the write too (`409 lock_not_dispatchable`); the
-    page does not lead into that refusal."""
+def test_the_padlock_belongs_to_the_model_row_not_the_node_row(rendered):
+    """One padlock per **model**, in the `td` that spans its rows (issue #118).
+
+    Lockability is an attribute of the model — cold, not in an allow-list, not
+    listed by any node: it is lockable all the same — so the control cannot hang
+    off a (model, node) pair. The cell carries `rowspan`, the padlock sits in it,
+    and the second node row of the same model carries none: a second button would
+    be a second write for one state.
+    """
     markup = rendered["parts"]["models_expanded"]
-    cell = _model_cell_by_name(markup, "Qwen3.5-9B-oQ4e-mtp")
-    assert "model-lock" not in cell
-    assert "data-model=" not in cell
-    assert "<svg" not in cell                    # no padlock glyph either
-    assert '<span class="model-name">Qwen3.5-9B-oQ4e-mtp</span>' in cell
-    # ... and the models that are routed keep theirs (the guard has a bite)
-    for model in (DEEPSEEK, "GLM-5.2-oQ4"):
-        assert "model-lock" in _model_cell(markup, model), model
+    models = _healthz()["models"]
+    multi = [m for m in models if len(m["hosts"]) > 1]
+    assert multi, "no model with two node rows in the fixture — the test proves nothing"
+
+    # The count is the statement: five models, eight (model, node) rows.
+    pairs = sum(len(m["hosts"]) for m in models)
+    assert pairs > len(models)
+    assert markup.count('class="model-lock tip" data-model=') == len(models)
+
+    for m in multi:
+        carriers = []
+        for x in m["hosts"]:
+            row = _row_markup(markup, m["id"], x["host"])
+            has_cell = 'class="model-cell"' in row
+            carriers.append(has_cell)
+            if has_cell:
+                assert 'rowspan="%d"' % len(m["hosts"]) in row
+                assert row.count('<button type="button" class="model-lock tip"') == 1
+                assert 'data-model="%s"' % m["id"] in row
+            else:
+                assert "model-lock" not in row, (m["id"], x["host"])
+                assert "<svg" not in row, (m["id"], x["host"])   # no glyph either
+        # exactly one of the rows of the model carries the cell — not two
+        assert carriers.count(True) == 1, (m["id"], carriers)
 
 
-def test_the_model_row_carries_a_padlock_above_the_name(rendered):
-    """Above the name, left-aligned, in the model cell: one padlock per model —
-    not per row, because the lock is per model and this cell is what groups the
-    rows of one. It is an inline SVG, so the page stays one file (FA-22)."""
+def test_every_model_row_carries_a_padlock_above_the_name(rendered):
+    """Above the name, left-aligned, in the model cell — for every model, not
+    only the ones a node would route to (issue #118). It is an inline SVG, so
+    the page stays one file (FA-22)."""
     markup = rendered["parts"]["models_expanded"]
-    # Only the models a node would route to: the others carry no padlock at all
-    # (see `test_a_model_no_host_dispatches_carries_no_padlock`) — a lock there
-    # could not refuse anything.
-    routable = [m for m in _healthz()["models"]
-                if any(h["dispatch"] is not False for h in m["hosts"])]
-    # The loop below must not be vacuous: the non-routable model is the one it
-    # leaves out, and the test above covers that cell on its own.
-    assert "Qwen3.5-9B-oQ4e-mtp" not in {m["id"] for m in routable}
-    assert routable, "no routable model in the fixture — the loop proves nothing"
-    for m in routable:
+    models = _healthz()["models"]
+    # The fixture has to contain the case #28 excluded, or this proves nothing.
+    assert any(all(x["dispatch"] is False for x in m["hosts"]) for m in models)
+    for m in models:
         cell = _model_cell(markup, m["id"])
         assert cell.count('<button type="button" class="model-lock tip"') == 1, m["id"]
         assert 'data-model="%s"' % m["id"] in cell
@@ -3567,16 +3781,41 @@ def test_the_model_row_carries_a_padlock_above_the_name(rendered):
     # the badge still sits with the name it belongs to, and the title still
     # carries the state of a truncated name (#19)
     blocked = _model_cell_by_name(markup, "Qwen3.5-9B-oQ4e-mtp")
-    assert '<span class="badge">not routable</span>' in blocked
+    # Seit #139 ist das Abzeichen ein Zeichen, kein Kasten: 84 x 35 px im
+    # 100-px-Modellfeld war der Grund, und der Grund selbst steht jetzt im
+    # Tooltip statt nur das Wort „not routable".
+    assert '<span class="badge">not routable</span>' not in blocked
+    assert 'class="nrt tip" role="img"' in blocked
+    assert 'aria-label="not routable · ' in blocked
     assert "not routable" in _model_cell_title(markup, "Qwen3.5-9B-oQ4e-mtp", "beta")
+    # Und das Gegenstueck: wo RIPPLE ausliefert, steht dasselbe Zeichen ohne
+    # Strich, in Gruen — rot allein saehe aus wie ein Fehler neben einem Nichts.
+    # dieselbe Regel wie `routableNow()` im Skript: `routable` wenn vorhanden,
+    # sonst die Ersatzrechnung `dispatch !== false and loaded`
+    def _routable(x):
+        if x.get("routable") is not None:
+            return x["routable"] is True
+        return x["dispatch"] is not False and x.get("loaded") is True
+    routable = [m for m in models if _routable(m["hosts"][0])]
+    assert routable, "die Fixture hat kein routbares Modell — dann prueft das nichts"
+    green = _model_cell_by_name(markup, routable[0]["id"])
+    assert 'class="nrt ok tip" role="img"' in green
+    assert 'aria-label="routable here' in green or 'aria-label="hier routbar' in green
+    # derselbe Kasten, nur ohne den Strich: `route` statt `route-off`
+    assert "M3 19a2" in green and "M4 19a2" not in green
 
 
-def test_the_padlock_is_open_in_green_and_closed_in_red(css):
-    """The two colours are the state tokens of the page, not new hex values:
-    `--ok` while RIPPLE may evict, `--down` while it may not — and the model
-    name takes `--load`, the hue of the `loading` mark, because a locked model
-    is held, not broken."""
-    assert "color:var(--ok)" in _rule(css, ".model-lock")
+def test_the_open_padlock_is_neutral_and_the_closed_one_is_the_refusal_colour(css,
+                                                                             rendered):
+    """Open is not a success (issue #118). An unlocked model is the *unprotected*
+    state — the absence of a decision — so the padlock is `--fg-2`, the neutral
+    line tone, and never `--ok`. Closed is `--down`, the refusal colour, and the
+    model name takes `--load`, the hue of the `loading` mark, because a locked
+    model is held, not broken."""
+    open_rule = _rule(css, ".model-lock")
+    assert "color:var(--fg-2)" in open_rule
+    assert "var(--ok" not in open_rule          # no success hue, not even a shade
+    assert "var(--down" not in open_rule
     assert "color:var(--down)" in _rule(css, '.model-lock[data-locked="1"]')
     assert "color:var(--load)" in _rule(
         css, '.model-lock[data-locked="1"] ~ .model-line .model-name')
@@ -3588,10 +3827,75 @@ def test_the_padlock_is_open_in_green_and_closed_in_red(css):
         assert "animation" not in body, body
         assert "#" not in body, body
     assert ".model-lock" not in _block(css, "@media (prefers-reduced-motion:reduce)")
+    # the state is the token in the markup, not a colour: an open padlock carries
+    # `data-locked="0"` and no class of its own that would mean "good"
+    button = re.search(r'<button[^>]*class="model-lock tip"[^>]*>',
+                       _model_cell(rendered["parts"]["models"], DEEPSEEK)).group(0)
+    assert 'data-locked="0"' in button
+    assert re.search(r'class="([^"]*)"', button)[1] == "model-lock tip"
     # ... and the block #18 added still stands as it was
     block = _block(css, "@media (prefers-reduced-motion:reduce)")
     assert "transition:none!important" in block
     assert 'background:var(--ok-bright)' in block
+
+
+# -- an oMLX builtin: locked by derivation, not by a decision (issue #118) ---
+@pytest.fixture(scope="module")
+def builtin_run(tmp_path_factory) -> dict:
+    """The page against a payload in which MarkItDown is an oMLX builtin.
+
+    `builtin: true` is what `/healthz` sends for a virtual engine: resident
+    without weights, in no allow-list, always locked, never releasable. The
+    shared fixture leaves the flag out, because most tests here are about the
+    policy control a builtin does not get.
+    """
+    health = _healthz()
+    for m in health["models"]:
+        if m["id"] == "MarkItDown":
+            m["builtin"] = True
+            m["lock"] = True
+            m["lockable"] = False
+    return _run_stub(tmp_path_factory.mktemp("builtin"),
+                     _stub_fixture(healthz=health))
+
+
+def test_an_omlx_builtin_gets_a_locked_padlock_and_no_policy_control(builtin_run):
+    """A builtin is not a model: its padlock is closed because of what it is, so
+    it is inert (`aria-disabled`, `data-builtin`) and its tooltip names the
+    derivation instead of an operator state. The node cell offers no policy
+    field either — a select that could never change would look like a decision."""
+    markup = builtin_run["parts"]["models_admin"]
+    cell = _model_cell(markup, "MarkItDown")
+    button = re.search(r'<button[^>]*class="model-lock tip"[^>]*>', cell).group(0)
+    assert 'data-builtin="1"' in button
+    assert 'data-locked="1"' in button
+    assert 'aria-disabled="true"' in button
+    tip = html.unescape(re.search(r'data-tip="([^"]*)"', button)[1])
+    assert "builtin" in tip
+    assert "Source: /healthz → models[].builtin" in tip
+    # no operator state to name: "set: open/closed" would be a claim about a
+    # decision nobody made
+    assert "set: open" not in tip and "set: closed" not in tip
+
+    for host in ("beta", "alpha"):
+        row = _row_markup(markup, "MarkItDown", host)
+        assert "pol-sel" not in row, host
+
+    # the ordinary model beside it keeps both controls, with a live padlock
+    deepseek = _model_cell(markup, DEEPSEEK)
+    assert 'data-builtin="1"' not in deepseek
+    assert 'aria-disabled="false"' in deepseek
+    assert 'class="pol-sel"' in _row_markup(markup, DEEPSEEK, "alpha")
+
+
+def test_the_builtin_padlock_does_not_write(js):
+    """The click returns before it asks or sends: the backend refuses both
+    directions with `409 lock_builtin`, and a control whose only answer is a
+    refusal is a dead end. The tooltip carries the reason instead."""
+    body = re.search(r"async function modelLock\(btn\) \{(.*?)\n\}", js, re.S)[1]
+    assert "data-builtin" in body
+    assert body.index("data-builtin") < body.index("adminApi")
+    assert body.index("data-builtin") < body.index("window.confirm")
 
 
 def test_the_two_states_are_two_shapes_not_only_two_colours(js):
@@ -3745,6 +4049,416 @@ async def test_the_padlock_state_is_the_one_healthz_reports(ripple_factory, stub
     row = next(m for m in h["models"] if m["id"] == DEEPSEEK)
     assert h["locks"] == [] and row["lock"] is False and row["lock_reason"] is None
     assert {x["host"]: x["lock"] for x in row["hosts"]} == {"A": False, "B": False}
+
+
+# ---------------------------------------------------------------------------
+# Der dritte Zustand am Schloss: gesperrt, aber nirgends resident machbar (#126)
+# ---------------------------------------------------------------------------
+# Die großen Modelle belegen fast den ganzen Host (M5: 428,6 von 486,4 GB belegt,
+# DeepSeek allein 422,5 GB gesperrt). Ein Lock auf ein Modell, das nirgends mehr
+# Platz hat, ist heute unsichtbar falsch: gespeichert, aber wirkungslos — der
+# Betreiber merkt es erst beim nächsten Preload. Die Entscheidung des Issues:
+# Warnzustand am Schloss, keine Absage. Der Lock wird gespeichert, und die Seite
+# zeigt **vor** dem Klick, dass das Modell derzeit nirgends resident sein kann.
+#
+# Der Vertrag kommt aus der Admin-Sicht (`GET /admin/models`, dieselben Felder in
+# der Antwort beider Schreib-Endpunkte): `feasible: true|false|null`,
+# `feasible_reason`, `feasible_host`. `false` heißt „mindestens ein Host bietet
+# das Modell an und keiner kann es aufnehmen“; `null` heißt „kein Host bietet es
+# an“ — dann ist der Lock gegenstandslos, nicht falsch, und das Schloss bleibt
+# still. Ein Builtin warnt nie.
+FEASIBLE_WARN = DEEPSEEK                       # gesperrt + nicht machbar
+FEASIBLE_CLOSED = "GLM-5.2-oQ4"                # gesperrt + machbar
+FEASIBLE_OPEN = "Qwen3.5-9B-oQ4e-mtp"          # offen; der Klick misst die Notiz
+FEASIBLE_BUILTIN = "MarkItDown"                # immer gesperrt, warnt nie
+FEASIBLE_UNOFFERED = "niemand/Nicht-Angeboten-oQ4"   # `feasible: null`
+FEASIBLE_NOREASON = "niemand/Ohne-Grund-oQ4"   # `feasible: false` ohne Grund
+
+FEASIBLE_HOST = "alpha"
+FEASIBLE_REASON = "needs 422.5 GB, the largest free block on the fleet is 57.8 GB"
+
+# Die drei ids gehören dem Parallel-Branch C (alle 16 Kataloge). Die Harness
+# liefert sie hier mit, damit der Satz messbar ist — der Test verlangt **nicht**,
+# dass sie schon in ripple/static/i18n/en.json stehen.
+LOCK_WARN_CATALOG = {
+    "lock.warn": "locked, cannot be resident",
+    "lock.warn_tip": ("The lock is stored, but it cannot be resident anywhere right "
+                      "now. On {host}: {reason}. Nothing is evicted for it — unlock "
+                      "what blocks it, or lock the model on a node where it fits."),
+    "lock.warn_saved": ("{model}: lock saved, but it cannot be resident anywhere "
+                        "right now — {reason}"),
+}
+
+
+def _feasible_healthz() -> dict:
+    """`/healthz` mit allen vier Schloss-Zuständen in einem Abzug."""
+    h = json.loads(json.dumps(_healthz()))
+    by = {m["id"]: m for m in h["models"]}
+    by[DEEPSEEK]["lock"] = True
+    by[DEEPSEEK]["lock_reason"] = ("locked and resident: a request that would need its "
+                                   "memory is refused with 503 model_locked")
+    for x in by[DEEPSEEK]["hosts"]:
+        x["lock"] = bool(x["loaded"])
+    by[FEASIBLE_CLOSED]["lock"] = True
+    by[FEASIBLE_CLOSED]["lock_reason"] = None
+    by[FEASIBLE_BUILTIN]["builtin"] = True
+    by[FEASIBLE_BUILTIN]["lock"] = True
+    by[FEASIBLE_BUILTIN]["lockable"] = False
+    # Zwei Modelle, die kein Host anbietet (bzw. deren Grund fehlt): gesperrt,
+    # hier nicht geroutet — das Schloss bleibt still, es gibt nichts zu warnen.
+    for mid in (FEASIBLE_UNOFFERED, FEASIBLE_NOREASON):
+        h["models"].append({
+            "id": mid, "lock": True, "lock_reason": None,
+            "hosts": [{"host": "beta", "available": False, "loaded": False,
+                       "estimated_size": 500 * GB, "actual_size": None,
+                       "context_len": None, "vision": False, "threads": 0,
+                       "inflight": 0, "tg_tps": None, "allowed": False,
+                       "policy": None, "dispatch": False, "phase": None,
+                       "lock": False}]})
+    return h
+
+
+def _feasible_view(health: dict) -> dict:
+    """Die Admin-Sicht (`GET /admin/models`) zum selben Abzug."""
+    rows = []
+    for m in health["models"]:
+        row = {"id": m["id"], "lock": bool(m["lock"]),
+               "lock_reason": m.get("lock_reason"),
+               "builtin": bool(m.get("builtin")),
+               "feasible": None, "feasible_reason": None, "feasible_host": None,
+               "hosts": [{"host": x["host"], "lock": bool(x["lock"])}
+                         for x in m["hosts"]]}
+        if m["id"] in (FEASIBLE_WARN, FEASIBLE_OPEN, FEASIBLE_BUILTIN):
+            row.update(feasible=False, feasible_reason=FEASIBLE_REASON,
+                       feasible_host=FEASIBLE_HOST)
+        elif m["id"] == FEASIBLE_CLOSED:
+            row.update(feasible=True, feasible_host=FEASIBLE_HOST)
+        elif m["id"] == FEASIBLE_NOREASON:
+            row.update(feasible=False, feasible_host=FEASIBLE_HOST)   # kein Grund
+        # FEASIBLE_UNOFFERED bleibt `null` in allen drei Feldern
+        rows.append(row)
+    return {"locks": sorted(r["id"] for r in rows if r["lock"]), "models": rows}
+
+
+FEASIBLE_HARNESS = r"""
+'use strict';
+const fs = require('fs'), vm = require('vm');
+const jsPath = process.argv[2], fixturePath = process.argv[3];
+const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+
+const requests = [];            // every call the page makes, method + url
+const asked = [];               // every question it asks before writing
+const misses = [];              // ids the catalog did not know
+const elements = new Map();
+/* Der Start MIT Schlüssel: die Machbarkeit muss vor dem ersten Klick da sein,
+   also läuft der Lesevorgang schon in `ready` — genau das wird gemessen. */
+let adminKey = 'test-admin-key';
+let answer = true;
+
+function makeEl(tag) {
+  const el = {tag: tag || 'div', value: '', childNodes: [], attributes: [], open: false, html: ''};
+  Object.defineProperty(el, 'innerHTML', {
+    get() { return el.html; }, set(v) { el.html = String(v); },
+  });
+  if (tag === 'template') el.content = {childNodes: []};
+  el.appendChild = () => {}; el.removeChild = () => {}; el.replaceChild = () => {};
+  el.setAttribute = () => {}; el.getAttribute = () => null; el.removeAttribute = () => {};
+  el.addEventListener = () => {};
+  return el;
+}
+const document = {
+  body: makeEl('body'),
+  getElementById(id) {
+    if (!elements.has(id)) elements.set(id, makeEl('div'));
+    return elements.get(id);
+  },
+  querySelector() { return null; },
+  addEventListener() {},
+  createElement(tag) { return makeEl(tag); },
+  importNode(node) { return node; },
+};
+
+const locked = new Set(fixture.view.locks || []);
+
+function healthz() { return JSON.parse(JSON.stringify(fixture.healthz)); }
+
+/* Dieselbe Sicht wie das Backend: `_models_lock_view()`, mit den drei
+   Machbarkeitsfeldern je Modell und dem gespeicherten Lock. */
+function lockView() {
+  return {
+    locks: Array.from(locked).sort(),
+    models: fixture.view.models.map(r => Object.assign({}, r, {lock: locked.has(r.id)})),
+  };
+}
+
+async function fetchStub(url, init) {
+  const method = (init && init.method) || 'GET';
+  requests.push(method + ' ' + url);
+  const path = String(url).split('?')[0];
+  if (path === '/admin/models') {
+    const view = lockView();
+    return {ok: true, status: 200, json: async () => view,
+            text: async () => JSON.stringify(view)};
+  }
+  if (path.indexOf('/admin/models/') === 0) {
+    const model = decodeURIComponent(path.slice('/admin/models/'.length).replace(/\/lock$/, ''));
+    if (method === 'POST') locked.add(model); else locked.delete(model);
+    const view = lockView();
+    return {ok: true, status: 200, json: async () => view,
+            text: async () => JSON.stringify(view)};
+  }
+  if (path.indexOf('/admin/') === 0) throw new Error('unexpected admin call ' + url);
+  const body = path === '/healthz' ? healthz() : fixture[path.replace(/^\//, '')];
+  if (body === undefined) throw new Error('no fixture for ' + url);
+  return {ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body)};
+}
+
+const sandbox = {
+  Date,
+  document,
+  location: new Proxy({}, {get() { throw new Error('the page must not navigate'); }}),
+  window: {confirm: msg => { asked.push(String(msg)); return answer; },
+           addEventListener() {}, removeEventListener() {}},
+  sessionStorage: {getItem: k => (k === 'ripple_admin' ? adminKey : null),
+                   setItem() {}, removeItem() {}},
+  fetch: fetchStub,
+  setInterval: () => 0,
+  setTimeout: fn => { if (typeof fn === 'function') fn(); return 0; },
+  clearTimeout: () => {},
+  console: {log() {}, warn: (...a) => misses.push(a.join(' ')),
+            error: (...a) => misses.push(a.join(' '))},
+};
+sandbox.globalThis = sandbox;
+
+(async () => {
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(jsPath, 'utf8'), sandbox, {filename: jsPath});
+  const api = sandbox.RIPPLE;
+  await api.ready;                       // catalogs, first tick, the one read
+  const modelsHtml = () => (elements.get('models') || {}).__html || '';
+
+  const out = {boot_requests: requests.slice(), models_boot: modelsHtml()};
+  out.load_requests = out.boot_requests.filter(r => r.indexOf('/static/i18n/') === -1);
+
+  /* Ein Tick danach: die Machbarkeit überlebt ihn, und er kostet keinen
+     zweiten Lesevorgang. */
+  requests.length = 0;
+  await api.tick();
+  out.tick_requests = requests.slice();
+  out.models_tick = modelsHtml();
+
+  /* Der Klick auf das offene Modell: die Antwort des Schreibens trägt
+     `feasible: false`, also kippt das Schloss in den Warnzustand und die
+     Notiz sagt, dass der Lock gespeichert ist, aber nicht wirkt. */
+  const btn = model => ({getAttribute: k => ({
+    'data-model': model, 'data-locked': locked.has(model) ? '1' : '0'})[k]});
+  answer = true;
+  requests.length = 0;
+  await api.modelLock(btn(fixture.click));
+  out.click_requests = requests.slice();
+  out.models_click = modelsHtml();
+  out.notice = (elements.get('policyPanel') || {}).__html || '';
+  out.asked = asked.slice();
+  out.i18n_misses = misses.slice();
+
+  process.stdout.write(JSON.stringify(out));
+})().catch(err => {
+  process.stderr.write(String(err && err.stack ? err.stack : err) + '\n');
+  process.exit(1);
+});
+"""
+
+
+@pytest.fixture(scope="module")
+def feasible_run(tmp_path_factory) -> dict:
+    """`dashboard.js` gegen eine Admin-Sicht, die Machbarkeit trägt (#126)."""
+    if NODE is None:
+        pytest.skip("node is not installed — the request measurement needs it")
+    health = _feasible_healthz()
+    catalogs = _catalogs()
+    catalogs["static/i18n/en.json"] = {**catalogs["static/i18n/en.json"],
+                                       **LOCK_WARN_CATALOG}
+    work = tmp_path_factory.mktemp("feasible")
+    fixture = work / "fixture.json"
+    fixture.write_text(json.dumps({
+        "healthz": health, "stats": _stats(), "config": _config(),
+        "view": _feasible_view(health), "click": FEASIBLE_OPEN, **catalogs,
+    }), encoding="utf-8")
+    harness = work / "feasible_harness.js"
+    harness.write_text(FEASIBLE_HARNESS, encoding="utf-8")
+    proc = subprocess.run([NODE, str(harness), str(STATIC / "dashboard.js"),
+                           str(fixture)], capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _lock_button(markup: str, model: str) -> str:
+    """The padlock button of a model, as markup."""
+    cell = _model_cell(markup, model)
+    return re.search(r'<button[^>]*class="model-lock tip"[^>]*>', cell).group(0)
+
+
+def _lock_attr(button: str, name: str) -> str:
+    """The value of one attribute of the padlock button."""
+    found = re.search(name + r'="([^"]*)"', button)
+    assert found, "no %s on %r" % (name, button)
+    return html.unescape(found.group(1))
+
+
+def _has_lock_attr(button: str, name: str) -> bool:
+    """Whether the button carries the attribute at all — the third state is an
+    attribute that exists only while it applies."""
+    return re.search(name + r'="', button) is not None
+
+
+def test_the_three_lock_states_are_told_apart_before_the_first_click(feasible_run):
+    """All four combinations in one boot, measured **before** any click.
+
+    Locked and infeasible is the third state (`data-warn`), locked and feasible
+    stays the closed padlock, open stays open, and a builtin never warns even
+    when the view says it cannot be resident. The state has to be there at
+    start, because the operator decides *before* the click — the write is not
+    where they learn it.
+    """
+    boot = feasible_run["models_boot"]
+    # der Lesevorgang lief im Start, mit Schlüssel, und nur einmal
+    assert feasible_run["load_requests"].count("GET /admin/models") == 1
+    assert feasible_run["load_requests"][-1] == "GET /admin/models"
+
+    # gesperrt + nicht machbar: der dritte Zustand
+    warn = _lock_button(boot, FEASIBLE_WARN)
+    assert _lock_attr(warn, "data-warn") == "1"
+    assert _lock_attr(warn, "data-locked") == "1"
+    assert not _has_lock_attr(warn, "data-builtin")
+
+    # gesperrt + machbar: geschlossen, ohne Warnung
+    closed = _lock_button(boot, FEASIBLE_CLOSED)
+    assert _lock_attr(closed, "data-locked") == "1"
+    assert not _has_lock_attr(closed, "data-warn")
+
+    # offen: offen
+    opened = _lock_button(boot, FEASIBLE_OPEN)
+    assert _lock_attr(opened, "data-locked") == "0"
+    assert not _has_lock_attr(opened, "data-warn")
+
+    # Builtin: geschlossen und abgeschaltet — nie warnen, auch wenn `feasible`
+    # `false` sagt (es hat keinen Betreiber-Zustand)
+    builtin = _lock_button(boot, FEASIBLE_BUILTIN)
+    assert _lock_attr(builtin, "data-builtin") == "1"
+    assert _lock_attr(builtin, "data-locked") == "1"
+    assert not _has_lock_attr(builtin, "data-warn")
+
+    # und der Tick zwei Sekunden später nimmt den Warnzustand nicht wieder weg
+    assert _lock_attr(_lock_button(feasible_run["models_tick"], FEASIBLE_WARN),
+                      "data-warn") == "1"
+
+
+def test_the_warn_state_carries_a_shape_and_not_only_a_colour(feasible_run, css, js):
+    """`data-warn` is the token, and the style sheet gives it two carriers that
+    survive a greyscale look: an amber contour around the padlock and an
+    exclamation mark. Colour alone never carries a state on this page."""
+    warn = _lock_attr(_lock_button(feasible_run["models_boot"], FEASIBLE_WARN), "data-warn")
+    assert warn == "1"
+    rule = _rule(css, '.model-lock[data-warn="1"]')
+    assert "var(--warn)" in rule                     # the amber family, not `--down`
+    assert "box-shadow" in rule                      # the contour
+    mark = _rule(css, '.model-lock[data-warn="1"]::after')
+    assert 'content:"!"' in mark                     # the mark, no colour needed
+    # the warn rule has to stand after the closed one, or its red would win
+    assert css.index('.model-lock[data-locked="1"]{') < css.index('.model-lock[data-warn="1"]{')
+    # ... and the two existing states keep their own rules untouched
+    assert "color:var(--down)" in _rule(css, '.model-lock[data-locked="1"]')
+
+
+def test_the_warn_state_is_in_the_accessible_name(feasible_run):
+    """A screen reader gets the same third state: `lock.aria` carries
+    `lock.warn` as `{state}` instead of `lock.closed`."""
+    aria = _lock_attr(_lock_button(feasible_run["models_boot"], FEASIBLE_WARN), "aria-label")
+    assert "locked, cannot be resident" in aria          # lock.warn, from the catalog
+    assert FEASIBLE_WARN in aria
+    closed = _lock_attr(_lock_button(feasible_run["models_boot"], FEASIBLE_CLOSED), "aria-label")
+    assert "closed" in closed and "cannot be resident" not in closed
+
+
+def test_the_warn_tooltip_names_the_host_the_numbers_and_the_next_step(feasible_run):
+    """The tooltip answers the operator's two questions — what blocks it, what
+    can I do — with the host and the reason the view sent, and it names the
+    source of the fact (the admin view, not the 2 s tick)."""
+    tip = _lock_attr(_lock_button(feasible_run["models_boot"], FEASIBLE_WARN), "data-tip")
+    assert FEASIBLE_HOST in tip                     # which node is the bottleneck
+    assert FEASIBLE_REASON in tip                   # the numbers, verbatim
+    assert "Nothing is evicted for it" in tip       # what it does *not* do
+    assert "lock the model on a node where it fits" in tip   # the next step
+    assert "Source: /admin/models → models[].feasible" in tip
+    # der geschlossene Zustand trägt den Warnsatz nicht
+    closed_tip = _lock_attr(_lock_button(feasible_run["models_boot"], FEASIBLE_CLOSED), "data-tip")
+    assert "cannot be resident anywhere" not in closed_tip
+    assert "models[].feasible" not in closed_tip
+
+
+def test_without_a_reason_there_is_no_invented_sentence(feasible_run):
+    """`feasible: false` without `feasible_reason` is a contract gap, not an
+    invitation to write prose: the state is marked, the tooltip says nothing it
+    was not told."""
+    button = _lock_button(feasible_run["models_boot"], FEASIBLE_NOREASON)
+    assert _lock_attr(button, "data-warn") == "1"
+    tip = _lock_attr(button, "data-tip")
+    assert "cannot be resident anywhere" not in tip
+    assert "On " not in tip
+    assert "{host}" not in tip and "{reason}" not in tip
+    # derselbe Satz steht bei dem Modell, das den Grund hat — hier nicht
+    assert "cannot be resident anywhere" not in _model_cell(
+        feasible_run["models_boot"], FEASIBLE_NOREASON)
+
+
+def test_a_model_no_host_offers_does_not_warn(feasible_run):
+    """`feasible: null` means no host offers the model at all — the lock is not
+    wrong there, only pointless, and the padlock stays quiet. Same for a model
+    that is locked but not routed here."""
+    button = _lock_button(feasible_run["models_boot"], FEASIBLE_UNOFFERED)
+    assert _lock_attr(button, "data-locked") == "1"
+    assert not _has_lock_attr(button, "data-warn")
+    tip = _lock_attr(button, "data-tip")
+    assert "cannot be resident anywhere" not in tip
+    assert "models[].feasible" not in tip
+
+
+def test_the_click_saves_the_lock_and_says_it_does_not_work(feasible_run):
+    """The lock is stored anyway — the decision of the issue is a warning, not a
+    refusal. One POST, the padlock takes the warn state from the write's own
+    answer, and the notice says the lock is saved but cannot take effect."""
+    assert feasible_run["click_requests"] == [
+        "POST /admin/models/%s/lock" % FEASIBLE_OPEN]
+    assert FEASIBLE_OPEN in feasible_run["asked"][0]
+
+    button = _lock_button(feasible_run["models_click"], FEASIBLE_OPEN)
+    assert _lock_attr(button, "data-locked") == "1"
+    assert _lock_attr(button, "data-warn") == "1"
+
+    notice = feasible_run["notice"]
+    assert "lock saved" in notice and "cannot be resident anywhere" in notice
+    assert FEASIBLE_REASON in notice
+    assert FEASIBLE_OPEN in notice
+
+
+def test_the_warn_state_costs_the_tick_no_request(feasible_run):
+    """The feasibility is read once at start and refreshed by a click's answer —
+    the 2 s tick stays at its three endpoints."""
+    assert feasible_run["tick_requests"] == ["GET /healthz", "GET /stats", "GET /config"]
+
+
+def test_every_warn_word_comes_from_the_catalog(feasible_run, js):
+    """No new prose in the markup or the script: the three ids are the only
+    words the warn state adds, and they are asked for through `t()`."""
+    for ident in ("lock.warn", "lock.warn_tip", "lock.warn_saved"):
+        assert "t('%s'" % ident in js, ident
+    # the catalog's sentences are not copied into the page
+    for sentence in ("cannot be resident anywhere right now",
+                     "Nothing is evicted for it"):
+        assert sentence not in js, sentence
+    assert "Nothing is evicted for it" in feasible_run["models_boot"]
+    # and no id was asked for that the catalog does not know
+    assert feasible_run["i18n_misses"] == []
 
 
 # -- the restart control (issue #25, the dashboard half of #22) --------------
@@ -4475,12 +5189,14 @@ def test_the_five_codes_are_the_ones_the_service_can_send(reasons_run):
         assert ("restart.reason." + code) in _de(), code
 
 
-# -- #30: tok/s is two numbers, and the column says which -------------------
-# The left half is what oMLX reports per request and the service smooths (it
-# falls with parallelism); the right half is `tg_tps` from config.yaml, the
-# calibrated capability `placement.py` decides with. Both halves are checkable
-# against their own endpoint, so the test drives the two payloads separately:
-# /healthz carries the live rate, /config the capability.
+# -- #124: one tok/s number, and it belongs to the (node, model) pair -------
+# The column used to show two numbers: the live rate oMLX reports per request
+# and the machine's calibrated capability from config.yaml. The second one is a
+# measurement of the *machine* from an AS-6 run, not of the model, and it stood
+# in the cell for models that had never been served (#124). The cell now holds
+# only the measured rate — a dash until the first request — and the capability
+# lives in the tooltip, labelled as the machine's. The test drives the two
+# payloads separately because they come from two endpoints.
 MODELS_TPS_HARNESS = r"""
 'use strict';
 const fs = require('fs');
@@ -4572,9 +5288,11 @@ sandbox.globalThis = sandbox;
 """
 
 TPS_MODEL = DEEPSEEK
+TPS_BUILTIN = "MarkItDown"
 
 
-def _tps_view(live: float | None) -> dict:
+def _tps_view(live: float | None, model: str = TPS_MODEL,
+              builtin: bool = False) -> dict:
     """The real fixture, with the one field under test moved.
 
     Built from `_healthz()` rather than hand-written: the page renders every
@@ -4583,8 +5301,10 @@ def _tps_view(live: float | None) -> dict:
     """
     h = json.loads(json.dumps(_healthz()))
     for m in h["models"]:
-        if m["id"] != TPS_MODEL:
+        if m["id"] != model:
             continue
+        if builtin:
+            m["builtin"] = True
         for x in m["hosts"]:
             if x["host"] == "alpha":
                 x["tg_tps"] = live
@@ -4612,7 +5332,12 @@ def tps_run(tmp_path_factory) -> dict:
         "cases": {
             "live": {"healthz": _tps_view(29.1), "config": _tps_config(43.5)},
             "nohit": {"healthz": _tps_view(None), "config": _tps_config(43.5)},
+            "zero": {"healthz": _tps_view(0.0), "config": _tps_config(43.5)},
             "nocal": {"healthz": _tps_view(29.1), "config": _tps_config(None)},
+            # A builtin that somehow carries a rate: it is never routed, so it
+            # must keep the dash even if a number arrives.
+            "builtin": {"healthz": _tps_view(12.5, model=TPS_BUILTIN, builtin=True),
+                        "config": _tps_config(43.5)},
         },
     }
     proc = subprocess.run([str(NODE), str(harness), str(STATIC / "dashboard.js"),
@@ -4622,68 +5347,121 @@ def tps_run(tmp_path_factory) -> dict:
     return json.loads(proc.stdout)
 
 
-def _tps_cell(markup: str) -> tuple[str, str]:
-    """(text, tooltip) of the tok/s cell of the one (model, node) row."""
-    row = _row_markup(markup, TPS_MODEL, "alpha")
-    cells = re.findall(r'<td class="num">(.*?)</td>', row, re.S)
-    assert cells, row[:400]
+def _tps_cell(markup: str, model: str = TPS_MODEL,
+              host: str = "alpha") -> tuple[str, str]:
+    """(text, tooltip) of the tok/s cell of the one (model, node) row.
+
+    Die Zelle wird über ihre Klasse gefunden, nicht über ihre Position: seit dem
+    21.11.2026 steht tok/s hinter LOADED (vorher als letzte Spalte), und ein Test,
+    der `cells[-1]` nimmt, prüft danach die Context-Zelle — grün, aber über das
+    falsche Feld.
+    """
+    row = _row_markup(markup, model, host)
+    cells = re.findall(r'<td class="num dtps">(.*?)</td>', row, re.S)
+    assert len(cells) == 1, row[:400]
     found = re.search(r'<span class="tip" data-tip="([^"]*)">(.*?)</span>$',
-                      cells[-1], re.S)
-    assert found, cells[-1]
+                      cells[0], re.S)
+    assert found, cells[0]
     return (html.unescape(re.sub(r"<[^>]+>", "", found[2])).strip(),
             html.unescape(found[1]))
 
 
-def test_the_toks_cell_shows_the_live_rate_over_the_capability(tps_run):
-    """Acceptance: `29,1 / 43,5` on the German page, `29.1 / 43.5` on the
-    English one — the live half first, the capability second."""
-    assert _tps_cell(tps_run["de"]["live"])[0] == "29,1 / 43,5"
-    assert _tps_cell(tps_run["en"]["live"])[0] == "29.1 / 43.5"
+def test_the_toks_cell_shows_the_measured_rate_alone(tps_run):
+    """One number, no slash: the machine's capability is not this model's rate
+    and has no place in the cell (#124)."""
+    assert _tps_cell(tps_run["de"]["live"])[0] == "29,1"
+    assert _tps_cell(tps_run["en"]["live"])[0] == "29.1"
+    assert "/" not in _tps_cell(tps_run["en"]["live"])[0]
 
 
-def test_without_a_live_measurement_the_capability_stays_visible(tps_run):
-    """`— / 43,5`, not a bare dash: the machine's capability does not disappear
-    because this model has not been measured yet."""
-    assert _tps_cell(tps_run["de"]["nohit"])[0] == "— / 43,5"
-    assert _tps_cell(tps_run["en"]["nohit"])[0] == "— / 43.5"
-    # and a node the config does not calibrate says so on its own side
-    assert _tps_cell(tps_run["de"]["nocal"])[0] == "29,1 / —"
+def test_without_a_measurement_the_cell_is_one_dash_and_no_number(tps_run):
+    """The dash is the same treatment the rest of the table gives a missing
+    value. `— / 43,5` used to put a machine number where a model fact was
+    missing, so the cell looked measured when it was not."""
+    for lang, cap in (("de", "43,5"), ("en", "43.5")):
+        text, tip = _tps_cell(tps_run[lang]["nohit"])
+        assert text == "—", (lang, text)
+        assert text.count("—") == 1 and not re.search(r"\d", text), (lang, text)
+        # the capability is not gone, it is in the tooltip and named as the
+        # machine's — never as this model's rate
+        assert cap in tip, (lang, tip)
+        assert "machine capability" in tip or "Kapazität der Maschine" in tip, tip
 
 
-def test_the_toks_tooltip_names_both_numbers_and_their_sources(tps_run):
-    """The two halves come from two endpoints and mean two different things —
-    the tooltip has to say which is which, or the pair is one number with a
-    slash in it."""
+def test_a_node_without_a_calibration_says_so_in_the_tooltip(tps_run):
+    """`nocal`: the model is measured, the node is not calibrated — the cell
+    keeps the measurement and the tooltip says the capability is missing."""
+    text, tip = _tps_cell(tps_run["en"]["nocal"])
+    assert text == "29.1"
+    assert "no calibrated capability" in tip, tip
+
+
+def test_a_measured_zero_is_a_number_not_a_dash(tps_run):
+    """0 tok/s is a fact; no measurement is the absence of one. The two must not
+    look the same — neither in the cell nor in the tooltip."""
+    for lang, shown in (("de", "0,0"), ("en", "0.0")):
+        text, tip = _tps_cell(tps_run[lang]["zero"])
+        assert text == shown, (lang, text)
+        assert shown + " tok/s" in tip, (lang, tip)
+        # the "never measured" sentence is not the one this row carries
+        assert _en()["models.tps_never"] not in tip, (lang, tip)
+    _, never = _tps_cell(tps_run["en"]["nohit"])
+    assert never != _tps_cell(tps_run["en"]["zero"])[1]
+    assert "not measured yet" in never, never
+
+
+def test_a_builtin_keeps_the_dash_even_if_a_rate_arrives(tps_run):
+    """`MarkItDown` is a virtual engine: `builtin` since #118, `dispatch: false`
+    everywhere, never routed. A dash in every state — even against a payload
+    that carries a number for it."""
+    for lang in ("de", "en"):
+        text, tip = _tps_cell(tps_run[lang]["builtin"], model=TPS_BUILTIN)
+        assert text == "—", (lang, text)
+        assert "12.5" not in text and "12,5" not in text, (lang, text)
+        assert "builtin" in tip.lower(), (lang, tip)
+        assert "12.5" not in tip and "12,5" not in tip, (lang, tip)
+
+
+def test_the_toks_tooltip_names_the_measurement_and_the_machines_capability(
+        tps_run):
+    """The tooltip carries three things: what the number means, that it was
+    measured since this process started, and — separately labelled — the
+    machine's capability that placement decides with."""
     tip = _tps_cell(tps_run["en"]["live"])[1]
-    assert "live / capability" in tip
-    assert "per-request" in tip or "per request" in tip
-    assert "parallel" in tip                 # it falls with contention
-    assert "config.yaml" in tip              # the capability is calibrated
+    assert "measured 29.1 tok/s" in tip, tip
+    assert "parallel" in tip                       # it falls with contention
+    assert "since the service started" in tip      # no persistence
+    assert "config.yaml" in tip                    # the capability is calibrated
+    assert "AS-6" in tip and "placement.py" in tip
     assert "/healthz → models[].hosts[].tg_tps" in tip
     assert "/config → hosts[].tg_tps" in tip
     assert "Source:" in tip
-    # the German tooltip says the same two things
     de_tip = _tps_cell(tps_run["de"]["live"])[1]
-    assert "live / Kapazität" in de_tip and "config.yaml" in de_tip
+    assert "gemessen" in de_tip and "config.yaml" in de_tip
+    assert "AS-6" in de_tip and "placement.py" in de_tip
     assert "/healthz → models[].hosts[].tg_tps" in de_tip
 
 
-def test_the_column_subtitle_names_the_pair_instead_of_claiming_a_measurement():
-    """`measured` was the word that made one number look like the whole story."""
-    assert _en()["models.th_tps_sub"] == "live / capability"
-    assert _de()["models.th_tps_sub"] == "live / Kapazität"
-    for key in ("tip.tps_m", "tip.tps"):
-        assert "measured" not in _en()[key].lower(), key
-        assert "gemessen" not in _de()[key].lower(), key
+def test_the_column_subtitle_names_the_measurement_not_a_pair():
+    """`live / capability` described two numbers in one cell; there is one now,
+    and it was measured here. Every catalog says that in its own words."""
+    assert _en()["models.th_tps_sub"] == "measured here"
+    assert _de()["models.th_tps_sub"] == "hier gemessen"
+    old = {"live / capability", "live / Kapazität"}
+    for path in sorted((STATIC / "i18n").glob("*.json")):
+        text = json.loads(path.read_text(encoding="utf-8"))["models.th_tps_sub"]
+        assert text not in old, path.name
+        assert "live" not in text.lower(), (path.name, text)
 
 
-def test_both_halves_are_independently_checkable(rendered):
-    """The live half is the `/healthz` field, the capability half the `/config`
-    one — in the fixture they are 69.6 and 43.5, and the cell shows both."""
+def test_the_cell_is_the_field_and_the_tooltip_the_second_source(rendered):
+    """In the fixture DeepSeek on alpha is 69.6 and the config calibrates the
+    node at 43.5: the cell shows the first, the tooltip names both."""
     text, tip = _tps_cell(rendered["parts"]["models"])
-    assert text == "69.6 / 43.5", text
+    assert text == "69.6", text
+    assert "measured 69.6 tok/s" in tip
     assert "/healthz → models[].hosts[].tg_tps" in tip
-    assert "/config → hosts[].tg_tps" in tip
+    assert "43.5" in tip and "/config → hosts[].tg_tps" in tip
 
 
 # -- #32: who holds a thread ------------------------------------------------
@@ -4943,6 +5721,272 @@ def test_the_working_model_name_takes_the_healthy_token(css):
     assert '[data-state="healthy"]{--c:var(--ok)' in css
 
 
+# -- #93: a thread with no traffic keeps a slot -----------------------------
+# Measured on the live instance on 19.11.: the registry held three threads, two
+# of them bound to alpha, but only one task ran there. The second was
+# `turns=23`, `active=0`, `idle_seconds=1394`, and it never received another
+# request — the cache scope of the same conversation before the client's session
+# id changed. It keeps its slot and its row until `affinity.ttl_seconds` (1800 s)
+# expires, and the operator reads the thread count as "what is running".
+#
+# The decision is option 1 of the issue: show the silence in the row. No backend
+# key, no new TTL — `/healthz → threads.registry[]` already carries
+# `idle_seconds`, `turns` and `active`. The threshold is a named constant in
+# `dashboard.js` (`THREAD_SILENT_SECONDS`, 900 s: the placement thread decay
+# window, half of the default TTL).
+THREAD_SILENT_HARNESS = r"""
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const jsPath = process.argv[2];
+const i18nDir = process.argv[3];
+const payload = JSON.parse(process.argv[4]);
+
+function makeEl(tag) {
+  const el = {tag: tag || 'div', value: '', childNodes: [], attributes: [],
+              textContent: '', innerHTML: ''};
+  if (tag === 'template') el.content = {childNodes: []};
+  el.appendChild = () => {}; el.removeChild = () => {}; el.replaceChild = () => {};
+  el.setAttribute = (k, v) => { el.attributes[k] = String(v); };
+  el.getAttribute = k => (k in el.attributes ? el.attributes[k] : null);
+  el.removeAttribute = k => { delete el.attributes[k]; };
+  el.addEventListener = () => {};
+  el.classList = {add() {}, remove() {}};
+  return el;
+}
+
+const elements = new Map();
+const document = {
+  documentElement: makeEl('html'),
+  body: makeEl('body'),
+  getElementById(id) {
+    if (!elements.has(id)) elements.set(id, makeEl('div'));
+    return elements.get(id);
+  },
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+  createElement(tag) { return makeEl(tag); },
+  importNode(node) { return node; },
+};
+
+const store = new Map();
+const localStorage = {
+  getItem: k => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+  removeItem: k => store.delete(k),
+};
+
+function fetchStub(url) {
+  if (!String(url).startsWith('/static/i18n/')) {
+    return Promise.reject(new Error('unexpected fetch: ' + url));
+  }
+  const file = path.join(i18nDir, String(url).replace(/^\/static\/i18n\//, ''));
+  const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return Promise.resolve({ok: true, status: 200, json: async () => body,
+                          text: async () => JSON.stringify(body)});
+}
+
+const sandbox = {
+  Date,
+  document,
+  localStorage,
+  navigator: {languages: ['en-GB'], language: 'en-GB'},
+  window: {confirm: () => false, addEventListener() {}, removeEventListener() {}},
+  sessionStorage: {getItem: () => null, setItem() {}, removeItem() {}},
+  fetch: fetchStub,
+  setInterval: () => 0,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  console: {log() {}, warn() {}, error() {}},
+};
+sandbox.globalThis = sandbox;
+
+(async () => {
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(jsPath, 'utf8'), sandbox, {filename: jsPath});
+  const api = sandbox.RIPPLE;
+  await api.ready;
+  const out = {};
+  for (const lang of payload.langs) {
+    api.chooseLang(lang);
+    out[lang] = {};
+    for (const name of Object.keys(payload.cases)) {
+      const view = payload.cases[name];
+      out[lang][name] = {threads: api.renderThreads(view),
+                         fleet: api.renderFleet(view)};
+    }
+  }
+  process.stdout.write(JSON.stringify(out));
+})().catch(err => {
+  process.stderr.write(String(err && err.stack ? err.stack : err) + '\n');
+  process.exit(1);
+});
+"""
+
+
+def _thread_view(rows: list, host: str = "alpha") -> dict:
+    """The real `/healthz` fixture with the registry replaced and the slot count
+    of `host` set to the number of its threads — the shape the service sends."""
+    h = json.loads(json.dumps(_healthz()))
+    h["threads"]["registry"] = rows
+    for x in h["hosts"]:
+        if x["name"] == host:
+            x["thread_slots"] = len([r for r in rows if r["host"] == host])
+    return h
+
+
+def _render_silent(tmp_path, langs=("en", "de"), **cases) -> dict:
+    """Render `renderThreads` and `renderFleet` per language. A case is either a
+    list of registry rows (wrapped into the real fixture) or a whole view."""
+    if NODE is None:
+        pytest.skip("node is not installed — the thread registry measurement needs it")
+    views = {name: (case if isinstance(case, dict) else _thread_view(case))
+             for name, case in cases.items()}
+    harness = tmp_path / "thread_silent.js"
+    harness.write_text(THREAD_SILENT_HARNESS, encoding="utf-8")
+    proc = subprocess.run([NODE, str(harness), str(STATIC / "dashboard.js"),
+                           str(STATIC / "i18n"),
+                           json.dumps({"langs": list(langs), "cases": views})],
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _thread_items(markup: str) -> list[str]:
+    """Every `.thread-item` block, opening tag included — up to the next one."""
+    return ['<div class="thread-item"' + chunk
+            for chunk in markup.split('<div class="thread-item"')[1:]]
+
+
+def _meta_text(item: str) -> str:
+    """The plain text of the meta line, tags stripped."""
+    found = re.search(r'<div class="th-meta">(.*?)</div>', item, re.S)
+    assert found, item[:400]
+    return html.unescape(re.sub(r"<[^>]+>", " ", found[1]))
+
+
+def test_a_thread_past_the_threshold_says_silent_and_a_fresh_one_does_not(tmp_path):
+    """The marker is a word plus an attribute, not merely the absence of
+    `active` — `active: 0` also describes a thread that answered a second ago."""
+    run = _render_silent(
+        tmp_path,
+        fresh=[_thread_row(idle_seconds=112.4)],
+        silent=[_thread_row(key="2fb77ba844b188e4", turns=23, active=0,
+                            idle_seconds=1394.0)],
+    )
+    fresh, silent = _thread_items(run["en"]["fresh"]["threads"])[0], \
+        _thread_items(run["en"]["silent"]["threads"])[0]
+    assert 'data-silent="true"' not in fresh
+    assert 'data-silent="true"' in silent
+    assert ">silent<" in silent
+    assert "silent" not in _meta_text(fresh)
+    # the word is translated, the threshold is in the tooltip
+    de = _thread_items(run["de"]["silent"]["threads"])[0]
+    assert ">still<" in de
+    assert "15 min" in de, de
+
+
+def test_the_threshold_is_a_named_constant_with_a_stated_value(js):
+    """`THREAD_SILENT_SECONDS` is a constant, not a literal in the renderer, and
+    its value is the placement decay window (900 s) — half the default TTL."""
+    found = re.search(r"const THREAD_SILENT_SECONDS = (\d+);", js)
+    assert found, "no named threshold"
+    assert int(found[1]) == 900
+    assert "placement.thread_decay_seconds" in js.split("const THREAD_SILENT_SECONDS")[0][-900:]
+    assert "threadSilent" in js
+
+
+def test_the_idle_age_is_printed_in_its_unit_never_in_raw_seconds(tmp_path):
+    """`{n} s idle` read `86 400 s idle` — wider than the cell in seven of the
+    sixteen catalogs. The age comes from the unit-aware ids (`fleet.ago_*`)."""
+    run = _render_silent(
+        tmp_path,
+        day=[_thread_row(idle_seconds=86_400)],
+        hour=[_thread_row(idle_seconds=5_400)],
+        minute=[_thread_row(idle_seconds=1_394)],
+    )
+    assert "1 d ago" in _meta_text(run["en"]["day"]["threads"])
+    assert "1 h ago" in _meta_text(run["en"]["hour"]["threads"])
+    assert "23 min ago" in _meta_text(run["en"]["minute"]["threads"])
+    assert "86400" not in run["en"]["day"]["threads"]
+    assert "86.400" not in run["de"]["day"]["threads"]
+    assert "vor 1 T." in _meta_text(run["de"]["day"]["threads"])
+
+
+def test_the_host_card_shows_the_split_in_the_tooltip_not_in_the_cell(tmp_path):
+    """One figure in a 150 px cell (`thread_slots / max_threads`), the split in
+    the tooltip: a second number in the cell breaks the layout in half the
+    languages."""
+    run = _render_silent(tmp_path, mixed=[
+        _thread_row(key="a" * 16, idle_seconds=5.0, active=1),
+        _thread_row(key="b" * 16, idle_seconds=112.4),
+        _thread_row(key="c" * 16, turns=23, active=0, idle_seconds=1394.0),
+    ])
+    card = _card(run["en"]["mixed"]["fleet"], "alpha")
+    split = "1 working · 2 idle · 1 silent"
+    assert split in card
+    # the split is the tooltip's sentence; the cell next to it is one figure
+    seg = card[card.index(split):]
+    cell = re.search(r'<div class="metric-val num">(.*?)</div>', seg, re.S)
+    assert cell, card[:400]
+    assert "working" not in cell.group(1)
+    assert _plain(cell.group(1)) == "3 / 20", _plain(cell.group(1))
+    de = _card(run["de"]["mixed"]["fleet"], "alpha")
+    assert "1 arbeitend · 2 ruhend · 1 still" in de
+
+
+# The card's content width at 1440 px, from the CSS: `.wrap` is 1440 px wide
+# with `--s6` (32 px) of padding on each side, the panel carries a 1 px border,
+# `#threads` splits that into two columns with a 1 px rule between them, and the
+# item pads `--s4` (16 px) on each side: (1440 - 64 - 2 - 1) / 2 - 32 = 654.5.
+# The DOM stub has no layout engine, so the row is measured the way the legend
+# test measures (#77): the text from the catalog, times the measured width of a
+# 12 px system-UI character, against the width the CSS gives it. A line whose
+# pieces fit in one row cannot set `scrollWidth` past `clientWidth`.
+THREAD_CARD_WIDTH = 654.5
+THREAD_CHAR_PX = 7.05          # 12 px system UI: "maintenance" 77.3 / 11 (#77)
+THREAD_META_GAPS = 5           # `.th-meta{gap:0 10px}`, at most five gaps
+
+
+def test_the_thread_row_fits_its_card_in_de_pl_cs_el_and_en(tmp_path):
+    """Five languages, the widest content the row can carry: a 16-char key, a
+    three-digit turn count, the oldest idle age that still prints as minutes,
+    the silent chip and the delete button."""
+    langs = ("de", "pl", "cs", "el", "en")
+    run = _render_silent(
+        tmp_path, langs=langs,
+        worst=[_thread_row(key="0123456789abcdef", turns=999, active=0,
+                           idle_seconds=3599.0)],
+    )
+    for lang in langs:
+        item = _thread_items(run[lang]["worst"]["threads"])[0]
+        text = _meta_text(item)
+        # the widest single piece plus the gaps it can force, against the card
+        pieces = [p for p in re.split(r"\s{2,}", text.strip()) if p]
+        widest = max(len(p) for p in pieces)
+        assert len(pieces) <= THREAD_META_GAPS + 1, (lang, pieces)
+        need = len(text.split()) * THREAD_CHAR_PX + THREAD_META_GAPS * 10
+        assert need <= THREAD_CARD_WIDTH, (lang, round(need, 1), text)
+        # and the pieces individually, which is what a wrap needs
+        assert widest * THREAD_CHAR_PX <= THREAD_CARD_WIDTH, (lang, widest)
+
+
+def test_the_silent_row_steps_back_without_losing_its_text(css):
+    """The marker is the chip (a word) plus a colour that does not carry the
+    meaning alone; nothing is hidden and no literal hex enters the rule."""
+    rule = re.search(r'\.thread-item\[data-silent="true"\][^{]*\{([^}]*)\}', css)
+    assert rule, "no rule for a silent thread"
+    assert "var(--fg-3)" in rule.group(1)
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", rule.group(1))
+    chip = re.search(r"\.th-silent\{([^}]*)\}", css)
+    assert chip, "no rule for the silent chip"
+    assert "var(--warn)" in chip.group(1)
+    assert "display:none" not in css.split(".th-silent{")[1][:200]
+
+
 # -- #33: load per host -----------------------------------------------------
 # The block the operator asked for: idle, loading, prefill, decode and mixed per
 # node as *exclusive* seconds that add up to the sampled window, the work counters
@@ -5079,8 +6123,14 @@ def test_a_thread_with_a_request_in_flight_says_working_not_idle(tmp_path):
                                quiet=[_thread_row(active=0, idle_seconds=112.4)])
     busy, quiet = out["en"]["busy"], out["en"]["quiet"]
     assert _en()["threads.busy"] in busy
-    assert "s idle" not in busy                 # no growing idle count while working
-    assert "112 s idle" in quiet
+    assert "idle" not in _meta_text(busy)       # no growing idle count while working
+    # Since #93 the age is printed in its unit (`fleet.ago_*`): 112 s read
+    # `112 s idle`, which is wider than the row in most of the sixteen catalogs.
+    # The check is on the meta line, not on the markup: `data-deadline` carries
+    # an epoch, and `1795211299.78` contains "112" by coincidence — a whole-string
+    # search made this test fail whenever the clock happened to spell it.
+    assert "1 min ago" in quiet
+    assert "112" not in _meta_text(quiet)
     # The delete control follows the same fact (`active`), but this harness has no
     # admin key, so both rows are off here; the coupling is measured in
     # test_thread_delete.py where the backend refuses with 409.
@@ -5689,6 +6739,7 @@ sandbox.globalThis = sandbox;
     two: api.seriesGeom(fixture.two),
     two_card: api.sparkline({name: 'X', series: [fixture.two], metrics: {}}),
     hole: api.seriesGeom(fixture.hole),
+    hole3: api.seriesGeom(fixture.hole3),
     three: api.seriesGeom(fixture.three),
     lone: api.sparkline({name: 'X', series: [fixture.lone], metrics: {}}),
     lone_geom: api.seriesGeom(fixture.lone),
@@ -5725,6 +6776,8 @@ sandbox.globalThis = sandbox;
       gap: api.seriesValueAt(fixture.gap.total, 4, api.SPARK_HOLD),
       hole: api.seriesValueAt(fixture.hole.total, 1, api.SPARK_HOLD),
       hole2: api.seriesValueAt(fixture.hole.total, 2, api.SPARK_HOLD),
+      hole3_1: api.seriesValueAt(fixture.hole3.total, 1, api.SPARK_HOLD),
+      hole3_2: api.seriesValueAt(fixture.hole3.total, 2, api.SPARK_HOLD),
       head: api.seriesValueAt(fixture.head.total, 0, api.SPARK_HOLD),
       tail: api.seriesValueAt(fixture.tail.total, 2, api.SPARK_HOLD),
       none: api.seriesValueAt(null, 0, api.SPARK_HOLD),
@@ -5739,6 +6792,8 @@ sandbox.globalThis = sandbox;
       three3: api.sparkReadout(api.seriesGeom(fixture.three), 3),
       hole1: api.sparkReadout(api.seriesGeom(fixture.hole), 1),
       hole2: api.sparkReadout(api.seriesGeom(fixture.hole), 2),
+      hole3_1: api.sparkReadout(api.seriesGeom(fixture.hole3), 1),
+      hole3_3: api.sparkReadout(api.seriesGeom(fixture.hole3), 3),
       head0: api.sparkReadout(api.seriesGeom(fixture.head), 0),
       tail2: api.sparkReadout(api.seriesGeom(fixture.tail), 2),
       lone0: api.sparkReadout(api.seriesGeom(fixture.lone), 0),
@@ -5785,14 +6840,18 @@ def series_run(tmp_path_factory) -> dict:
                         per_thread=list(SERIES_RATE))
     # The three shapes issue #96 is about, as the backend really serves them.
     # `two`: two probes 10 s apart — the second fell into bucket 2, so bucket 1
-    # is empty by construction. `hole`: a probe that did not happen (two empty
-    # buckets). `lone`: one sample and nothing else around it.
+    # is empty by construction. `hole`: a probe that came one tick late (two
+    # empty buckets, #129). `hole3`: a probe that did not happen at all (three
+    # empty buckets, ≥ 15 s). `lone`: one sample and nothing else around it.
     two = {"model": "m", "bucket_s": 5, "window_s": 90,
            "n": [1, None, 2], "total": [30.0, None, 62.0],
            "per_thread": [30.0, None, 31.0]}
     hole = {"model": "m", "bucket_s": 5, "window_s": 90,
             "n": [1, None, None, 2], "total": [30.0, None, None, 62.0],
             "per_thread": [30.0, None, None, 31.0]}
+    hole3 = {"model": "m", "bucket_s": 5, "window_s": 90,
+             "n": [1, None, None, None, 2], "total": [30.0, None, None, None, 62.0],
+             "per_thread": [30.0, None, None, None, 31.0]}
     lone = {"model": "m", "bucket_s": 5, "window_s": 90,
             "n": [None, None, 2], "total": [None, None, 60.0],
             "per_thread": [None, None, 30.0]}
@@ -5811,7 +6870,7 @@ def series_run(tmp_path_factory) -> dict:
     fixture.write_text(json.dumps({
         "healthz": _series_healthz(), "stats": _stats(), "config": _config(),
         "entry": _series_entry(), "gap": gap, "card": card, "pick": pick,
-        "two": two, "hole": hole, "lone": lone, "three": three,
+        "two": two, "hole": hole, "hole3": hole3, "lone": lone, "three": three,
         "head": head, "tail": tail,
         **_catalogs(),
     }), encoding="utf-8")
@@ -5924,17 +6983,56 @@ def test_two_probes_ten_seconds_apart_are_one_line(series_run):
     assert len(_subpaths(two["total"])[0]) == 2      # two points, two probes
 
 
-def test_a_run_of_empty_buckets_is_a_probe_that_did_not_happen(series_run):
-    """Two empty buckets in a row are not resolution: the line ends there.
+def test_the_hold_covers_the_cadence_of_the_shipped_probe(series_run):
+    """#129: the threshold is derived from the cadence, not typed in.
 
-    A node that went away must never be drawn as one that kept its rate, so the
-    break is a real break — two subpaths of one point each, no segment.
+    The probe runs every `DiscoveryConfig.interval_seconds` (10 s) and a bucket
+    is `BUCKET_SECONDS` (5 s) wide, so one probe interval spans two buckets and
+    one empty bucket between two samples is the cadence itself — the pen has to
+    cross at least that. Measured on alpha over 180 buckets of the DeepSeek
+    series on 21.11.: 88 gaps of length 1 and one of length 2, i.e. a probe that
+    landed a few seconds late. So the hold carries the cadence plus the jitter
+    of one probe. This asserts the derivation: a cadence the constant does not
+    follow goes red here, and `test_a_gap_of_three_is_a_probe_that_did_not_happen`
+    is the upper bound that keeps it from swallowing a real lost tick.
+    """
+    probe = float(DiscoveryConfig().interval_seconds)
+    per_probe = -(-probe // BUCKET_SECONDS)          # buckets one probe interval spans
+    assert series_run["hold"] >= per_probe
+
+
+def test_a_gap_of_two_is_one_late_probe_and_the_pen_stays_down(series_run):
+    """#129: `hole` is `[30.0, None, None, 62.0]` — 15 s between two probes
+    instead of 10 s, which is one probe that landed a few seconds late.
+
+    The break it drew carried no information: measured on the live page,
+    `moves: 2`, seam at x 648 → 664.8, `dy 0` — the line continued at the same
+    height. One subpath, one segment, two vertices, and the empty buckets keep
+    their slots so the time axis does not move.
     """
     hole = series_run["hole"]
     for row in ("total", "per_thread"):
-        subs = _subpaths(hole[row])
+        assert hole[row].count("M") == 1, row
+        assert hole[row].count("L") == 1, row
+        assert len(_subpaths(hole[row])[0]) == 2, row
+    # and the number follows the ink (#105): both bridged buckets name the
+    # sample the crossing segment is drawn from, and say that they were held
+    assert series_run["at"]["hole"] == {"value": 30.0, "held": True}
+    assert series_run["at"]["hole2"] == {"value": 30.0, "held": True}
+    assert series_run["ro"]["hole1"] == {"total": "~30.0", "per_thread": "~30.0"}
+    assert series_run["ro"]["hole2"] == {"total": "~30.0", "per_thread": "~30.0"}
+
+
+def test_a_gap_of_three_is_a_probe_that_did_not_happen(series_run):
+    """The rule is not disabled: three empty buckets are ≥ 15 s without a probe
+    — a lost tick, a node that was away — and there the line still ends, so an
+    absent node cannot look like a busy one.
+    """
+    hole3 = series_run["hole3"]
+    for row in ("total", "per_thread"):
+        subs = _subpaths(hole3[row])
         assert [len(s) for s in subs] == [1, 1], row
-        assert "L" not in hole[row], row
+        assert "L" not in hole3[row], row
 
 
 def test_a_single_probe_is_marked_so_one_sample_is_not_zero(series_run):
@@ -5976,10 +7074,14 @@ def test_a_marker_is_only_for_a_point_the_line_does_not_reach(series_run):
     assert three["dots"]["total"] == ""                   # no marker
     assert three["dots"]["per_thread"] == ""
 
-    hole = series_run["hole"]
-    assert hole["dots"]["total"].count("M") == 2          # two lone points
-    assert hole["dots"]["total"].count("h0.01") == 2
-    assert hole["dots"]["per_thread"].count("M") == 2
+    hole3 = series_run["hole3"]
+    assert hole3["dots"]["total"].count("M") == 2          # two lone points
+    assert hole3["dots"]["total"].count("h0.01") == 2
+    assert hole3["dots"]["per_thread"].count("M") == 2
+    # a run the pen crosses is no lone point: since #129 that includes a gap of
+    # two empty buckets
+    assert series_run["hole"]["dots"]["total"] == ""
+    assert series_run["hole"]["dots"]["per_thread"] == ""
 
 
 def test_the_script_builds_the_path_the_reference_builds(series_run):
@@ -5987,7 +7089,14 @@ def test_the_script_builds_the_path_the_reference_builds(series_run):
 
     The drawing happens in the browser, so the algorithm exists twice; the
     Python one is what `tests/test_stats.py` can read and this comparison is what
-    keeps the two from drifting apart. Same fixture, same geometry, same points.
+    keeps the two from drifting apart. Same fixture, same geometry, same hold,
+    same points.
+
+    The hold is passed explicitly: `ripple/stats.py` still carries
+    `SERIES_HOLD_BUCKETS = 1` (it is the reference implementation, not the
+    renderer), while #129 raised the drawn threshold to 2. What is compared here
+    is the algorithm — where the pen goes down and where it lifts — and it must
+    agree at the hold the renderer draws with.
     """
     def axes(length, peak):
         W, H, PAD = series_run["W"], series_run["H"], series_run["PAD"]
@@ -6006,7 +7115,7 @@ def test_the_script_builds_the_path_the_reference_builds(series_run):
     for name, rows, geom in cases:
         x, y = axes(len(rows["total"]), geom["max"])
         for row in ("total", "per_thread"):
-            assert _subpaths(series_path(rows[row], x, y)) == _subpaths(geom[row]), (name, row)
+            assert _subpaths(series_path(rows[row], x, y, hold=geom["hold"])) == _subpaths(geom[row]), (name, row)
 
 
 def test_a_card_without_samples_keeps_its_frame_and_says_so(series_run):
@@ -6112,7 +7221,10 @@ def test_the_svg_survives_the_two_second_patch(series_stub):
     assert series_stub["parts"]["fleet"].count("<svg") == 3
     assert series_stub["i18n_misses"] == []
     assert series_stub["unchanged_templates"] == 0
-    assert series_stub["lang_shape_diffs"] == []
+    # Nur die zwei Blöcke mit übersetztem `data-label` (#134) — siehe
+    # `LANG_SHAPE_LABELS`; die Flotte ist keiner davon.
+    assert sorted(series_stub["lang_shape_diffs"]) == LANG_SHAPE_LABELS
+    assert "fleet" not in series_stub["lang_shape_diffs"]
 
 
 # -- der Zeiger auf der Kurve (issue #102) ----------------------------------
@@ -6459,18 +7571,20 @@ def test_one_empty_bucket_reads_the_value_of_the_probe_before_it(series_run):
     assert series_run["ro"]["three3"] == {"total": "~62.0", "per_thread": "~31.0"}
 
 
-def test_two_empty_buckets_in_a_row_read_as_a_dash(series_run):
+def test_a_torn_gap_reads_a_dash_where_a_bridged_one_reads_a_value(series_run):
     """(c) A lost tick is information: the line ends there, so the number does.
 
-    `hole` is `[30.0, None, None, 62.0]` — both empty buckets read `—`, in both
-    rows, and the drawn path has no segment to bridge them (#96 already holds
-    the ink side of this; this is the same rule on the number side).
+    `hole3` is `[30.0, None, None, None, 62.0]` — three empty buckets, ≥ 15 s
+    without a probe — and all three read `—` in both rows. Since #129 the
+    boundary sits at two: `hole` (two empty buckets, one late probe) is crossed
+    by the line and therefore reads the value of the sample before it.
     """
-    assert series_run["at"]["hole"] == {"value": None, "held": False}
-    assert series_run["at"]["hole2"] == {"value": None, "held": False}
-    assert series_run["ro"]["hole1"] == {"total": "\u2014", "per_thread": "\u2014"}
-    assert series_run["ro"]["hole2"] == {"total": "\u2014", "per_thread": "\u2014"}
-    assert "L" not in series_run["hole"]["total"]
+    assert series_run["at"]["hole3_1"] == {"value": None, "held": False}
+    assert series_run["at"]["hole3_2"] == {"value": None, "held": False}
+    assert series_run["ro"]["hole3_1"] == {"total": "\u2014", "per_thread": "\u2014"}
+    assert series_run["ro"]["hole3_3"] == {"total": "\u2014", "per_thread": "\u2014"}
+    assert "L" not in series_run["hole3"]["total"]
+    assert series_run["ro"]["hole1"] == {"total": "~30.0", "per_thread": "~30.0"}
 
 
 def test_an_empty_bucket_at_the_edge_of_the_row_has_no_number(series_run):
@@ -6490,13 +7604,13 @@ def test_an_empty_bucket_at_the_edge_of_the_row_has_no_number(series_run):
 
 
 def test_the_readout_bridges_with_the_constant_the_line_draws_with(series_run):
-    """(e) One `SPARK_HOLD`, not a second hard-coded 1 in the readout.
+    """(e) One `SPARK_HOLD`, not a second hard-coded threshold in the readout.
 
     The geometry carries the constant, so a pen that lifts on the first empty
     bucket lifts the number with it — that is what `hold = 0` measures here.
     """
-    assert series_run["hold"] == 1
     assert series_run["geom_hold"] == series_run["hold"]
+    assert series_run["hold"] >= 1        # 0 would tear every gap (#105)
     assert series_run["at"]["hold_zero"] == {"value": None, "held": False}
 
 
@@ -6521,7 +7635,20 @@ def test_the_total_row_is_separated_by_an_axis_not_by_a_ring(css):
     assert "#load .loadrow.total .lr-name" not in css   # no quieter override left
     assert "opacity" not in total
     assert "outline" not in total                # the ring is gone, not moved
-    assert "#load .loadrow.total .loadbar" not in css   # …and nothing re-draws it
+    # …und die Summenzeile wird seit dem 21.11.2026 an der **Höhe** erkannt, nicht
+    # an einer Farbe: der Balken der Summe ist 50 % höher als der ihrer Teile
+    # (14 → 21 px). Die 1-px-Achse allein trug den Schnitt nicht — 2,22:1 gegen
+    # den Panelhintergrund ist eine Tabellenlinie, keine Zäsur (Betreiber-Fund).
+    # Was bleibt, ist die Regel von #106: keine zweite Farbe, kein Ring, keine
+    # Deckkraft — die Summe ist dieselbe Größe, nur größer.
+    m_base = re.search(r"\n  #load \.loadbar\{([^}]*)\}", css)
+    m_total = re.search(r"\n  #load \.loadrow\.total \.loadbar\{([^}]*)\}", css)
+    assert m_base and m_total, "die beiden Höhenregeln stehen nicht mehr in der Datei"
+    h_base = re.search(r"height:(\d+)px", m_base.group(1))
+    h_total = re.search(r"height:(\d+)px", m_total.group(1))
+    assert h_base and h_total
+    assert int(h_total.group(1)) * 2 == int(h_base.group(1)) * 3   # genau 50 % höher
+    assert "background" not in m_total.group(1) and "box-shadow" not in m_total.group(1)
     assert "border" not in total                 # a border would move the layout
     assert "margin-top:8px" in total
     # the rule is positioned against the row it belongs to, not against the page
@@ -7134,6 +8261,142 @@ def test_the_parameter_table_fits_its_panel_in_every_language(params_run, css):
                 assert need <= budget, (code, name, round(need, 1), round(budget, 1),
                                         _cell_text(cell).strip()[:40])
 
+
+# ── Der Knoten-Streifen in 6.5 (issue #131) ─────────────────────────────────
+# Die Scope-Spalte wiederholte den Knotennamen siebenmal und sagte nirgends, wo
+# die Zeilen eines Knotens aufhören. Der Streifen aus der Flottenkarte markiert
+# sie — links in der Scope-Zelle, aus derselben `node_id`, also im selben Ton und
+# Muster wie die Karte desselben Knotens. `global`, `placement`, `affinity` & Co.
+# bekommen einen **leeren Slot gleicher Breite**, sonst spränge der Text der
+# Nicht-Knoten-Zeilen um genau diese Breite. Beide Tabellen (mit und ohne
+# Felder) tragen ihn; der Streifen ist `aria-hidden` und hat keinen Text.
+#
+# Gemessen wird das an einem Payload mit **zwei** Knoten: mit einem einzigen
+# wäre „der Streifen gehört zum Knoten\" nicht von „der Streifen gehört zur
+# ersten Zeile\" zu unterscheiden.
+
+PARAMS_STRIPE = re.compile(
+    r'<i class="host-stripe" aria-hidden="true" data-host="([^"]*)" data-slot="(\d+)"')
+
+
+def _config_two_nodes(*, live: bool) -> dict:
+    """`/config` with two hosts, both carrying the `node_id` `/healthz` reports.
+
+    `live` adds the two keys of #78 (`editable`, `overrides`), so the same payload
+    renders both tables: the one with fields and the read-only list an older
+    server produces.
+    """
+    cfg = json.loads(json.dumps(_config_live() if live else _config()))
+    second = json.loads(json.dumps(cfg["hosts"][0]))
+    second.update({"name": "beta", "node_id": "node-beta", "weight": 2.0,
+                   "share": 0.4, "prefer_resident": False})
+    cfg["hosts"].append(second)
+    return cfg
+
+
+@pytest.fixture(scope="module")
+def params_two_nodes(tmp_path_factory) -> dict:
+    return _run_stub(tmp_path_factory.mktemp("dashboard-stripe"),
+                     _stub_fixture(config=_config_two_nodes(live=False),
+                                   config_live=_config_two_nodes(live=True)))
+
+
+def _stripe_tables(run: dict) -> dict[str, str]:
+    """Both 6.5 tables from one stub run: the live one and the legacy one."""
+    return {"live": run["params"]["block"], "legacy": run["parts"]["params"]}
+
+
+def _scope_cells(markup: str) -> list[str]:
+    """The raw HTML of every body row's scope cell, in document order."""
+    body = markup[markup.index("<tbody>"):markup.index("</tbody>")]
+    return [re.search(r'<td[^>]*class="pscope"[^>]*>(.*?)</td>', row, re.S).group(1)
+            for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S)]
+
+
+def _scope_text(cell: str) -> str:
+    return re.sub(r"<[^>]+>", "", cell).strip()
+
+
+def test_only_a_node_row_carries_the_stripe(params_two_nodes):
+    """Sieben Zeilen je Knoten, ein Streifen je Zeile — und keiner bei `global`.
+
+    Der Streifen ist die Marke des Knotens, nicht der Zeile: er steht genau dann,
+    wenn die Scope-Zelle den Namen eines Knotens aus derselben Antwort trägt.
+    """
+    cfg = _config_two_nodes(live=True)
+    names = {h["name"] for h in cfg["hosts"]}
+    for table, markup in _stripe_tables(params_two_nodes).items():
+        cells = _scope_cells(markup)
+        assert cells, table
+        for cell in cells:
+            text = _scope_text(cell)
+            has_stripe = 'class="host-stripe"' in cell
+            assert has_stripe == (text in names), (table, text)
+            # Genau ein Platz je Zeile: Streifen oder leerer Slot, nie beides
+            # und nie keins.
+            assert cell.count('class="host-stripe"') + cell.count('class="pslot"') == 1, (table, text)
+        # Beide Knoten sind da, also kommen beide Töne vor.
+        hosts = {m.group(1) for m in PARAMS_STRIPE.finditer(markup)}
+        assert hosts == {"node-alpha", "node-beta"}, table
+
+
+def test_the_stripe_is_the_one_the_fleet_block_draws(params_two_nodes):
+    """Derselbe Slot wie die Karte desselben Knotens auf derselben Seite.
+
+    Der Ton kommt aus 32 Bit FNV-1a über die `node_id` — wäre er hier aus dem
+    Namen neu gebaut, stünde neben der Karte „alpha\" ein anderer Streifen als
+    in der Tabelle darunter.
+    """
+    fleet = {m.group(1): m.group(2)
+             for m in PARAMS_STRIPE.finditer(params_two_nodes["parts"]["fleet"])}
+    assert set(fleet) == {"node-alpha", "node-beta"}
+    for table, markup in _stripe_tables(params_two_nodes).items():
+        found = {m.group(1): m.group(2) for m in PARAMS_STRIPE.finditer(markup)}
+        assert found == fleet, table
+
+
+def test_the_empty_slot_keeps_the_scope_text_on_one_x(params_two_nodes, css):
+    """Der leere Slot ist so breit wie der Streifen — sonst springt der Text.
+
+    Streifen und Slot sind dasselbe Band: 6 px breit, absolut im Padding-Kasten
+    der Zelle, über die ganze Zeilenhöhe (Betreiber-Fund 21.11.2026: als
+    1,1-em-Marke in jeder Zeile war das Knotenband eine gestrichelte Linie).
+    Die Flucht kommt deshalb nicht mehr aus einem Rand im Textfluss, sondern aus
+    `padding-left` der Zelle — und die gilt für Knoten- und Nicht-Knoten-Zeilen
+    gleich, weil der leere Slot denselben Platz belegt.
+    """
+    rule = _rule(css, "details.params .pscope .host-stripe,details.params .pscope .pslot")
+    assert "width:6px" in rule
+    assert "position:absolute" in rule          # Band, kein Strich im Textfluss
+    assert "top:-1px" in rule and "bottom:-1px" in rule   # über die Zeilengrenze
+    cell = _rule(css, "details.params td.pscope")
+    assert "position:relative" in cell          # Bezug für das absolute Band
+    assert "padding-left:12px" in cell          # 6 px Band + 6 px Luft
+    assert "white-space:nowrap" in cell
+    # Der leere Slot steht in jeder Nicht-Knoten-Zeile, in beiden Tabellen.
+    for table, markup in _stripe_tables(params_two_nodes).items():
+        cells = [c for c in _scope_cells(markup) if 'class="host-stripe"' not in c]
+        assert cells, table
+        assert all('<i class="pslot" aria-hidden="true"></i>' in c for c in cells), table
+
+
+def test_the_stripe_says_nothing_and_carries_no_word(params_two_nodes):
+    """`aria-hidden`, kein Text, keine i18n-Id: der Streifen ist eine Marke.
+
+    Ein Screenreader soll den Knotennamen hören, den die Zelle daneben trägt —
+    nicht zweimal dasselbe, und keine Beschriftung, die es in keiner Sprache gibt.
+    """
+    for table, markup in _stripe_tables(params_two_nodes).items():
+        for cell in _scope_cells(markup):
+            assert "data-i18n" not in cell, table
+            for tag, inner in re.findall(r"<i ([^>]*)>(.*?)</i>", cell, re.S):
+                assert 'aria-hidden="true"' in tag, (table, tag)
+                assert inner == "", (table, tag, inner)      # kein Text im Element
+        # Der Spaltenkopf trägt keinen Streifen: die Spalte heißt „Scope\", sie
+        # gehört keinem Knoten.
+        head = markup[:markup.index("<tbody>")]
+        assert "host-stripe" not in head and "pslot" not in head, table
+
 # -- #101: the sid column, newest first, and the three filters ----------------
 # The filter state is a module variable in `dashboard.js` and the bar sits in the
 # shell, so the layout stub cannot measure it: it renders once with a fixed
@@ -7365,7 +8628,7 @@ def test_the_full_key_stays_reachable_in_title_and_tooltip(log_run):
     assert "sid:gwk_5cfba83bf2320dd5" in tip
     assert "Source: /stats → decisions[].thread" in tip
     # a decision without a thread says so, in the cell and in the tooltip
-    assert re.search(r'<td class="sid" title="—"[^>]*>—</td>', markup)
+    assert re.search(r'<td class="sid"[^>]*title="—"[^>]*>—</td>', markup)
 
 
 def _log_times(markup: str) -> list[str]:
@@ -7505,3 +8768,166 @@ def test_the_ring_buffer_holds_two_hundred_decisions():
     assert stats.decisions[0]["thread"] == "sid:t50"
     assert stats.decisions[-1]["thread"] == "sid:t249"
     assert len(stats.as_dict()["decisions"]) == 200
+
+
+def test_the_calibrate_button_knows_the_model_lock(tmp_path):
+    """#128: the button was enabled exactly when the click produced a 409.
+
+    `calibration_api.py` refuses on `host.locked_loaded()`, and the page carries
+    the same fact in `models[].hosts[].lock` — locked *and resident here*. On
+    beta no thread is bound, so before this fix the button invited a click
+    that could only end in 409; on M5 the thread reason was the one that showed.
+    """
+    free = _thread_view([])
+    for x in free["hosts"]:
+        x["thread_slots"] = 1 if x["name"] == "alpha" else 0
+    locked = json.loads(json.dumps(free))
+    for m in locked["models"]:
+        if m["id"].startswith("DeepSeek"):
+            m["lock"] = True
+            for x in m["hosts"]:
+                x["lock"] = True
+
+    run = _render_silent(tmp_path, free=free, locked=locked)
+
+    def btn(lang, case, node):
+        fleet = run[lang][case]["fleet"]
+        found = re.search(r'<button class="btn" data-node="%s"[^>]*>' % re.escape(node), fleet)
+        assert found, (case, node)
+        return found.group(0)
+
+    # no thread and no locked model: enabled, and the tooltip says why
+    m3_free = btn("en", "free", "beta")
+    assert "disabled" not in m3_free
+    assert "no locked model in the way" in m3_free
+
+    # no thread but a locked, resident model: off, and the tooltip names it
+    m3_locked = btn("en", "locked", "beta")
+    assert "disabled" in m3_locked
+    assert "DeepSeek" in m3_locked
+    assert "force does not override" in m3_locked
+
+    # the thread reason wins over the lock, in both states — the endpoint
+    # answers `thread` before it answers `locked`, so the page must too
+    for case in ("free", "locked"):
+        m5 = btn("en", case, "alpha")
+        assert "disabled" in m5
+        assert "active thread" in m5
+        assert "locked and resident" not in m5
+
+    # the second state is translated, not copied
+    assert "gesperrt und geladen" in btn("de", "locked", "beta")
+
+
+# ── Unter 700 px: die Tabellen werden Blöcke, keine Spalten (issue #134) ────
+# Auf einem Telefon war die Tabelle keine Tabelle mehr: `table-layout:fixed`
+# verteilt die Breite nach dem `colgroup`, und ist das Panel schmaler als die
+# Summe der festen Spalten, bekommt die eine `auto`-Spalte den negativen Rest —
+# auf 0 geklemmt. Gemessen an einer Live-Instanz (CDP): 6.5 bei 492 px Viewport
+# hatte eine Wertspalte von 0 px; im Verlauf (390 px, Panel 356) stand eine
+# 622-px-Tabelle in einem 356-px-Kasten, das Modell war 0 px breit, und die
+# Kopfzeilen lagen übereinander. Der Inhalt lief in einem 0-px-Kasten über, und
+# `overflow-wrap:break-word` brach mitten im Token (`0.0.0` / `.0:80`).
+#
+# Unter 700 px ist deshalb eine Zeile ein Block. `display:block` kostet die
+# Tabellensemantik für Screenreader — hingenommen, weil jeder Wert sein
+# `data-label` behält. Genau das wird hier geprüft: dass keine Zelle ohne
+# Bezeichner bleibt und dass die Wörter die der Spaltenköpfe sind (keine neuen
+# i18n-Ids), und dass die Spaltenbreiten oberhalb der Grenze unberührt sind.
+
+
+def _data_labels(markup: str) -> list[list[str]]:
+    """Die `data-label` jeder Zelle, Zeile für Zeile, in Dokumentordnung."""
+    body = markup[markup.index("<tbody>"):markup.index("</tbody>")]
+    out = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S):
+        labels = []
+        for attrs in re.findall(r"<td([^>]*)>", row):
+            found = re.search(r'data-label="([^"]*)"', attrs)
+            if found:
+                labels.append(html.unescape(found[1]))
+        out.append(labels)
+    return out
+
+
+def test_every_cell_of_block_6_5_names_itself(params_run, en):
+    """Fünf Zellen je Zeile, und jede trägt ihren Bezeichner.
+
+    Der Bezeichner ist das Wort des Spaltenkopfs aus demselben Katalog: unter
+    700 px gibt es die Kopfzeile nicht mehr, also muss der Wert sie mitbringen.
+    Ein neuer i18n-Schlüssel wäre hier ein zweites Wort für dieselbe Sache.
+    """
+    labels = _data_labels(params_run["params"]["block"])
+    assert labels, "the block is empty"
+    expected = [en["params.th_scope"], en["params.th_param"], en["params.th_value"],
+                en["params.th_source"], en["params.th_reset"]]
+    assert all(row == expected for row in labels), labels[:2]
+
+
+def test_the_read_only_table_labels_its_two_identifiers(params_run, en):
+    """Die Tabelle eines älteren Backends hat drei Zellen, nicht fünf — sie
+    beschriftet, was sie hat. Die Wertzelle bleibt ein nacktes `<td>`: das
+    Stub misst die Zahlen über `<td>…</td>` (`lang_numbers`), und das Stub
+    gehört nicht zu #134; im Block erkennt das Styling sie als letzte Zelle."""
+    labels = _data_labels(params_run["parts"]["params"])
+    assert labels
+    expected = [en["params.th_scope"], en["params.th_param"]]
+    assert all(row == expected for row in labels), labels[:2]
+
+
+def test_every_log_cell_names_itself(log_run, en):
+    """Acht Zellen, acht Bezeichner — Zeit und Thread-Schlüssel eingeschlossen:
+    im Block steht die Kopfzeile nicht mehr über der Spalte."""
+    labels = _data_labels(log_run["unfiltered"])
+    assert labels
+    expected = [en["log.th_time"], en["log.th_model"], en["log.th_sid"],
+                en["log.th_node"], en["log.th_reason"], en["log.th_prompt"],
+                en["log.th_dur"], en["log.th_status"]]
+    assert all(row == expected for row in labels), labels[:2]
+
+
+def test_below_seven_hundred_pixels_the_tables_become_blocks(css):
+    """Die Grenze ist eine Media-Query, kein zweites Markup: dieselben Zellen,
+    andere Anzeige. `thead` fällt weg (die Bezeichner stehen jetzt an den
+    Werten), und der Bezeichner kommt aus `data-label` — nicht aus einer
+    zweiten Kopie des Textes im Markup."""
+    block = re.search(r"@media \(max-width:700px\)\{(.*?)\n  \}", css, re.S)
+    assert block, "the 700-px rule of #134 is gone"
+    body = block[1]
+    for table in ("details.params table", ".log table"):
+        cells = re.search(r"%s,.*?\{[^}]*display:block" % re.escape(table), body, re.S)
+        assert cells, table
+    assert "thead{display:none}" in body
+    assert "colgroup" in body and "display:none" in body
+    assert "content:attr(data-label)" in body
+    # Keine Spaltenbreite in diesem Block: was oben steht, gilt ab 1440 px.
+    assert "col.c-" not in body
+    # Der Wert von 6.5 bricht im Kasten, nicht mitten im Token.
+    assert "overflow-wrap:anywhere" in body
+    # Zeile 1 des Verlaufs ist Zeit + Thread: der Schlüssel steht im Markup an
+    # dritter Stelle (hinter dem Modell), die `order`-Werte holen ihn nach vorn.
+    # Ohne sie läge das Modell zwischen beiden und die Zeile wäre keine.
+    assert "order:1" in re.search(r"\.log table td\.t\{([^}]*)\}", body)[1]
+    assert "order:2" in re.search(r"\.log table td\.sid\{([^}]*)\}", body)[1]
+    assert "order:3" in re.search(r"\.log table tbody td:not\(\.t\):not\(\.sid\)\{([^}]*)\}", body)[1]
+
+
+def test_above_the_breakpoint_the_columns_are_what_they_were(css):
+    """Ab 1440 px ändert sich nichts: die fünf Spalten von 6.5 und die acht des
+    Verlaufs behalten ihre Breiten. Die Wertespalte von 6.5 hat keine eigene
+    Zahl — sie ist der Rest (`c-value` gibt es nicht), und das ist der Grund,
+    warum sie unterhalb der Summe der festen Breiten auf 0 fiel (#134)."""
+    params = {}
+    for name in ("c-scope", "c-param", "c-source", "c-reset"):
+        found = re.search(r"width:([0-9.]+)px", _rule(css, "details.params .ptable col." + name))
+        assert found, name
+        params[name] = float(found[1])
+    assert params == {"c-scope": 96, "c-param": 280, "c-source": 150, "c-reset": 132}
+    log = {}
+    for name in ("c-time", "c-sid", "c-node", "c-reason", "c-prompt", "c-dur", "c-status"):
+        found = re.search(r"width:([0-9.]+)px", _rule(css, ".log col." + name))
+        assert found, name
+        log[name] = float(found[1])
+    assert log == {"c-time": 104, "c-sid": 168, "c-node": 100, "c-reason": 116,
+                   "c-prompt": 84, "c-dur": 126, "c-status": 96}
+    assert "width:auto" in _rule(css, ".log col.c-model")

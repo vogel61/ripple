@@ -25,7 +25,7 @@ def proxy_url(stub_factory, live_proxy_factory):
     url = live_proxy_factory(make_config([
         host_config("A", a.url, node_id=a.state.node_id, weight=3),
         host_config("B", b.url, node_id=b.state.node_id, weight=2),
-    ]))
+    ]), wait_healthy=True)
     return url, a, b
 
 

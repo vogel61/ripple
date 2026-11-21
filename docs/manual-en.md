@@ -335,16 +335,57 @@ Six tabs, in the order the page numbers them:
 | **6 Operations** | The six operator actions, and the parameters in force. |
 | **7 Nodes** | Which machines serve the fleet — add one by address, take one out with a drain. |
 
+**The update hint (issue #123).** Once per start — in the background, after the
+page is already answering — RIPPLE asks the public GitHub releases API whether a
+newer release exists. If one does, the line under the masthead's tagline says so
+in the page's language and names the command: `ripple update`. It is a link to
+the release page and nothing more: RIPPLE downloads and installs nothing, and
+the command it names runs the test suite before it restarts anything.
+
+The hint only ever points forward. A checkout that is *newer* than the last
+public release — the normal state of the internal forge branch — reads `current`
+and shows nothing, and a check that cannot answer (no internet, a timeout, no
+release published yet) is a silent `unknown`: no warning in the log, no line in
+the header. `update.check: false` in `config.yaml` turns the request off
+entirely, for a machine that has no internet and should not spend a timeout on
+it every start. The result is in `GET /healthz` → `update`
+(`state`, `latest`, `url`, `checked_at`), next to `version`.
+
 The last tab is the only one that changes the fleet itself rather than something
 inside it, which is why it sits at the end and has a number of its own instead of
 being a seventh block in Operations (§5.6).
 
-Everything that writes — calibration, maintenance, model policy, replication,
-restart, and the node tab — sits behind the admin key. Enter it once on
-`http://<host>:8010/keys`;
+Everything that writes — calibration, maintenance, model policy, the padlock,
+replication, restart, and the node tab — sits behind the admin key. Enter it once
+on `http://<host>:8010/keys`;
 it stays in that browser tab (`sessionStorage`), is sent as a bearer token on each
 call, never appears in the URL and is never rendered into the page. Without it the
 controls are greyed out and say why.
+
+**The admin chip in the masthead (issue #130).** Next to the language selector
+there is a small chip that says which tab you are looking at: `read-only` with an
+open shackle and a muted tone, `checking…` while an answer is on its way, `admin`
+with a closed shackle in the accent colour. Click it and a single password field
+opens under it; `Enter` sends, `Escape` closes without writing anything. The page
+does not trust the string it is about to store: it sends the key to
+`GET /admin/models` first and only writes it to `sessionStorage` after a `200`.
+A `401` keeps the field open and says so (`key rejected — check it against
+auth.admin_key in config.yaml`), and the key never reaches the storage — a wrong
+key must not be able to look like a working one on the next reload. Any other
+refusal is shown in the server's own words. Once the key is accepted the
+operator blocks are redrawn immediately, without a reload; `sign out` next to the
+chip clears the key and makes them inert again. The tooltip on the chip names
+where the key lives: `sessionStorage`, this tab only — never `localStorage`, so
+closing the tab is a sign-out. A key you entered on `/keys` is checked the same
+way at start-up, with the one request the page already makes for the padlock
+warnings; if that request does not answer `200`, the key is dropped instead of
+being claimed.
+
+**The pictures in this manual show the tab in admin mode.** They were taken with
+the key in the tab, because what most of them are about is the operator blocks
+working; a fresh tab is `read-only` until someone enters the key, and
+`docs/images/MANIFEST.md` names the state of every picture (`admin` or
+`read-only`) next to its size.
 
 ### 5.1 The Fleet tab
 
@@ -532,11 +573,14 @@ on. Two consequences are worth knowing:
 - when a number looks wrong, the tooltip tells you which endpoint to `curl`
   before you believe the page.
 
-The page itself is read-only: it fetches `/healthz`, `/stats` and `/config` every
-two seconds and patches the DOM. Nothing on it changes a model, an address or a
-weight — a parameter you want different is edited in `config.yaml` and needs a
+The numbers on the page are read-only: it fetches `/healthz`, `/stats` and
+`/config` every two seconds and patches the DOM, and no displayed value is edited
+in place. A **parameter** you want different is edited in `config.yaml` and needs a
 restart, because a weight that changed under a running conversation would move it
-away from its cache.
+away from its cache. What the page *can* change is operator state — a maintenance
+window, the model policy, the padlock, a calibration, a replication, the key list,
+a node — and only with the admin key (entered once on `/keys`); every such block
+says what it writes before it writes it (§5.6, §6).
 
 ### 5.2 The Models tab
 
@@ -547,19 +591,110 @@ that offers it. The columns:
 
 | Column | Meaning |
 |---|---|
-| **Model** | The model id, spanning its rows. A lock symbol sits above it when the model's memory is protected; a `not routable` badge appears when RIPPLE would not dispatch to that node. |
+| **Model** | The model id, spanning its rows. A padlock sits above it (§5.2.1); a struck-through route (`route-off`) appears when that node cannot serve the model **right now** — hovering or tapping it names the reason: either RIPPLE would not dispatch to it at all, or the model is listed but not loaded, so the first request would pay a cold load. |
 | **Node** | The node, and the model policy field (`in service` / `disabled` / `hidden`). |
 | **Loaded** | A filled dot when the model is resident on that node. It blinks orange during prefill and green while tokens stream, so you can see what a node is doing *now* without reading the log. |
-| **Size** | `estimated / measured` in GB, per node — the same two bases as the memory bar. |
-| **Context** | The model's context window in tokens. |
+| **tok/s** | The rate oMLX reports for *this model on this node*, smoothed by RIPPLE — and a dash until the first request has measured one. The calibrated capacity from `config.yaml` is a property of the *machine*, not of the model, so it lives in the tooltip (labelled as such) and never in the cell. A falling number under parallel load is normal; "not measured yet" and "measured zero" are different facts and look different. This is the one column that changes second by second, which is why it stands right after *Loaded* and is the only column set in bold. |
 | **Req** | Requests in flight for *this model on this node*, not for the node as a whole. |
 | **Threads** | Conversation slots this model holds on this node. |
-| **tok/s** | `live / capability`: the rate oMLX reports per request and RIPPLE smooths on the left, the calibrated capacity from `config.yaml` on the right. A falling left number under parallel load is normal; the right one is what placement assumes. |
+| **Size** | `estimated / measured` in GB, per node — the same two bases as the memory bar. |
+| **Context** | The model's context window in tokens. |
+
+The four live numbers come first, the two static ones last: read left to right,
+a row says what is running, how fast, how much, and how big.
 
 Models that are not loaded anywhere are dimmed and collapsed behind one row
 (`available, not loaded · n models`), because they cost disk, not memory. The
 list is fed by `/healthz`, so a model that no node currently offers has no row —
 and a policy rule for such a model is listed in the Operations tab instead (§6.2).
+
+**Four things this tab says at once, and they are not the same thing.** Whether a
+node *may* serve a model (its allow-list, `hosts[].models` in `config.yaml`),
+whether RIPPLE *routes* to it there (the policy field, §6.2), whether it may be
+*unloaded* (the padlock), and whether the weights are *resident now* (the dot).
+The table shows each of them in its own column, and none of them implies another.
+The full matrix is in `docs/model-policy.md` (*The four statements about a
+model*); the two you operate from this tab are the padlock and the policy field.
+
+#### 5.2.1 The padlock
+
+One padlock per **model** row, in the Model column, never one per node row: the
+lock belongs to the model, not to a machine, so a second icon next to a node would
+claim a per-node lock that does not exist (`ripple/static/dashboard.js:1553`).
+
+| what you see | what it means | what to do |
+|---|---|---|
+| padlock **open**, grey | the model is not protected: RIPPLE may unload it when another request needs the memory | click it to lock |
+| padlock **closed**, red, model name in the load tone | locked, and the memory is protected wherever the model is resident | hover for the sentence: which nodes hold it, or that it refuses nothing |
+| padlock **closed** and the row is collapsed under `available, not loaded` | `locked, not resident` — the promise is set but nothing is resident to protect | nothing; the model is loaded at the next start or maintenance-window end (§5.2.2) |
+| padlock **closed**, dashed outline, `!` in the body | `locked, cannot be resident` — the lock is stored, but no node could hold the model right now: not enough memory anywhere, or every node that lists it refuses it | hover for the numbers: the tooltip names the node and the reason. Then unlock what blocks the model, or lock it on a node where it fits |
+| padlock closed, tooltip "not loaded anywhere right now — the lock refuses nothing" while the model **is** loaded on a node | the model is locked but no node would route to it — `disabled` there, or outside that node's allow-list. Nothing can be refused on its behalf | read the policy field next to it: this lock costs memory and protects nothing |
+| padlock closed, greyed out, its own tooltip, no policy field | an oMLX **builtin** (MarkItDown): resident without weights, routed to by nothing, always locked and never releasable | nothing — the lock is derived from what the node reports, not from a setting |
+
+The third state is **not** a refusal. The lock is written as before; it just
+cannot be paid right now, and RIPPLE says so instead of pretending the promise is
+in force. The padlock stays closed — the lock is set, that is not in doubt — but
+its outline is dashed and a `!` sits in the body, so the warning is not carried by
+colour alone. The tooltip names the node and the reason with the numbers
+(`lock.warn_tip`): how many GB the model needs against how many are free, or which
+locked model would have to be evicted to make room. Nothing is evicted, unlocked
+or re-pinned on its own to resolve it. The answer to the click says `lock saved`
+and adds that the model cannot be resident anywhere (`lock.warn_saved`), so you
+know the write landed and what it is worth. The feasibility is the preload's own
+forecast (§5.2.2) — one calculation, not a second one — so the warning and a
+failed preload cannot tell different stories. What is left for you: unlock what
+blocks the model, or lock it on a node where it fits.
+
+Open is deliberately **not** green: an unlocked model is the unprotected state,
+not a good one, and green would read as "all well" (`ripple/static/dashboard.css:558`).
+Without the admin key the padlock is visible but does nothing — the tooltip says
+so, because the reason is more useful than a dead control.
+
+A lock is a statement about the model, so it can be set on a model that is cold,
+on one a node does not currently list, and on one that no node routes to
+(`ripple/proxy.py:1852`). The one thing that cannot be locked is a builtin: it
+always is, and the write answers `409 lock_builtin`.
+
+#### 5.2.2 `locked, not resident`, and the preload
+
+A lock promises residency, so RIPPLE delivers it: a locked model is loaded as soon
+as one of its nodes becomes healthy — at start-up, when a node comes back, and at
+the end of a maintenance window — on every node whose allow-list contains it
+(`ripple/hosts.py:2039`). You will see three things while this happens:
+
+* the node card shows the ordinary loading line with `source: preload` and a
+  remaining time, as for a load a request caused;
+* if the load displaces an unlocked model, the Fleet tab says `preload of …
+  displaced …`, and the displaced model carries `▼ evicted by the preload of …`
+  in its node cell. That eviction is intended: the lock wins;
+* if the model does not fit at all, the Fleet tab says `preload of … failed: does
+  not fit: … GB needed, … GB free; … is locked and cannot be evicted`. It is not
+  retried — the next attempt is the next time the node becomes healthy
+  (`ripple/hosts.py:2060`).
+
+That third bullet's forecast is the same one the padlock quotes (§5.2.1): if the
+preload would fail, the padlock says so before you click, with the same numbers.
+
+Locking a cold model does **not** load it on the spot. That is deliberate: the
+click must not start a 400 GB load in the middle of the afternoon. The promise is
+paid at the next healthy transition or at the next restart.
+
+#### 5.2.3 Two intents, two places
+
+"The model must not be routed" and "the model must not be on this machine" are
+different wishes and they belong in different places. Writing both into one field
+is how a model later goes missing with nobody able to say why:
+
+| you mean | where it goes | what you see afterwards |
+|---|---|---|
+| it is on this node's disk and I do not want it routed | the node's allow-list, `hosts[].models` in `config.yaml` (`ripple/config.py:165`) | the model still appears on the node as offered, no request goes there, and the change is one line you can take back |
+| it should not exist on this machine at all | oMLX — remove it from the model directory | the node stops listing it; RIPPLE has no route that deletes weights and will only observe the result |
+
+The allow-list is per host, visible in the config and reversible; deleting from
+oMLX is neither. RIPPLE's own two write routes touch only
+`~/.ripple/models.yaml` (`ripple/proxy.py:1884`, `ripple/proxy.py:1919`), so
+nothing you do on this page can move a model off a disk — and nothing you do in
+oMLX can quietly change a routing rule.
 
 ### 5.3 The Threads tab
 
@@ -694,6 +829,23 @@ last two show the configuration in force and the one action that needs it:
   fleet with no destination at all, rebinding is on and cannot fire. The page
   shows the rate per node for exactly that reason (`not measured — no rebind
   target`), and `ripple doctor` reports the fleet-wide case (§3.2).
+
+  ![The parameter table, one row per setting](images/manual-params.png)
+
+  The 6 px stripe in the scope column is a node: `global`, `placement`,
+  `affinity`, `discovery` and `proxy` rows carry an empty slot of the same width,
+  so every label starts on the same line — the stripe marks a value that belongs
+  to one machine, not to the fleet.
+
+  Every parameter name carries its own explanation: hover it, or tap it on a
+  phone, and the sentence says what the setting does and what a change costs. The
+  sentence is not written in the page — it sits next to the field in the config
+  schema (`FIELD_HELP` in `ripple/config.py`), is served as `help` by
+  `GET /config`, and a test holds every path that may be set at the page to an
+  entry, so a new parameter cannot arrive without one. Four of the forty rows stay
+  without a tooltip because they are not settings: the path of the configuration
+  file, the `loading` line that sums four settings, and the two measured prefill
+  rates.
 - **6.6 Restart** — see §6.5.
 
 ![The restart block](images/manual-restart.png)
@@ -904,6 +1056,14 @@ those rules beside the table and lets you undo them; that is the only place they
 are visible. A missing or corrupt policy file means "nothing is switched off" —
 the expensive direction is deliberately the one that cannot happen.
 
+**Not to be confused with the lock.** `disabled` and `hidden` decide *where a
+model may be routed*; the padlock in the Models tab decides *whether it may be
+unloaded* (§5.2.1). The lock is not a policy level and the policy is not a lock:
+`disabled` + locked is the drain pattern — stop sending new threads, keep the
+model warm — and it is a legitimate combination, not a contradiction. Which of
+the four statements you are changing, and what each combination does, is in
+`docs/model-policy.md`.
+
 ### 6.3 Calibration — measure what a node can do
 
 **What it does.** Loads the node's own models one after another and times how long
@@ -916,8 +1076,9 @@ which is why the first estimate on a new node can be visibly off.
 
 **What it costs.** Minutes per node, and memory churn on it: every model is loaded
 and unloaded in turn. The node must hold **no active thread** — the `Calibrate`
-button is off while any slot on that node is taken, and a locked model refuses the
-run entirely, because both would take memory away from something that is running.
+button is off while any slot on that node is taken, and a locked model that is
+resident on it refuses the run entirely, because both would take memory away from
+something that is running (`ripple/calibration_api.py:645`).
 
 **What can go wrong.** A calibration on a busy node measures the load, not the
 machine: the stored rate is then too low and every estimate afterwards is based on
@@ -1432,7 +1593,7 @@ a cache, and a price on every arriving turn. A move shows as
 no operator action: the guard that keeps a conversation from paying prefills in a
 loop. Note the near-namesake — `model_pinned` is not a pin and not a lock: it is the
 reason a request had to go to the one node that offers the model. A model locked
-against eviction (§5.3) produces `model_locked` and a 503 instead.
+against eviction (§5.2.1) produces `model_locked` and a 503 instead.
 
 **Why two users with identical hardware report different experiences.** The first
 runs one long conversation with tool calls: one thread, one node, and after two

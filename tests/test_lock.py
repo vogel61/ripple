@@ -18,6 +18,7 @@ Everything runs against stub oMLX instances; nothing here loads a real model.
 
 from __future__ import annotations
 
+import logging
 import stat
 import uuid
 
@@ -330,10 +331,21 @@ async def test_the_admin_view_reports_the_lock_per_model(stub_factory,
     assert row["lock_reason"] is not None and "A" in row["lock_reason"]
     assert row["hosts"] == [
         {"host": "A", "offered": True, "loaded": True, "lock": True,
-         "policy": None, "dispatch": True},
+         "policy": None, "dispatch": True, "routable": True,
+         # Nothing is loaded beside DeepSeek, so there is no forecast to make:
+         # `fits: true` and no sentence (issue #126).
+         "fits": True, "fit_reason": None},
+        # Listed but cold: dispatchable (a cold load is a legitimate dispatch),
+        # not routable — residency decides the availability column (#116).
         {"host": "B", "offered": True, "loaded": False, "lock": False,
-         "policy": None, "dispatch": True},
+         "policy": None, "dispatch": True, "routable": False,
+         "fits": True, "fit_reason": None},
     ]
+    # No host could forecast here (both answered `([], None)`): "nothing to
+    # say", not a warning — and since every host reports `fits: true`, the
+    # model-level verdict is `true`, not an unknown (issue #126).
+    assert row["feasible"] is True
+    assert row["feasible_reason"] is None and row["feasible_host"] is None
 
     unlocked = next(r for r in body["models"] if r["id"] == QWEN)
     assert unlocked["lock"] is False and unlocked["since"] is None
@@ -378,17 +390,96 @@ async def test_a_model_id_with_a_slash_is_addressable(stub_factory, ripple_facto
 
 
 # ---------------------------------------------------------------------------
-# Models RIPPLE never routes to: no lock, no claim
+# Lockability is a property of the model, not of its routability (issue #118)
 # ---------------------------------------------------------------------------
-def _infra_stub(stub_factory):
-    """oMLX infrastructure as the fleet sees it: resident, 0 GB, never routed.
+# #28 refused every write whose model no host dispatches: a lock there could
+# never refuse a request, so the write was answered with `409
+# lock_not_dispatchable`. That asked the wrong question. A lock says what
+# happens *when* the model is resident — so it is settable on a cold model, on
+# one the allow-list keeps out of routing, and on one no node lists yet (the
+# operator locking ahead of a start). The one thing that cannot be locked is an
+# oMLX builtin, because it always is: derived from the node's `engine_type`,
+# never stored, never releasable.
+UNLISTED = "Qwen3.5-122B-A10B-4bit"
 
-    MarkItDown is loaded on every node and in no allow-list, so `allowed: false`
-    and `dispatch: false` everywhere — the model no request is ever aimed at.
-    """
+
+async def test_a_cold_model_can_be_locked(stub_factory, ripple_factory, tmp_path):
+    """A model a host lists and does not hold is lockable — the lock protects
+    the memory it *would* take. `loaded_on` stays empty and `lock_reason` is
+    None: a lock is not a claim that a request is being refused right now."""
+    a, b = _fleet(stub_factory)
+    harness = await ripple_factory(_cfg(tmp_path, _hosts(a, b)))
+    assert a.state.model(QWEN).loaded is False and b.state.model(QWEN).loaded is False
+
+    resp = await _lock(harness, QWEN, note="hold the slot")
+
+    assert resp.status_code == 200, resp.text
+    assert harness.ripple.policy.locked(QWEN) is True
+    # the write is in the store, and the answer of the write already says so
+    answered = next(r for r in resp.json()["models"] if r["id"] == QWEN)
+    assert answered["lock"] is True and answered["loaded_on"] == []
+
+    row = await _model_row(harness, QWEN)
+    assert row["lock"] is True
+    assert row["builtin"] is False and row["lockable"] is True
+    assert row["loaded_on"] == []
+    assert row["lock_reason"] is None
+    assert row["since"] is not None and row["note"] == "hold the slot"
+    assert [x["loaded"] for x in row["hosts"]] == [False, False]
+    assert QWEN in (await _admin_models(harness))["locks"]
+
+
+async def test_a_model_no_host_lists_yet_can_be_locked(stub_factory, ripple_factory,
+                                                       tmp_path):
+    """The case #28 refused with 409: the operator locks ahead of a start, so
+    the model is not in any node's list yet. The write is stored, and
+    `GET /admin/models` reports it with `offered: false` — a lock nobody can see
+    is a lock nobody can release."""
+    a, b = _fleet(stub_factory)
+    harness = await ripple_factory(_cfg(tmp_path, _hosts(a, b)))
+    assert all(UNLISTED not in h.models for h in harness.ripple.fleet.hosts)
+
+    resp = await _lock(harness, UNLISTED)
+
+    assert resp.status_code == 200, resp.text
+    assert harness.ripple.policy.locked(UNLISTED) is True
+
+    row = await _model_row(harness, UNLISTED)
+    assert row["lock"] is True
+    assert row["loaded_on"] == [] and row["lock_reason"] is None
+    assert row["listed"] is False
+    assert [x["offered"] for x in row["hosts"]] == [False, False]
+    # No host offers it, so there is nothing to forecast: `null`, not a
+    # warning — locking ahead of an oMLX start is a legitimate state (#126).
+    assert row["feasible"] is None
+    assert row["feasible_reason"] is None and row["feasible_host"] is None
+    assert [x["fits"] for x in row["hosts"]] == [None, None]
+    assert UNLISTED in (await _admin_models(harness))["locks"]
+
+
+async def test_a_cold_model_can_be_unlocked(stub_factory, ripple_factory, tmp_path):
+    """The release works on a cold model too — it is the same attribute, and a
+    lock that could only be set would be a trap."""
+    a, b = _fleet(stub_factory)
+    harness = await ripple_factory(_cfg(tmp_path, _hosts(a, b)))
+    await _lock(harness, QWEN)
+
+    resp = await _unlock(harness, QWEN)
+
+    assert resp.status_code == 200, resp.text
+    assert harness.ripple.policy.locked(QWEN) is False
+    row = await _model_row(harness, QWEN)
+    assert row["lock"] is False and row["since"] is None
+    assert QWEN not in (await _admin_models(harness))["locks"]
+
+
+def _infra_stub(stub_factory):
+    """oMLX infrastructure as the fleet sees it: a virtual engine, resident
+    without weights. `engine_type: markitdown` is oMLX's own word for it and the
+    only source of the builtin flag — no id list lives in this repository."""
     return stub_factory(models=[_deepseek(loaded=True),
                                 StubModel(id=INFRA, loaded=True, estimated_size=0,
-                                          actual_size=0)])
+                                          actual_size=0, engine_type="markitdown")])
 
 
 def _infra_hosts(stub):
@@ -397,12 +488,11 @@ def _infra_hosts(stub):
                         models=[DEEPSEEK])]
 
 
-async def test_a_lock_on_a_model_no_host_dispatches_is_refused(
+async def test_an_omlx_builtin_reads_as_locked_without_a_stored_entry(
         stub_factory, ripple_factory, tmp_path):
-    """Measured before the fix: `POST /admin/models/MarkItDown/lock` → 200, and
-    the store carried a lock whose `lock_reason` promised a 503 for a model that
-    no request is ever routed to. The write is refused instead — and the store
-    is not touched, so there is nothing to unlock afterwards."""
+    """MarkItDown is always locked and never an operator decision: the state is
+    derived from `engine_type` on every read, so the policy file stays empty —
+    a second source of truth for a state nobody can change would be a lie."""
     stub = _infra_stub(stub_factory)
     harness = await ripple_factory(_cfg(tmp_path, _infra_hosts(stub)))
 
@@ -412,49 +502,70 @@ async def test_a_lock_on_a_model_no_host_dispatches_is_refused(
     assert [h["loaded"] for h in row["hosts"]] == [True]
     assert [h["dispatch"] for h in row["hosts"]] == [False]
 
-    resp = await _lock(harness, INFRA)
-
-    assert resp.status_code == 409, resp.text
-    message = resp.json()["error"]["message"]
-    assert INFRA in message
-    assert "dispatchable on no host" in message
-    assert resp.json()["error"]["code"] == "lock_not_dispatchable"
-    # Nothing in memory, nothing in the file, nothing in the views.
-    assert harness.ripple.policy.locked(INFRA) is False
+    # Locked in both views, and in the flat list — with no entry behind it.
     assert harness.ripple.policy.locked_models() == []
-    assert (await harness.healthz())["locks"] == []
+    assert row["lock"] is True and row["builtin"] is True
+    assert row["lock_reason"] is None       # nothing can be refused for it
+    assert INFRA in health["locks"]
+
+    admin = await _model_row(harness, INFRA)
+    assert admin["lock"] is True and admin["builtin"] is True
+    assert admin["lockable"] is False
+    assert admin["since"] is None and admin["by"] is None and admin["note"] == ""
+    assert admin["loaded_on"] == ["A"] and admin["lock_reason"] is None
+    assert INFRA in (await _admin_models(harness))["locks"]
+
     store = tmp_path / "models.yaml"
     assert not store.exists() or "locks:" not in store.read_text(encoding="utf-8")
 
-    # A model that *is* routed can still be locked — the refusal is about the
-    # model, not about the endpoint.
+
+async def test_an_omlx_builtin_cannot_be_locked_or_unlocked(stub_factory,
+                                                            ripple_factory, tmp_path):
+    """Both writes are refused with `409 lock_builtin` — not with the old
+    `lock_not_dispatchable`: the refusal is about what the model *is*, and it
+    says so. Nothing is written in either direction."""
+    stub = _infra_stub(stub_factory)
+    harness = await ripple_factory(_cfg(tmp_path, _infra_hosts(stub)))
+
+    posted = await _lock(harness, INFRA)
+    assert posted.status_code == 409, posted.text
+    assert posted.json()["error"]["code"] == "lock_builtin"
+    assert INFRA in posted.json()["error"]["message"]
+    assert "builtin" in posted.json()["error"]["message"]
+
+    deleted = await _unlock(harness, INFRA)
+    assert deleted.status_code == 409, deleted.text
+    assert deleted.json()["error"]["code"] == "lock_builtin"
+    assert INFRA in deleted.json()["error"]["message"]
+
+    assert harness.ripple.policy.locked(INFRA) is False
+    assert harness.ripple.policy.locked_models() == []
+    store = tmp_path / "models.yaml"
+    assert not store.exists() or "locks:" not in store.read_text(encoding="utf-8")
+
+    # The refusal is about the builtin, not about the endpoint: the model the
+    # same node dispatches is still lockable.
     assert (await _lock(harness, DEEPSEEK)).status_code == 200
     assert harness.ripple.policy.locked_models() == [DEEPSEEK]
 
 
-async def test_a_stored_lock_on_an_infrastructure_model_claims_no_refusal(
-        stub_factory, ripple_factory, tmp_path):
-    """A lock written before the fix stays in the store (it is operator state),
-    but it must not go on claiming that something is refused: it protects a
-    model nothing is ever sent to. `DELETE` still works, so the stale lock is
-    not stuck."""
+async def test_a_stale_stored_entry_for_a_builtin_stays_inert(stub_factory,
+                                                              ripple_factory, tmp_path):
+    """An entry written before #118 is left in the file (it is operator state)
+    but changes nothing: the derived state wins on every read, the entry cannot
+    be released, and it claims no refusal."""
     (tmp_path / "models.yaml").write_text(
         f"version: 1\nmodels: {{}}\nlocks:\n  {INFRA}: true\n", encoding="utf-8")
     stub = _infra_stub(stub_factory)
     harness = await ripple_factory(_cfg(tmp_path, _infra_hosts(stub)))
 
     row = _health_row(await harness.healthz(), INFRA)
-    assert row["lock"] is True            # the store says so, and it is reported
-    assert row["lock_reason"] is None     # ... but no refusal can be in force
-    assert [h["loaded"] for h in row["hosts"]] == [True]   # resident, still no 503
+    assert row["lock"] is True and row["builtin"] is True
+    assert row["lock_reason"] is None      # resident, and still no 503
+    assert [h["loaded"] for h in row["hosts"]] == [True]
 
-    admin = next(r for r in (await _admin_models(harness))["models"] if r["id"] == INFRA)
-    assert admin["lock"] is True and admin["lock_reason"] is None
-    assert admin["loaded_on"] == ["A"]    # resident — and that is all it says
-
-    # Releasing it must stay possible: otherwise the stale lock would be stuck.
-    assert (await _unlock(harness, INFRA)).status_code == 200
-    assert harness.ripple.policy.locked(INFRA) is False
+    assert (await _unlock(harness, INFRA)).status_code == 409
+    assert harness.ripple.policy.locked(INFRA) is True      # untouched
 
 
 async def test_the_lock_survives_a_restart(stub_factory, ripple_factory, tmp_path):
@@ -606,3 +717,175 @@ async def test_the_forecast_uses_the_stub_ceiling(stub_factory, ripple_factory,
     resp = await harness.chat(chat_body(QWEN, prompt_for(0), turns=2), headers=client)
     assert resp.status_code == 503
     assert resp.json()["error"]["reason"] == "model_locked"
+
+
+# ---------------------------------------------------------------------------
+# The lock's arithmetic: can the promise be kept anywhere? (issue #126)
+# ---------------------------------------------------------------------------
+# A lock is a promise about residency, and on the M5 the numbers cannot keep
+# every promise: DeepSeek is 422.5 GB resident against a 487.7 GB ceiling and
+# GLM-5.2-oQ4 needs 418.1 GB, so a lock on GLM was a promise the operator heard
+# about only at the next healthy transition (`preload_refused`). #126 keeps the
+# write (200) and moves the verdict into the view: `feasible` per model,
+# `fits` per host, computed by `preload_forecast` and nothing else.
+GLM = "GLM-5.2-oQ4"
+GLM_SIZE = 418_100_000_000
+SMALL = "Small-10B-oQ4"
+SMALL_SIZE = 10_000_000_000
+IDLE = "Idle-50B-oQ4"
+IDLE_SIZE = 50_000_000_000
+
+
+def _crowded_fleet(stub_factory):
+    """Both hosts hold DeepSeek and are asked to hold GLM as well.
+
+    M5's arithmetic on two nodes: 422.5 GB resident against a 487.7 GB ceiling
+    (target 463.3 GB at `hard_threshold: 0.95`), and GLM needs another 418.1 GB.
+    Neither node can take it while the locked DeepSeek stays — the case #126 is
+    about.
+    """
+    a = stub_factory(models=[_deepseek(loaded=True),
+                             StubModel(id=GLM, estimated_size=GLM_SIZE)])
+    b = stub_factory(models=[_deepseek(loaded=True),
+                             StubModel(id=GLM, estimated_size=GLM_SIZE)])
+    return a, b
+
+
+async def test_the_view_says_per_host_whether_the_lock_can_be_delivered(
+        stub_factory, ripple_factory, tmp_path):
+    """`fits`/`fit_reason` per host, `feasible`/`_reason`/`_host` per model.
+
+    The sentence is the preload's own, read from `preload_forecast` — one
+    arithmetic, so the view and the failed preload cannot disagree.
+    """
+    a, b = _crowded_fleet(stub_factory)
+    harness = await ripple_factory(_cfg(tmp_path, _hosts(a, b)))
+    # DeepSeek eats the ceiling and is the model a lock protects first; GLM is
+    # the model that then fits nowhere.
+    assert (await _lock(harness, DEEPSEEK)).status_code == 200
+    assert (await _lock(harness, GLM)).status_code == 200
+
+    row = await _model_row(harness, GLM)
+    assert row["feasible"] is False
+    assert row["feasible_host"] == "A"          # first blocking host, sorted
+    assert row["feasible_reason"] == harness.host("A").preload_forecast(GLM)[1]
+    assert row["feasible_reason"].startswith("does not fit: 418.1 GB needed")
+    assert " GB free" in row["feasible_reason"]
+    assert f"{DEEPSEEK} is locked and cannot be evicted" in row["feasible_reason"]
+
+    cells = {c["host"]: c for c in row["hosts"]}
+    assert [cells[name]["fits"] for name in ("A", "B")] == [False, False]
+    for name in ("A", "B"):
+        assert cells[name]["fit_reason"] == harness.host(name).preload_forecast(GLM)[1]
+    # The verdict is about memory only: the lock is set and stored.
+    assert row["lock"] is True and row["loaded_on"] == []
+
+
+async def test_a_lock_that_fits_nowhere_is_stored_and_warns(
+        stub_factory, ripple_factory, tmp_path, caplog):
+    """The operator's decision is a decision: 200, a line in the log, no evict.
+
+    #126 refuses the *warning*, not the write. Nothing is unloaded or unlocked
+    to make room — the prognosis reads.
+    """
+    a, b = _crowded_fleet(stub_factory)
+    harness = await ripple_factory(_cfg(tmp_path, _hosts(a, b)))
+    await _lock(harness, DEEPSEEK)
+
+    with caplog.at_level(logging.WARNING, logger="ripple"):
+        resp = await _lock(harness, GLM, note="the second big one")
+
+    assert resp.status_code == 200, resp.text
+    assert harness.ripple.policy.locked(GLM) is True
+    answered = next(r for r in resp.json()["models"] if r["id"] == GLM)
+    # The write answers with the whole view, so the page learns the warning
+    # state from the click itself (rule 4 of #126).
+    assert answered["feasible"] is False
+    assert answered["feasible_host"] == "A"
+    assert answered["note"] == "the second big one"
+    assert "does not fit" in answered["feasible_reason"]
+    assert (tmp_path / "models.yaml").read_text(encoding="utf-8").count(GLM) >= 1
+    # A line the operator can find later, and no action on the nodes.
+    lines = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith("model_lock_infeasible")]
+    assert lines and GLM in lines[0] and "does not fit" in lines[0], lines
+    assert a.state.unload_calls == [] and b.state.unload_calls == []
+    assert a.state.model(DEEPSEEK).loaded is True
+
+
+async def test_a_builtin_is_never_infeasible(stub_factory, ripple_factory, tmp_path):
+    """A virtual engine has no weights: `feasible: true`, no sentence — even on
+    a node whose ceiling is already full of a locked model."""
+    stub = _infra_stub(stub_factory)
+    harness = await ripple_factory(_cfg(tmp_path, _infra_hosts(stub)))
+    await _lock(harness, DEEPSEEK)
+
+    row = await _model_row(harness, INFRA)
+    assert row["builtin"] is True and row["lock"] is True
+    assert row["feasible"] is True
+    assert row["feasible_reason"] is None and row["feasible_host"] is None
+    cell = next(c for c in row["hosts"] if c["host"] == "A")
+    assert cell["offered"] is True and cell["fits"] is True
+    assert cell["fit_reason"] is None
+
+
+async def test_a_lock_that_is_only_not_routed_here_does_not_warn(
+        stub_factory, ripple_factory, tmp_path):
+    """Routing is the policy's axis, memory is the lock's (rule 2 of #126).
+
+    `SMALL` is offered by the node and kept out of routing by the allow-list;
+    it would fit there, so the lock is deliverable and must not warn — a model
+    that is merely not routed somewhere is not a broken promise.
+    """
+    a = stub_factory(models=[_deepseek(loaded=True),
+                             StubModel(id=IDLE, loaded=True, estimated_size=IDLE_SIZE,
+                                       last_access=2.0),
+                             StubModel(id=SMALL, estimated_size=SMALL_SIZE)])
+    hosts = [host_config("A", a.url, node_id=a.state.node_id,
+                         models=[DEEPSEEK, IDLE])]
+    harness = await ripple_factory(_cfg(tmp_path, hosts))
+    await _lock(harness, DEEPSEEK)
+    assert (await _lock(harness, SMALL)).status_code == 200
+
+    row = await _model_row(harness, SMALL)
+    cell = next(c for c in row["hosts"] if c["host"] == "A")
+    assert cell["offered"] is True and cell["dispatch"] is False   # not routed
+    assert cell["fits"] is True and cell["fit_reason"] is None
+    assert row["feasible"] is True          # a forecast was made, and it fits
+    assert row["feasible_reason"] is None and row["feasible_host"] is None
+
+
+async def test_a_host_without_a_forecast_still_fits(stub_factory, ripple_factory,
+                                                   tmp_path):
+    """`([], None)` is "no forecast", not "does not fit" (rule 1 of #126).
+
+    Unknown size and a disabled guard both leave the node to decide; the host
+    then reports `fits: true`, and the model-level verdict is `true` — no
+    warning is invented from silence, and no unknown either.
+    """
+    a = stub_factory(models=[_deepseek(loaded=True),
+                             StubModel(id=GLM, estimated_size=0)])
+    harness = await ripple_factory(_cfg(tmp_path, [
+        host_config("A", a.url, node_id=a.state.node_id)]))
+    await _lock(harness, DEEPSEEK)
+    await _lock(harness, GLM)
+
+    row = await _model_row(harness, GLM)
+    cell = next(c for c in row["hosts"] if c["host"] == "A")
+    assert harness.host("A").preload_forecast(GLM) == ([], None)
+    assert cell["fits"] is True and cell["fit_reason"] is None
+    assert row["feasible"] is True and row["feasible_reason"] is None
+
+    # The same answer with the guard off: the arithmetic is not made, so the
+    # host cannot be called unfit.
+    off = stub_factory(models=[_deepseek(loaded=True),
+                               StubModel(id=GLM, estimated_size=GLM_SIZE)])
+    off.state.final_ceiling = 0               # the node reports no ceiling
+    guardless = await ripple_factory(_cfg(tmp_path, [
+        host_config("A", off.url, node_id=off.state.node_id)]))
+    assert guardless.host("A").guard_enabled is False
+    assert guardless.host("A").preload_forecast(GLM) == ([], None)
+    row = await _model_row(guardless, GLM)
+    cell = next(c for c in row["hosts"] if c["host"] == "A")
+    assert cell["fits"] is True and cell["fit_reason"] is None
+    assert row["feasible"] is True

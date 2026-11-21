@@ -1,12 +1,13 @@
 """The test fleet the manual's pictures show (issue #104).
 
 `tools/mockup_snapshot.py` renders the dashboard; the dashboard is filled by
-`/healthz`, `/stats` and `/config`. The real payloads of a running installation
-are far too large to write by hand for every picture — and they would put the
-operator's machine names, addresses and model ids into a public manual. This
-module is the one place where the picture's data is written down: a small,
-complete test fleet that answers those three endpoints, plus the three admin
-calls the Nodes tab and the Operations tab need for their pictures.
+`/healthz`, `/stats` and `/config`, and its Models tab asks `/admin/models` one
+extra question — whether a lock can be resident anywhere (issue #126). The real
+payloads of a running installation are far too large to write by hand for every
+picture — and they would put the operator's machine names, addresses and model
+ids into a public manual. This module is the one place where the picture's data
+is written down: a small, complete test fleet that answers those endpoints, plus
+the admin calls the Models, Nodes and Operations tabs need for their pictures.
 
 The fleet is deliberately fictional and the manual promises exactly that:
 
@@ -53,6 +54,11 @@ LUMEN = "lumen-32b-oQ4e"
 TIDE = "tide-7b-oQ4e-mtp"
 SCRIBE = "scribe-extract"
 SCRIBE_V = "scribe-vision"
+# The one model no node in this fleet can hold (issue #126): 108.4 GB against a
+# 60.8 GB and a 91.2 GB budget, with `atlas-32b-oQ4e-mtp` locked on both nodes
+# and therefore not evictable. It exists so the Models tab shows the third
+# padlock state — locked, and resident nowhere.
+ATLAS140 = "atlas-140b-oQ4e-mtp"
 
 NODE_A = "node-a"
 NODE_B = "node-b"
@@ -75,6 +81,17 @@ MEASURED_A = int(41.9 * GB)      # the sum of the models' own `actual_size`
 CEILING_B = 96 * GB
 USED_B = int(71.2 * GB)
 MEASURED_B = int(68.4 * GB)
+
+# `atlas-140b-oQ4e-mtp` — the model behind the third padlock state (#126). It is
+# offered on both nodes and resident on neither, and its size is what makes the
+# lock a promise the arithmetic cannot keep.
+BIG_SIZE = int(108.4 * GB)
+HARD_THRESHOLD = 0.95
+TARGET_A = HARD_THRESHOLD * CEILING_A / GB       # 60.8 GB
+TARGET_B = HARD_THRESHOLD * CEILING_B / GB       # 91.2 GB
+# What stays resident because it is locked: `atlas-32b-oQ4e-mtp` on both nodes.
+LOCKED_A = 24.6
+LOCKED_B = 24.6
 
 TG_A = 61.2      # tok/s, one stream, as the node reports it
 TG_B = 44.8
@@ -154,8 +171,9 @@ def _host(name: str, **row) -> dict:
     return base
 
 
-def _model(mid: str, hosts: list[dict], *, lock: bool = False) -> dict:
-    return {"id": mid, "lock": lock, "lock_reason": None, "hosts": hosts}
+def _model(mid: str, hosts: list[dict], *, lock: bool = False,
+           lock_reason: str | None = None) -> dict:
+    return {"id": mid, "lock": lock, "lock_reason": lock_reason, "hosts": hosts}
 
 
 def _mh(host: str, **row) -> dict:
@@ -171,6 +189,57 @@ def _mh(host: str, **row) -> dict:
 
 
 # ── /healthz ────────────────────────────────────────────────────────────────
+
+def _does_not_fit(need_gb: float, target_gb: float, locked_gb: float,
+                  evicts: list[str], locked: list[str]) -> str:
+    """The preload's refusal sentence, word for word as `preload_forecast` writes it.
+
+    `ripple/hosts.py:preload_forecast` refuses with `does not fit: <n> GB needed,
+    <m> GB free`, names what it would have evicted, and names the locked model
+    that stopped it. Written from the same numbers the fleet above carries, so
+    the tooltip cannot quote a budget the cards do not have.
+    """
+    free = max(0.0, target_gb - locked_gb)
+    reason = f"does not fit: {need_gb:.1f} GB needed, {free:.1f} GB free"
+    if evicts:
+        reason += f" after evicting {', '.join(evicts)}"
+    if locked:
+        reason += f"; {', '.join(locked)} is locked and cannot be evicted"
+    return reason
+
+
+# The third padlock state (issue #126): the lock is stored, and no node that
+# offers the model could hold it. Both nodes refuse it for the same reason —
+# `atlas-32b-oQ4e-mtp` is locked there and may not be evicted to make room.
+FIT_REFUSAL_A = _does_not_fit(BIG_SIZE / GB, TARGET_A, LOCKED_A,
+                              [ATLAS9, ATLAS14], [ATLAS32])
+FIT_REFUSAL_B = _does_not_fit(BIG_SIZE / GB, TARGET_B, LOCKED_B,
+                              [ATLAS9, LUMEN], [ATLAS32])
+
+# `feasible` per model, as `GET /admin/models` carries it: `False` only when at
+# least one host offers the model and every one of them refuses it. Every other
+# model in this fleet fits where it is offered.
+FEASIBILITY: dict[str, tuple[bool | None, str | None, str | None]] = {
+    ATLAS140: (False, FIT_REFUSAL_A, NODE_A),   # the first blocking host speaks
+}
+
+# `fits` per (model, node): `None` where the node does not offer the model.
+FIT_REFUSALS: dict[tuple[str, str], str] = {
+    (ATLAS140, NODE_A): FIT_REFUSAL_A,
+    (ATLAS140, NODE_B): FIT_REFUSAL_B,
+}
+
+# The sentence `/healthz` carries for the lock that is in force: the same text
+# `_lock_reason` in `ripple/proxy.py` builds for a locked, resident, routed model.
+LOCK_NOTE_A32 = (f"{ATLAS32} is locked and resident on {NODE_A}, {NODE_B}: a request "
+                 f"that would need its memory is refused with 503 model_locked. "
+                 f"Unlock with DELETE /admin/models/{ATLAS32}/lock")
+
+# When the operator set the two locks. Fixed, like every other stamp here: a
+# picture must not move because it was taken on another day.
+LOCK_SINCE = "2026-11-19T09:41:00"
+
+
 def healthz(now: float | None = None, commit: str = "0000000",
             dirty: bool = False) -> dict:
     """The Fleet tab's whole world: hosts, models, threads, ledger, series.
@@ -232,7 +301,9 @@ def healthz(now: float | None = None, commit: str = "0000000",
                          "lifecycle": True, "identity": True, "prefix_cache": True,
                          "eviction_guard": True},
         "warnings": [],
-        "locks": {},
+        # The models whose lock is stored (#21/#118): one that protects what is
+        # resident, one whose promise no node can keep (#126).
+        "locks": sorted([ATLAS32, ATLAS140]),
         "fleet": {"overlay_file": "~/.ripple/fleet.yaml", "overlay_persist": True,
                   "overlay_error": None, "overlay_hosts": [NODE_C],
                   "overlay_overrides": {NODE_B: ["weight"]}, "drain_seconds": 120.0},
@@ -334,6 +405,10 @@ def healthz(now: float | None = None, commit: str = "0000000",
             # node-a's loaded models sum to 41.9 GB measured / 46.8 GB estimated,
             # node-b's to 68.4 / 71.2 — the two numbers each card's memory bar
             # prints. Change a size here and the bar changes with it.
+            # Locked on both nodes: the model the six conversations run on. Its
+            # padlock is the ordinary closed one (red, in force) — and it is the
+            # model that blocks the big one below, because a locked model is
+            # never evicted to make room (#119).
             _model(ATLAS32, [
                 _mh(NODE_A, loaded=True, estimated_size=24_600_000_000,
                     actual_size=23_400_000_000, context_len=131072, vision=True,
@@ -341,7 +416,7 @@ def healthz(now: float | None = None, commit: str = "0000000",
                 _mh(NODE_B, loaded=True, estimated_size=24_600_000_000,
                     actual_size=23_400_000_000, context_len=131072, vision=True,
                     threads=2, inflight=0, tg_tps=TG_B),
-            ]),
+            ], lock=True, lock_reason=LOCK_NOTE_A32),
             _model(ATLAS9, [
                 _mh(NODE_A, loaded=True, estimated_size=7_100_000_000,
                     actual_size=6_500_000_000, context_len=262144, vision=True,
@@ -374,6 +449,17 @@ def healthz(now: float | None = None, commit: str = "0000000",
                 _mh(NODE_B, loaded=False, estimated_size=28_100_000_000,
                     context_len=131072, vision=True, dispatch=False, policy="hidden"),
             ]),
+            # The third padlock state (#126): locked, cold, and too big for
+            # either node. `feasible: false` comes from `GET /admin/models` —
+            # `/healthz` cannot say it — and the row is where the page paints the
+            # dashed padlock with the `!`. Cold on purpose: a lock on a model
+            # that is already resident would be a lock that is being kept.
+            _model(ATLAS140, [
+                _mh(NODE_A, loaded=False, estimated_size=BIG_SIZE,
+                    context_len=131072, vision=True),
+                _mh(NODE_B, loaded=False, estimated_size=BIG_SIZE,
+                    context_len=131072, vision=True),
+            ], lock=True),
             _model(TIDE, [
                 _mh(NODE_B, loaded=False, estimated_size=4_100_000_000,
                     context_len=131072),
@@ -545,6 +631,60 @@ def config() -> dict:
     }
 
 
+# ── GET /admin/models ───────────────────────────────────────────────────────
+def models_view(now: float | None = None) -> dict:
+    """`GET /admin/models`: the lock view, including whether a lock can be paid.
+
+    This is the one payload `/healthz` does not carry, and the page reads exactly
+    three fields out of it per row — `feasible`, `feasible_reason`,
+    `feasible_host` (issue #126). They are the preload's own forecast
+    (`ripple/proxy.py:_lock_feasibility`), which is why a model that no node can
+    hold says so *before* the operator clicks, and why the Models tab paints the
+    third padlock state — locked, dashed outline, `!` in the body.
+
+    Built from `healthz()` so the two payloads cannot disagree about which model
+    is locked or where it is loaded; only the forecast is written down here, in
+    `FEASIBILITY` and `FIT_REFUSALS`.
+    """
+    health = healthz(now)
+    rows = []
+    for model in health["models"]:
+        mid = model["id"]
+        lock = bool(model.get("lock"))
+        feasible, reason, host = FEASIBILITY.get(mid, (True, None, None))
+        rows.append({
+            "id": mid,
+            "lock": lock,
+            "builtin": False,
+            "lockable": True,
+            "since": LOCK_SINCE if lock else None,
+            "by": "operator" if lock else None,
+            "note": "",
+            # Where the lock protects something right now.
+            "loaded_on": sorted(x["host"] for x in model["hosts"] if x["loaded"]),
+            "lock_reason": model.get("lock_reason"),
+            # Whether the promise can be delivered at all (#126).
+            "feasible": feasible,
+            "feasible_reason": reason,
+            "feasible_host": host,
+            "listed": any(x.get("available") and x.get("dispatch", True)
+                          for x in model["hosts"]),
+            "hosts": [{
+                "host": x["host"],
+                "offered": True,
+                "loaded": bool(x["loaded"]),
+                # A padlock per node: the lock protects *this* node's copy.
+                "lock": bool(lock and x["loaded"]),
+                "policy": x.get("policy"),
+                "dispatch": bool(x.get("dispatch", True)),
+                "routable": bool(x["loaded"] and x.get("dispatch", True)),
+                "fits": (mid, x["host"]) not in FIT_REFUSALS,
+                "fit_reason": FIT_REFUSALS.get((mid, x["host"])),
+            } for x in model["hosts"]],
+        })
+    return {"locks": sorted(r["id"] for r in rows if r["lock"]), "models": rows}
+
+
 # ── the admin calls the Nodes and Operations tabs need ──────────────────────
 def node_preview() -> dict:
     """`POST /admin/nodes?dry_run=true` for node-c — the machine that is only
@@ -629,6 +769,8 @@ def endpoints(now: float | None = None, commit: str = "0000000",
         {"m": "GET", "p": "/healthz", "s": 200, "b": healthz(now, commit, dirty)},
         {"m": "GET", "p": "/stats", "s": 200, "b": stats(now)},
         {"m": "GET", "p": "/config", "s": 200, "b": config()},
+        # The lock view: the third padlock state lives here, not in /healthz (#126).
+        {"m": "GET", "p": "/admin/models", "s": 200, "b": models_view(now)},
         {"m": "GET", "p": "/admin/keys", "s": 200, "b": keys()},
         {"m": "GET", "p": "/admin/nodes/%s/models" % NODE_A, "s": 200,
          "b": {"node": NODE_A, "models": []}},

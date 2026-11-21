@@ -482,6 +482,30 @@ class StatsConfig:
 
 
 @dataclass
+class UpdateConfig:
+    """The start-up update check (issue #123): is a newer release published?
+
+    RIPPLE asks the public GitHub releases API **once**, in the background after
+    the listeners are up (the #117 lesson — nothing on the start-up path waits
+    for a network), and the dashboard header offers what it found. `check: false`
+    is the off switch, and it exists for a real machine: a host without internet
+    would otherwise pay a DNS lookup and a timeout on every start. The failure
+    itself is silent either way (`unknown`), but a switch the operator can throw
+    is cheaper to reason about than "it is quiet, it must be fine".
+
+    The check is ON by default because the point of the issue is that nobody
+    notices a new release; `timeout_seconds` stays short for the same reason the
+    task is in the background — a blackholed connection must not hold a task for
+    minutes. `url` is configurable so a fork can point at its own releases; it is
+    the plain releases endpoint, unauthenticated (handover §5).
+    """
+
+    check: bool = True
+    url: str = "https://api.github.com/repos/vogel61/ripple/releases/latest"
+    timeout_seconds: float = 3.0
+
+
+@dataclass
 class FleetConfig:
     """The runtime overlay: hosts added or changed at the page (issue #70).
 
@@ -532,6 +556,144 @@ class ProxyConfig:
     trusted_proxies: list[str] = field(default_factory=list)
 
 
+# -- what a row of the parameter table means (issue #139) ------------------
+#
+# One sentence per path the dashboard's `paramsTableLive()` hands to `add()`:
+# what the value does, and what moves when it is changed. A `*` in a path
+# stands for a host name — the page builds `hosts.<name>.weight` from the
+# fleet, the schema names the shape `hosts.*.weight`.
+#
+# The sentences are data, not code: no formatting, no interpolation, nothing
+# but the plain text. The sources are the field comments above, the module
+# docstrings and `docs/model-policy.md` / `docs/dashboard-design.md`; where a
+# field is accepted but not read (the balance hysteresis, `request_log`), the
+# sentence says so instead of describing a behaviour that does not exist.
+FIELD_HELP: dict[str, str] = {
+    # global: identity and transport, restart-bound
+    "listen": "The address and port the proxy binds; it is opened once at "
+              "start-up, so a change needs an edit here and a restart.",
+    "log_level": "How much the process writes to its log (`debug` … `error`); "
+                 "logging is configured before the first request, so a change "
+                 "needs a restart.",
+    # placement: how a new thread finds a host
+    "placement.binding_strategy": "Which rule picks the host for a new thread: "
+                                  "`deficit` follows the weight target, "
+                                  "`consistent_hash` a stateless ring, "
+                                  "`least_threads` the lowest count — the choice "
+                                  "reshapes the whole distribution.",
+    "placement.balance_abs_threshold": "The absolute half of the balance "
+                                       "hysteresis: the fleet counts as "
+                                       "imbalanced only when the weighted load "
+                                       "spread exceeds this and the ratio also "
+                                       "exceeds `balance_rel_threshold`; in this "
+                                       "version the check is computed but gates "
+                                       "no placement.",
+    "placement.balance_rel_threshold": "The relative half of the balance "
+                                       "hysteresis, read as the ratio between the "
+                                       "most and least loaded host (1.5 matches "
+                                       "the 3:2 target); like the absolute half "
+                                       "it only feeds `placement.imbalance()` and "
+                                       "moves nothing.",
+    # placement.rebind: moving a bound thread
+    "placement.rebind.enabled": "Switches moving a bound thread to another host: "
+                                "while on, an idle thread may move when the decode "
+                                "gain it buys beats the prefill it costs, and while "
+                                "off every thread stays where it was first bound.",
+    "placement.rebind.max_per_hour": "The fleet-wide budget of thread moves per "
+                                     "hour; once it is spent no thread moves until "
+                                     "the hour rolls on, and 0 removes the cap.",
+    "placement.rebind.safety_factor": "How much larger the decode gain must be "
+                                      "than the prefill cost before a move pays "
+                                      "(`gain ≥ cost × factor`); raising it makes "
+                                      "moves rarer, lowering it lets marginal "
+                                      "moves through.",
+    "placement.rebind.per_thread_cooldown_seconds": "How long one thread is left "
+                                                    "alone after it was moved; "
+                                                    "inside that window the sweep "
+                                                    "never prices it again, so a "
+                                                    "thread cannot be shuttled back "
+                                                    "and forth.",
+    "placement.thread_decay_seconds": "Over how many seconds an idle thread's "
+                                      "weight in the deficit falls quadratically "
+                                      "to zero; a shorter value frees the fleet "
+                                      "from a silent conversation sooner, a longer "
+                                      "one keeps its host looking loaded.",
+    "placement.flap_guard_failures": "How many consecutive soft probe failures a "
+                                     "host may collect before it leaves the pool; "
+                                     "1 drops it on the first failure, and a hard "
+                                     "failure (refused connection, identity "
+                                     "mismatch) still drops it at once.",
+    # affinity: how a conversation is recognised and when its slot frees
+    "affinity.header": "The request header that carries the session id and names "
+                       "a thread exactly; every live thread is recognised through "
+                       "it, so changing the name would orphan all of them and "
+                       "needs a restart.",
+    "affinity.ttl_seconds": "How long a thread keeps its slot without a request; "
+                            "after that it is forgotten and the next turn is "
+                            "placed as a new thread.",
+    "affinity.batch_ttl_seconds": "The shorter TTL for threads opened by a key of "
+                                  "kind `batch`: a job's turns come back to back "
+                                  "and nobody waits, so its slot is freed sooner "
+                                  "than a conversation's.",
+    "affinity.min_prompt_tokens": "Prompts with a single user message below this "
+                                  "many tokens are placed by deficit and release "
+                                  "their slot as soon as the response returns, "
+                                  "instead of holding a thread slot.",
+    "affinity.match_threshold": "How similar the stored prefix must be (common "
+                                "characters over request length) for a request to "
+                                "count as the known thread; a lower value keeps an "
+                                "affinity alive across a compression, a higher one "
+                                "splits threads sooner.",
+    "affinity.ephemeral_window_seconds": "How long a finished one-shot request "
+                                         "still counts as load on its host, so a "
+                                         "burst of short calls is not immediately "
+                                         "forgotten by the deficit.",
+    # discovery
+    "discovery.interval_seconds": "How often every host is probed for health and "
+                                  "its model list; a shorter interval notices a "
+                                  "change sooner and costs more requests.",
+    "discovery.unhealthy_after": "Legacy threshold with no effect: "
+                                 "`placement.flap_guard_failures` decides when a "
+                                 "host leaves the pool, and a value other than 3 "
+                                 "only raises a warning at start-up.",
+    # proxy
+    "proxy.retry_other_node": "Whether a request that fails before the first byte "
+                              "is tried once on another host; off means the client "
+                              "sees the upstream error instead of a second attempt.",
+    "proxy.request_log": "The switch for the one-line-per-request access log (no "
+                         "prompt content, no keys); nothing in the proxy reads it "
+                         "today, so changing it alters no output.",
+    "proxy.connect_timeout_seconds": "The connect timeout towards a host (also "
+                                     "used for write and pool); a shorter value "
+                                     "hands a dead node to the retry sooner, a "
+                                     "longer one waits for a slow machine.",
+    # per host: `*` is the node name
+    "hosts.*.weight": "The host's share of new threads relative to the others, and "
+                      "the divisor of its normalised load; raising it sends more "
+                      "conversations here.",
+    "hosts.*.max_inflight": "The hard cap on concurrent requests this host may "
+                            "carry; at the cap it takes nothing more and the "
+                            "request spills to another node or waits.",
+    "hosts.*.spill_threshold": "From this many running requests the host counts as "
+                               "full for new threads, even while it still has free "
+                               "slots; it must not exceed `max_inflight`.",
+    "hosts.*.hard_threshold": "The fraction of the memory ceiling the cold-load "
+                              "guard admits against; a load that would exceed it "
+                              "evicts models in LRU order until the estimate fits, "
+                              "and a value above 1.0 is refused.",
+    "hosts.*.prefer_resident": "Whether an already loaded model makes this host a "
+                               "preferred candidate; off keeps the host in play but "
+                               "lets the deficit decide, so warmth alone no longer "
+                               "attracts work.",
+    "hosts.*.models": "The allow-list of models this host may serve; empty means "
+                      "everything it offers, and a model outside the list is never "
+                      "placed here.",
+    "hosts.*.api_key": "The credential sent to this host's API; it is read at "
+                       "start-up and shown only as set or none, so a change needs a "
+                       "restart.",
+}
+
+
 @dataclass
 class Config:
     listen_host: str = "0.0.0.0"
@@ -549,6 +711,9 @@ class Config:
     auth: AuthConfig = field(default_factory=AuthConfig)
     replication: ReplicationConfig = field(default_factory=ReplicationConfig)
     stats: StatsConfig = field(default_factory=StatsConfig)
+    # The start-up update check (issue #123). ON by default: the dashboard
+    # header offers a newer release instead of the operator having to look it up.
+    update: UpdateConfig = field(default_factory=UpdateConfig)
     # The runtime overlay (issue #70): what the operator added or disabled at the
     # page, merged over `hosts` at start-up. See `FleetConfig`.
     fleet: FleetConfig = field(default_factory=FleetConfig)
@@ -709,6 +874,9 @@ class Config:
             "discovery": asdict(self.discovery),
             "proxy": asdict(self.proxy),
             "stats": asdict(self.stats),
+            # The update check (issue #123): whether it runs and where it asks.
+            # `/healthz` carries the *result*; this is the setting in force.
+            "update": asdict(self.update),
             # The runtime overlay's own settings (issue #70), never its content:
             # `/config` is the effective configuration, and the overlay's hosts
             # are already part of `hosts` above with their `source`.
@@ -722,6 +890,12 @@ class Config:
             # The paths that may be set at the page at all. `*` stands for a
             # host name, and a path that is not on this list has no input.
             "editable": list(EDITABLE_PATHS),
+            # What each row means, from `FIELD_HELP` (issue #139): the sentence
+            # lives with the schema because a renamed field must carry its
+            # explanation in the same commit, while text typed into the page
+            # would silently keep describing the old name. The table is a
+            # constant, so it is shipped once beside `editable`, its sibling.
+            "help": dict(FIELD_HELP),
             "replication": {
                 "enabled": self.replication.enabled,
                 "ssh_command": self.replication.ssh_command,
@@ -1802,6 +1976,19 @@ def load_config(path: str | Path) -> Config:
                            "stats.flush_seconds", minimum=1.0),
     )
 
+    # The update check (issue #123). Absent = on, which is the documented
+    # behaviour: an existing config file keeps loading unchanged and gets the
+    # hint. `check: false` is the one switch that stops the fetch entirely.
+    update_raw = raw.get("update") or {}
+    if not isinstance(update_raw, dict):
+        raise ConfigError("'update' must be a mapping")
+    update_cfg = UpdateConfig(
+        check=bool(update_raw.get("check", True)),
+        url=str(update_raw.get("url") or UpdateConfig().url),
+        timeout_seconds=_num(update_raw.get("timeout_seconds", 3),
+                             "update.timeout_seconds", minimum=0.1),
+    )
+
     # The runtime overlay (issue #70). Only its own settings are read here; the
     # file itself is merged in `Ripple.__init__` (`apply_overlay`), so
     # `load_config` stays a pure read of the hand-written file — a test that
@@ -1858,6 +2045,7 @@ def load_config(path: str | Path) -> Config:
         log_file=(str(raw["log_file"]) if raw.get("log_file") else None),
         hosts=hosts, sites=sites, affinity=aff, placement=plc, discovery=dis,
         proxy=prx, auth=auth, replication=replication, stats=stats_cfg,
+        update=update_cfg,
         fleet=fleet_cfg, source=p,
     )
     if cfg.listen_port > 65535:

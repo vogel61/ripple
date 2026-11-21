@@ -8,6 +8,7 @@ RIPPLE listens on `0.0.0.0:8010` and distributes requests over the oMLX nodes
 | `start-ripple.command` | start in a Terminal window (double-click) |
 | `stop-ripple.command` | stop the running instance (double-click) |
 | `verify-ripple.command` | check a running instance end to end (double-click) |
+| `install-cli.command` | install the `ripple` command (no sudo, no profile edit) |
 | `ai.ripple.plist` | launchd LaunchAgent: starts at login, restarts on crash |
 
 `verify-ripple.command` is the one to double-click when something feels off: it
@@ -18,6 +19,64 @@ means everything is fine. `RIPPLE_PORT` overrides the port it looks at.
 
 Run **one** instance only. The start script refuses to start if port 8010 is
 already in use and prints the PID that holds it.
+
+## The `ripple` command
+
+`install-cli.command` writes a two-line wrapper into `/usr/local/bin` when that
+directory is writable, otherwise into `~/.local/bin` (it prints the `PATH` line
+to add and edits no profile). No sudo, no `pip install`; re-running it is
+idempotent. `install-launchd.command` runs it as its last step, so a fresh
+checkout gets the command too.
+
+```bash
+ripple            # start here, or report that it already runs (exit 0)
+ripple status     # running/stopped, pid, port, version, uptime, log path
+ripple shutdown   # stop: bootout the launchd job, else SIGTERM the listener
+ripple restart    # stop, start, wait until GET / answers, print the seconds
+ripple update     # fetch, run the suite, restart — only if the suite is green
+ripple -perm      # autostart on: install the launchd job from this checkout
+ripple shutdown -perm   # autostart off: stop, then remove the job
+```
+
+Both modes work and they cannot fight over the port. With the launchd job
+loaded, `ripple` reports it and exits 0; without a job it runs the same
+foreground process as `start-ripple.command`; if something else holds the port,
+the command names the PID and exits non-zero without signalling it.
+`ripple restart` returns only once the dashboard answers — the socket is open
+before the app is ready. `ripple update` refuses a dirty tree and does not
+restart on a red suite, so the build that runs keeps running.
+
+## Autostart on and off
+
+`ripple shutdown` stops the service but leaves the job installed, so launchd
+brings it back at the next login. The two `-perm` words are the switch for that:
+
+```bash
+ripple -perm             # install the job from THIS checkout and start it
+ripple shutdown -perm    # stop it, then remove the job: no autostart any more
+```
+
+`-perm` renders `deploy/ai.ripple.plist` for the directory the command runs from
+(`ProgramArguments`, `WorkingDirectory` and the config path — never a copy of an
+older plist), writes the oMLX key from `~/.omlx/api_key.txt` into it with
+`plutil`, sets the file to `0600`, bootstraps it, and says `autostart: on
+(ai.ripple, /path/to/checkout)` only after `/healthz` answered. Running it twice
+changes nothing while the job is loaded and answering. A manual instance holding
+the port is not killed: the plist is installed, that process keeps running, and
+launchd takes over at the next login (`ripple restart` does it immediately). A
+missing `config.yaml`, a missing key file, or a non-RIPPLE process on the port is
+refused by name and nothing is written.
+
+`shutdown -perm` stops first (the job if there is one, else the listener), then
+removes the plist, then reads both facts back — `launchctl print
+gui/$(id -u)/ai.ripple` fails with `Could not find service` and nothing listens
+on the port — and prints `autostart: off (ai.ripple)` plus which of the two it
+stopped. `-perm` with `start`, `status`, `restart` or `update` is a usage error;
+none of them changes autostart.
+
+`RIPPLE_LABEL` (default `ai.ripple`) and `RIPPLE_PORT` (default: `listen_port`
+from the config) point the commands at another job or port — that is how a
+second instance on 8011 is driven without touching the service.
 
 ## Start and stop by double-click
 
@@ -97,8 +156,9 @@ launchctl bootout gui/$(id -u)/ai.ripple
 rm ~/Library/LaunchAgents/ai.ripple.plist
 ```
 
-To stop it without uninstalling: `launchctl bootout gui/$(id -u)/ai.ripple`
-(`launchctl kickstart -k gui/$(id -u)/ai.ripple` restarts it).
+To stop it without uninstalling: `ripple shutdown` (or
+`launchctl bootout gui/$(id -u)/ai.ripple`), and `ripple restart` brings it back
+with a wait until the dashboard answers.
 
 ## Emergency operation (RB-1)
 

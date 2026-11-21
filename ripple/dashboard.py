@@ -118,8 +118,46 @@ SHELL = """<!DOCTYPE html>
     <div>
       <h1>RIPPLE</h1>
       <p class="tagline" data-i18n="app.tagline"></p>
+      <!-- The update offer (issue #123): an empty placeholder. The 2 s tick
+           fills it from `/healthz` → `update`, so the language switch applies
+           without a reload and a run with nothing to offer keeps no empty line
+           (`.update-hint:empty` is `display:none`). It is a link, not a button:
+           nothing here downloads or installs anything. -->
+      <p class="update-hint" id="updateHint"></p>
     </div>
     <div class="snapshot">
+      <!-- Admin-Modus (issue #130): ein Chip mit drei Zuständen — `readonly`
+           (offener Bügel, gedämpft), `admin` (geschlossener Bügel, Akzent) und
+           `checking` (während der eine GET /admin/models läuft). Er ist ein
+           Knopf, kein Feld: der Klick öffnet das eine Passwortfeld darunter,
+           Enter schickt, Escape schliesst ohne zu schreiben. Das Feld steht in
+           der Shell, weil ein 2-s-Tick es sonst mitten im Tippen ersetzen
+           würde — dieselbe Regel wie bei den Feldern des siebten Tabs (#71).
+           Der Schlüssel selbst steht NIE im Markup: er lebt in
+           sessionStorage['ripple_admin'] und geht als Bearer-Header hinaus.
+           Die Wörter kommen aus dem Katalog (`admin.*`); das Skript setzt beim
+           Zustandswechsel `data-i18n`, damit ein Sprachwechsel ohne Reload
+           mitgeht. -->
+      <div class="adminmode" id="adminMode">
+        <button type="button" class="adminchip" id="adminChip" data-state="readonly"
+                data-i18n-aria="admin.readonly" aria-expanded="false">
+          <i class="lock" aria-hidden="true"></i><span id="adminWord"
+                data-i18n="admin.readonly"></span>
+        </button>
+        <button type="button" class="btn adminout" id="adminOut"
+                data-i18n="admin.signout" hidden></button>
+        <div class="adminask" id="adminAsk" hidden>
+          <div class="adminrow">
+            <label class="adminlbl" for="adminKey" data-i18n="admin.enter"></label>
+            <input id="adminKey" type="password" autocomplete="off"
+                   spellcheck="false" size="20">
+          </div>
+          <!-- Die Antwort des Servers, nie eine erfundene: 401 sagt der Satz aus
+               dem Katalog (`admin.rejected`), jeder andere Fehler die Meldung,
+               die im Rumpf stand. -->
+          <p class="adminmsg" id="adminMsg" role="status"></p>
+        </div>
+      </div>
       <!-- Sprachwahl (issue #17): Flagge als Emoji (das System-Font liefert sie,
            FA-22 verbietet ein Icon-Set) und der Eigenname der Sprache — der
            wird nicht übersetzt. Die Wahl liegt in localStorage['ripple_lang']. -->

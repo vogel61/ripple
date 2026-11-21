@@ -1,20 +1,25 @@
 #!/bin/zsh
 # RIPPLE — stop the running proxy.
 #
-# Double-click this file. The process is found with `ps -Ao pid=,command=`,
-# not with `pkill -f` and path patterns: those silently missed the process in
-# this environment. The script reports which PID it stopped.
+# Double-click this file. It is a thin wrapper around `ripple shutdown` (#121):
+# the double-click and the command line must not disagree about what stopping
+# means, so there is one implementation and this is the window around it.
 #
-# Instances listening on another port (e.g. a smoke test on 8011) are left
-# alone. If the launchd agent ai.ripple is loaded, it is removed first —
-# otherwise launchd would restart RIPPLE immediately.
+# That command boots the launchd agent out of launchd when it is loaded —
+# otherwise launchd would start RIPPLE again immediately — and otherwise sends
+# SIGTERM to the process that holds the port, waits for the port to be free and
+# reports which of the two it did. Instances on another port are left alone: the
+# command only ever acts on the port it resolved (RIPPLE_PORT, else
+# listen_port from config.yaml). A process on the port that is not a RIPPLE
+# instance is named and not touched.
+#
+# Every error keeps the window open so the message can be read.
 
 emulate -L zsh
-setopt extended_glob
 set -u
 
-PORT=8010
-UID_NR="$(id -u)"
+PORT="${RIPPLE_PORT:-8010}"
+export RIPPLE_PORT="$PORT"
 
 # --- show the message and wait for a key press ------------------------------
 fail() {
@@ -26,111 +31,26 @@ fail() {
   exit 1
 }
 
-print "RIPPLE — looking for a running instance ..."
+# --- work from the project directory (this script lives in deploy/) ---------
+SCRIPT_DIR="${0:A:h}"
+PROJECT_DIR="${SCRIPT_DIR:h}"
+cd "$PROJECT_DIR" || fail "Cannot open the project directory: $PROJECT_DIR"
 
-# --- launchd would restart the service: remove it there first ---------------
-LAUNCHD_WAS_LOADED=0
-if launchctl print "gui/$UID_NR/ai.ripple" >/dev/null 2>&1; then
-  LAUNCHD_WAS_LOADED=1
-  print "  launchd agent ai.ripple is loaded — removing it from launchd"
-  launchctl bootout "gui/$UID_NR/ai.ripple" >/dev/null 2>&1
-  sleep 1
+print "RIPPLE — stopping the instance on port $PORT ..."
+print ""
+
+if [[ ! -x ./.venv/bin/python ]]; then
+  fail "No Python environment in .venv. See deploy/README.md (installation)."
 fi
 
-# --- collect matching PIDs --------------------------------------------------
-typeset -a FOUND
-typeset -a SKIPPED
-FOUND=()
-SKIPPED=()
-
-while IFS= read -r line; do
-  [[ -n "$line" ]] || continue
-  line="${line##[[:space:]]#}"
-  pid="${line%% *}"
-  cmd="${line#* }"
-  [[ "$pid" == <-> ]] || continue
-  [[ "$cmd" == *"-m ripple"* ]] || continue
-  [[ "$cmd" == *python* ]] || continue
-  [[ "$cmd" == *"stop-ripple"* ]] && continue
-  [[ "$cmd" == *"ps -Ao"* ]] && continue
-  if [[ "$cmd" =~ '--port[= ]+([0-9]+)' ]]; then
-    if [[ "$match[1]" != "$PORT" ]]; then
-      SKIPPED+=("$pid $cmd")
-      continue
-    fi
-  fi
-  FOUND+=("$pid $cmd")
-done < <(ps -Ao pid=,command=)
-
-if (( ${#SKIPPED} > 0 )); then
-  for entry in "${SKIPPED[@]}"; do
-    print "  left untouched (other port): PID ${entry%% *}"
-  done
-fi
-
-if (( ${#FOUND} == 0 )); then
-  if (( LAUNCHD_WAS_LOADED )); then
-    print "  Stopped: launchd agent ai.ripple removed, no process left."
-  else
-    print "  Nothing to stop — no RIPPLE process is running."
-  fi
-  BUSY_PID="$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -n 1)"
-  if [[ -n "$BUSY_PID" ]]; then
-    print "  Port $PORT is in use by PID $BUSY_PID (not a RIPPLE process)."
-  else
-    print "  Port $PORT is free."
-  fi
-  exit 0
-fi
-
-# --- terminate and wait -----------------------------------------------------
-for entry in "${FOUND[@]}"; do
-  pid="${entry%% *}"
-  cmd="${entry#* }"
-  print "  stopping PID $pid"
-  print "    $cmd"
-  kill -TERM "$pid" 2>/dev/null
-done
-
-alive=0
-for _ in {1..20}; do
-  alive=0
-  for entry in "${FOUND[@]}"; do
-    pid="${entry%% *}"
-    if kill -0 "$pid" 2>/dev/null; then
-      alive=1
-    fi
-  done
-  (( alive == 0 )) && break
-  sleep 0.5
-done
-
-if (( alive )); then
-  for entry in "${FOUND[@]}"; do
-    pid="${entry%% *}"
-    if kill -0 "$pid" 2>/dev/null; then
-      print "  PID $pid did not stop on SIGTERM — sending SIGKILL"
-      kill -KILL "$pid" 2>/dev/null
-    fi
-  done
-  sleep 1
-fi
-
-# --- report the result ------------------------------------------------------
-STILL=0
-for entry in "${FOUND[@]}"; do
-  pid="${entry%% *}"
-  kill -0 "$pid" 2>/dev/null && STILL=1
-done
-if (( STILL )); then
-  fail "Some RIPPLE processes are still running. Check with: ps -Ao pid=,command= | grep ripple"
-fi
-
-BUSY_PID="$(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null | head -n 1)"
-if [[ -n "$BUSY_PID" ]]; then
-  fail "RIPPLE stopped, but port $PORT is still in use by PID $BUSY_PID."
-fi
+./.venv/bin/python -m ripple shutdown
+RC=$?
 
 print ""
-print "  Stopped ${#FOUND} RIPPLE process(es). Port $PORT is free."
-exit 0
+if (( RC != 0 )); then
+  print "  Stopping failed (exit $RC) — the message above names the cause."
+  print "  Check with: ripple status"
+fi
+print "  Press any key to close this window."
+read -k 1 2>/dev/null
+exit "$RC"

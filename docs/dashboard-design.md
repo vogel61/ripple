@@ -150,14 +150,17 @@ steht sie oben und nicht in einem Handbuch. Im Abzug sind beide Knoten
   als **stehende hellere Tinte** (`--warn-bright`/`--ok-bright`) lesbar — sonst
   wäre die Information für genau die Leute weg, die sie am wenigsten schnell
   nachlesen können.
-- **Das Schloss ist Bedienerzustand, nicht Störung (#23).** Über dem Modellnamen
-  steht ein Vorhängeschloss: offen in `--ok`, solange nichts gesperrt ist,
-  geschlossen in `--down` und der Modellname in `--load`, sobald gesperrt. Das
-  ist die **einzige** Stelle, an der `--down` „du hast das gemacht" heißt und
-  nicht „etwas ist kaputt" — deshalb trägt der Tooltip das Wort dazu, und
-  deshalb ist das Icon ohne Admin-Schlüssel sichtbar, aber wirkungslos. Ein
-  zweites Icon je Knotenzeile gibt es nicht: die Sperre gilt dem Modell, nicht
-  dem Knoten, und zwei Icons für einen Zustand würden zwei Zustände behaupten.
+- **Das Schloss ist Bedienerzustand, nicht Störung (#23, #118).** Über dem
+  Modellnamen steht ein Vorhängeschloss: offen in `--fg-2`, geschlossen in
+  `--down` und der Modellname in `--load`, sobald gesperrt. Offen ist bewusst
+  **kein** Erfolgston: ungesperrt heißt ungeschützt, und Grün würde „alles gut"
+  behaupten, wo nur nichts entschieden ist. Geschlossen ist die **einzige**
+  Stelle, an der `--down` „du hast das gemacht" heißt und nicht „etwas ist
+  kaputt" — deshalb trägt der Tooltip das Wort dazu, und deshalb ist das Icon
+  ohne Admin-Schlüssel sichtbar, aber wirkungslos. Ein zweites Icon je
+  Knotenzeile gibt es nicht: die Sperre gilt dem Modell, nicht dem Knoten, und
+  zwei Icons für einen Zustand würden zwei Zustände behaupten. Die Einzelregeln
+  stehen unter *Das Schloss in der Modellzeile*.
 
 ### Der Host-Streifen (issue #89)
 
@@ -285,7 +288,8 @@ Datenkörper acht Spalten hat; die Zählung ist maschinell geprüft
 Einheit *ihrer* Spalte und bricht innerhalb der Spalte um, statt unter die
 Nachbarspalte zu laufen: `geladen` trägt `ja/nein` (ein Zustand, keine Größe),
 `Größe` trägt `GB · gesch. / gem.`, `Kontext` trägt `Token`, `tok/s` trägt
-`live / capability` (§5: die Spalte zeigt zwei Basen). Vorher trug `geladen` gar
+`measured here` (§5: die Zelle zeigt die Messung dieses Modells auf diesem
+Knoten, die Kapazität der Maschine steht im Tooltip). Vorher trug `geladen` gar
 keine Unterzeile und die breite Größen-Unterzeile lief nach links unter die
 Nachbarspalte — zwei Beschriftungen
 fast ohne Abstand, und der Leser ordnete die Einheit der falschen Spalte zu.
@@ -417,7 +421,7 @@ sonst stillschweigend verfälschen würden:
 `tests/test_dashboard.py` hält beides fest: die Summe über zwei geladene Modelle
 und die Regel, dass `None` und `0` sie nicht vergiften.
 
-### Zwei tok/s-Basen: live und Kapazität (#30)
+### Eine tok/s-Zahl, und sie gehört dem Modell (#30, neu entschieden in #124)
 
 Dieselbe Regel gilt für die Rate, und sie stand lange falsch: die Spalte `tok/s`
 hieß `gemessen` und zeigte `models[].hosts[].tg_tps`. Dieser Wert ist aber keine
@@ -427,20 +431,46 @@ Zahl fällt also, sobald mehrere Anfragen parallel laufen — sie beschreibt den
 Moment, nicht den Knoten. Der Backend-Code weiß das längst: `ripple/placement.py`
 rechnet mit `cfg.tg_tps` und sagt das im Kommentar dazu.
 
-Die Spalte zeigt deshalb beide Basen, in der Form, die die Tabelle schon hat
-(`inflight 3 / 6`): **live / Kapazität**.
+Die Antwort von #30 war, **zwei** Basen in eine Zelle zu stellen: links die
+Live-Rate, rechts die kalibrierte Kapazität aus `config.yaml`, getrennt durch
+denselben Schrägstrich wie `inflight 3 / 6`. Das war falsch, und der Betreiber
+hat es am 20.11.2026 an der M5 gesehen: die Spalte zeigte einen Wert für Modelle,
+die auf diesem Knoten **nie geladen** waren — und für `MarkItDown`, das als
+virtuelles Builtin über die API überhaupt nicht nutzbar ist. Die Kapazität ist
+eine Messung der **Maschine** aus einem AS-6-Lauf, keine Eigenschaft eines
+Modells; als rechte Hälfte einer Modellspalte sah sie aus wie eine Messung
+dieses Modells. Eine Rate, die für dieses Modell auf diesem Knoten nie gemessen
+wurde, ist keine Tatsache über das Modell — sie ist die Zahl eines anderen.
 
-| Hälfte | Was sie ist | Quelle |
+Deshalb zeigt die Spalte seit #124 **eine** Zahl:
+
+| Zelle | Was sie ist | Quelle |
 |---|---|---|
-| **live** | die Rate, die oMLX für die Anfragen dieses Modells auf diesem Knoten meldet, vom Dienst exponentiell geglättet — sie fällt mit der Parallelität | `/healthz → models[].hosts[].tg_tps` |
-| **Kapazität** | der kalibrierte Wert aus `config.yaml`, unabhängig von der Last; dieselbe Zahl, mit der die Platzierung rechnet | `/config → hosts[].tg_tps` |
+| **der Wert** | die für dieses (Knoten, Modell)-Paar gemessene Dekodierrate, vom Dienst exponentiell geglättet — sie fällt mit der Parallelität | `/healthz → models[].hosts[].tg_tps` |
+| **`—`** | es gibt für dieses Paar noch keine Messung | derselbe Pfad, `null` |
+| **Tooltip** | was die Zahl bedeutet, seit wann sie gilt, und — ausdrücklich als Eigenschaft der Maschine benannt — die kalibrierte Kapazität aus `config.yaml`, mit der `placement.py` rechnet | `/healthz → models[].hosts[].tg_tps`, `/config → hosts[].tg_tps` |
 
-Beide Hälften sind einzeln nachprüfbar, weil sie aus zwei Endpunkten kommen, die
-der 2-s-Takt ohnehin holt. Fehlt die Live-Messung, bleibt die Kapazität stehen:
-`— / 43,5` sagt mehr als ein nackter Strich, der auch die kalibrierte Zahl
-versteckt. Die Unterzeile der Spalte heißt `live / capability` (`live /
-Kapazität`), und der Tooltip nennt beide Zahlen mit ihrer Quelle — das Wort
-„gemessen“ allein behauptete eine Eigenschaft, die die Zahl nicht hat.
+Drei Regeln, die daraus folgen:
+
+- **Der Strich ist die Abwesenheit einer Messung, die 0 ist eine Messung.** Beide
+  sehen in der Zelle verschieden aus (`—` gegen `0,0`), und der Tooltip sagt es
+  zusätzlich in Worten. Vorher war der Unterschied nicht darstellbar, weil neben
+  dem Strich immer eine Zahl stand.
+- **Keine Persistenz.** Die Spalte heißt „seit dem Start dieses Prozesses
+  gemessen“; das steht im Tooltip. Der Kalibrier-Store ist nach `node_id`
+  geschlüsselt und beschreibt die Maschine — eine per-Modell-EMA dort abzulegen
+  würde genau die zwei Basen mischen, vor denen §5 warnt. Nach einem Neustart
+  ist die Spalte leer, bis der erste Request sie füllt; das ist die ehrliche
+  Anzeige, nicht ein Verlust.
+- **Ein Builtin bekommt nie eine Rate.** `MarkItDown` ist `models[].builtin`
+  (seit #118) und `dispatch: false` auf jedem Knoten: es wird nie geroutet, also
+  nie gemessen, also steht dort dauerhaft `—`. Der Tooltip sagt warum
+  (`lock.builtin_tip`).
+
+Die Unterzeile der Spalte heißt entsprechend nicht mehr `live / capability`,
+sondern `measured here` (`hier gemessen`) in allen sechzehn Katalogen. Die
+Kapazität der Maschine bleibt sichtbar — im Tooltip, nicht in der Zelle, und nie
+in einem Satz, der sie als Rate eines Modells ausgibt.
 
 ## 6. Layout und Umbruch
 
@@ -480,6 +510,66 @@ konkurrieren.
 | < 1100 px | Flotte eine Karte je Zeile, Legende vierspaltig |
 | < 900 px | Verteilung untereinander (ein Block je Modell in einer Spalte), Kennzahlen zwei Spalten, Kartenkennzahlen 2 × 2, Kopf untereinander, Legende zweispaltig |
 | < 820 px | Tabellenschrift 12 px, Modellname bricht um statt abgeschnitten zu werden, Verteilungsbalken schmaler, Verlauf scrollt waagerecht |
+| < 700 px | 6.5 und der Verlauf werden **Blöcke**: eine Zeile je Eintrag, ein Wert je Zeile, der Bezeichner steht am Wert (`data-label`) |
+
+### Unter 700 px: Blöcke statt Spalten (issue #134)
+
+Eine Tabelle mit `table-layout:fixed` ist genau so breit wie ihr `colgroup`.
+Ist das Panel schmaler als die Summe der festen Spalten, bekommt die eine
+`auto`-Spalte den negativen Rest — und der wird auf **0** geklemmt. Gemessen an
+einer Live-Instanz (CDP, CSS-Stand `2cb1545`):
+
+```
+6.5 Parameter, Viewport 492 px, Tabelle 476 px
+  Spalten 72 / 168 / 0 / 108 / 128 px, Wertspalte 0 px, scrollWidth 20 px
+Verlauf, Viewport 390 px, Panel 356 px
+  Tabelle 622 px im 356-px-Kasten, Spalten 78 / 0 / 104 / 92 / 84 / 62 / 112 / 90
+  Modell 0 px (braucht 56), Thread 104 px — die Kopfzeilen lagen übereinander
+```
+
+Der Inhalt lief in einem 0-px-Kasten über, und `overflow-wrap:break-word` brach
+mitten im Token (`0.0.0` / `.0:80` / `10`) — ein Umbruch, der wie ein Tippfehler
+aussieht. Eine Tabelle, deren halbe Information in einer abgeschnittenen
+Kopfzelle hängt, ist für niemanden lesbar; sie ist keine Tabelle mehr, sondern
+ein Stapel übereinanderliegender Spalten.
+
+Unter **700 px** ist deshalb eine Zeile ein **Block** und ein Wert eine Zeile.
+Die Umsetzung ist eine Media-Query und kein zweites Markup — dieselben Zellen,
+andere Anzeige:
+
+- `table`, `thead`, `tbody`, `tr`, `td` auf `display:block`, `thead` fort,
+  `colgroup` fort. Damit gibt es keine Spalten mehr, die um dieselbe Zeile
+  konkurrieren; die Breite eines Wertes ist die Breite des Panels.
+- **6.5**: Zeile 1 `[Streifen] Bereich · Parameter` (der Knoten-Streifen aus
+  #131 bleibt, wo er war — in der Scope-Zelle), Zeile 2 der Wert in Mono über
+  die volle Breite (`overflow-wrap:anywhere` als letzte Zusage), der
+  „Neustart nötig“-Hinweis auf eigener Zeile darunter, Zeile 3 Herkunft und
+  Zurücksetzen als kleine Chips.
+- **Verlauf**: Zeile 1 Zeit + Thread-Schlüssel (der Schlüssel in Mono, bricht
+  erst, wenn er nicht mehr passt), darunter je ein beschriftetes Paar —
+  `Modell`, `Knoten`, `Grund`, `Prompt`, `Dauer`, `Status`. Kein Wert hängt
+  mehr an einer Spaltenüberschrift, die es im Block nicht gibt.
+
+`display:block` nimmt der Tabelle die Semantik für Screenreader: eine Zelle ist
+dort kein „Wert in Spalte X“ mehr. Das ist bewusst hingenommen, **weil** jeder
+Wert ein explizites Label behält — `data-label` an jeder Zelle, gefüllt mit
+demselben Wort wie der Spaltenkopf aus demselben Katalog (keine neuen Ids), im
+Block sichtbar vor dem Wert. Die Alternative wäre eine Tabelle, die für alle
+unlesbar ist; ein Label, das niemand sieht, ist die schlechtere Hälfte davon.
+
+Ab **1440 px ändert sich nichts**: alle Regeln stehen hinter der 700-px-Grenze.
+Gemessen an einer Wegwerf-Instanz (Port 8097, 21.11.2026):
+
+| Breite | 6.5 | Verlauf |
+|---|---|---|
+| 1440 px | 96 / 280 / 703 / 150 / 132 px | 104 / 580 / 168 / 100 / 116 / 84 / 126 / 96 px |
+| 390 px | Wert 358 px (alle 40 Zeilen), `0.0.0.0:8097` in **einem** Rect | Zeit 80 + Thread 246 = 336 px in Zeile 1, jede weitere Zelle 336 px |
+
+Bei 390 px ist `document.documentElement.scrollWidth == innerWidth` (390) in
+beiden Tabs, und kein Token ist zeichenweise gebrochen. Die Zeit-Zelle ist die
+einzige, die schmaler als 300 px bleibt (80 px): sie teilt sich Zeile 1 mit dem
+Thread-Schlüssel, zusammen 336 px — zwei Zellen à 300 px passen in 336 px nicht,
+und die Alternative wäre, die Zeit in eine eigene Zeile zu stellen.
 
 ### Tabs (issue #56, fünf seit #73)
 
@@ -550,6 +640,41 @@ Entscheidungen ihre Höhe. Wer die Seite auch auf schmalen Fenstern kurz haben
 will, muss Inhalte zusammenklappen (nicht geladene Modelle, ältere
 Entscheidungen) — das ist eine Inhaltsentscheidung für #2, keine
 Layoutentscheidung.
+
+### Der Admin-Chip im Kopf (issue #130)
+
+Der Admin-Zustand eines Tabs war bis #130 eine Tatsache ohne Anzeige: der
+Schlüssel lag in `sessionStorage['ripple_admin']`, und nur die Betreiberblöcke
+wussten davon — ob die Seite gerade schreiben darf, stand nirgends. Der Kopf
+trägt deshalb neben der Sprachwahl einen **Chip mit drei Zuständen**: `read-only`
+(offener Bügel, gedämpft), `admin` (geschlossener Bügel im Akzent) und
+`checking` (während die Prüfung läuft). Der Unterschied liegt in der **Form**, wie
+bei den sieben Knotenzuständen: der offene Bügel sitzt versetzt und berührt den
+Körper nicht, das hält in Graustufen. Das Schloss ist mit zwei Rahmen gezeichnet,
+nicht als Emoji — ein Emoji bringt seine eigene Farbe mit und würde neben
+`--accent` schmutzig. Ein Klick öffnet **ein** Passwortfeld darunter (kein
+Dialog), `Enter` schickt, `Escape` schließt ohne zu schreiben; das Feld steht in
+der Shell, weil der 2-s-Patch es sonst mitten im Tippen ersetzen würde (dieselbe
+Regel wie im Knoten-Tab, #71).
+
+**Die Verifikation kommt vor der Anzeige.** Ein Chip, der `admin` sagt, weil ein
+String in einem Storage steht, wäre eine Anzeige ohne Messung — und ein falscher
+Schlüssel würde beim nächsten Reload wie ein funktionierender aussehen. Deshalb
+geht der getippte Schlüssel zuerst an `GET /admin/models` (die billigste Frage,
+die nur ein gültiger Schlüssel mit 200 beantwortet: Locks lesen, nichts
+schreiben), und **erst nach dem 200** landet er in `sessionStorage`. Ein 401
+lässt das Feld offen und sagt es (`admin.rejected`), jeder andere Fehler zeigt
+die Meldung des Servers wörtlich; geschrieben wird in beiden Fällen nichts.
+Dieselbe Prüfung gilt für einen Schlüssel, der aus `/keys` schon im Tab lag: sie
+hängt sich an den einen `/admin/models`-Aufruf, den der Start ohnehin für die
+Machbarkeit der Schlösser macht (#126) — ein Request, zwei Antworten, und der
+2-s-Takt bleibt bei seinen drei Endpunkten. Was dort nicht mit 200 antwortet,
+wird gelöscht statt behauptet. Nach dem Erfolg werden die keyed-Blöcke über
+denselben `render()`-Weg neu gezeichnet wie ein Tick (kein Reload); Abmelden
+löscht den Schlüssel und macht sie über denselben Weg wieder inert. Der
+Schlüssel selbst steht nie im DOM, nie in der URL und in keinem Log — er geht als
+`Authorization: Bearer` hinaus, über `adminApi()`, den einen Ort, an dem die
+Seite diesen Header baut.
 
 ## 7. Der Entscheidungsstrom
 
@@ -622,12 +747,12 @@ RIPPLE.
 | **inflight** | Anfragen, die in diesem Moment auf diesem Knoten laufen. | `/healthz → hosts[].inflight` |
 | **max. inflight** | Obergrenze gleichzeitiger Anfragen; darüber spillt RIPPLE auf den anderen Knoten (FA-5). | `/healthz → hosts[].max_inflight` |
 | **Spill-Schwelle** | Ab dieser Zahl laufender Anfragen gilt der Knoten als voll und neue Arbeit geht bevorzugt woandershin. | `/healthz → hosts[].spill_threshold` |
-| **Thread-Slots** | Belegte Slots: Gespräche, die diesem Knoten zugeordnet sind und ihren Prefix-Cache dort halten. | `/healthz → hosts[].thread_slots` |
+| **Thread-Slots** | Belegte Slots: Gespräche, die diesem Knoten zugeordnet sind und ihren Prefix-Cache dort halten. Die Zelle zeigt **eine** Angabe (belegt / maximal); wie sie sich auf arbeitende, ruhende und stille Threads verteilt, steht im Tooltip (`1 arbeitend · 2 ruhend · 1 still`, #93). | `/healthz → hosts[].thread_slots`, `threads.registry[]` |
 | **max. Threads** | Wie viele Thread-Slots der Knoten führen darf. | `/healthz → hosts[].max_threads` |
 | **Zielanteil** | Anteil der Thread-Slots, den dieser Knoten nach seiner Gewichtung bekommen soll (M5 3 : M3 2). | `/healthz → hosts[].target_share` |
 | **relative Last** | Anteil der Einzelstrom-Rate, der gerade verloren geht: `1 − aktuelle Rate / Einzelstrom-Rate`. 0 % heißt, die Maschine liefert noch ihre Einzelstrom-Geschwindigkeit; `—` heißt noch nicht gemessen. | `/healthz → hosts[].relative_load` |
 | **RTT** | Gemessene Antwortzeit eines Probe-Requests zu diesem Knoten; ein WAN-Knoten wäre hier sofort sichtbar. | `/healthz → hosts[].rtt_ms` |
-| **tok/s** | Live: die Dekodierrate je Anfrage für das Modell mit den meisten Messproben auf diesem Knoten, vom Dienst geglättet — sie fällt mit der Parallelität. Die kalibrierte Kapazität steht daneben in der Modelltabelle (§5). | `/healthz → hosts[].metrics[<modell>].tg_tps`, `/config → hosts[].tg_tps` |
+| **tok/s** | Live: die Dekodierrate je Anfrage für das Modell mit den meisten Messproben auf diesem Knoten, vom Dienst geglättet — sie fällt mit der Parallelität. Die kalibrierte Kapazität der Maschine ist keine Rate eines Modells; sie steht im Tooltip der tok/s-Zelle der Modelltabelle (§5), nicht in der Karte. | `/healthz → hosts[].metrics[<modell>].tg_tps`, `/config → hosts[].tg_tps` |
 | **Messproben** | Wie viele abgeschlossene Anfragen in die Rate eingehen; unter zehn ist die Zahl eine Momentaufnahme. | `/healthz → hosts[].metrics[<modell>].tg_samples` |
 | **Messalter** | Wie lange die letzte Messung zurückliegt. Eine Rate von vor einer Stunde ist keine Aussage über jetzt. | `/healthz → hosts[].metrics[<modell>].measured_at` |
 | **Anfragen** | Anfragen, die RIPPLE seit dem Start an diesen Knoten geschickt hat. | `/healthz → hosts[].requests_total` |
@@ -795,7 +920,77 @@ Reihen.
 | **Kontext** | Maximale Kontextlänge des Modells in Token. | `/healthz → models[].hosts[].context_len (oMLX /v1/models)` |
 | **laufende Anfragen** | Anfragen für dieses Modell auf diesem Knoten, gerade jetzt. | `/healthz → models[].hosts[].inflight` |
 | **Thread-Slots** | Threads dieses Modells, die auf diesem Knoten liegen. | `/healthz → models[].hosts[].threads` |
-| **tok/s** | Live / Kapazität: links die Rate je Anfrage, die oMLX für dieses Modell auf diesem Knoten meldet (geglättet, lastabhängig), rechts die kalibrierte Kapazität aus `config.yaml`; fehlt die Messung, steht `— / 43,5`. | `/healthz → models[].hosts[].tg_tps`, `/config → hosts[].tg_tps` |
+| **tok/s** | Die Dekodierrate, die für **dieses Modell auf diesem Knoten** gemessen wurde (geglättet, lastabhängig). Ohne Messung steht `—`; die kalibrierte Kapazität der Maschine steht nur im Tooltip und ist dort als Eigenschaft der Maschine benannt. | `/healthz → models[].hosts[].tg_tps`; Kapazität im Tooltip aus `/config → hosts[].tg_tps` |
+
+### Das Schloss in der Modellzeile (#23, #118)
+
+Ein Schloss je **Modell**zeile, in der Zelle mit dem `rowspan` — nie eines je
+Knotenzeile. Die Sperre ist eine Aussage über das Modell („darf nicht entladen
+werden", `ripple/model_policy.py:103`), nicht über einen Rechner; ein Schloss
+neben dem Knotennamen würde eine Sperre je Knoten behaupten, die es nicht gibt.
+`hosts[].lock` sagt nur, wo die Sperre gerade etwas schützt (gesperrt **und**
+dort geladen), `models[].lock` ist der Zustand, den das Icon zeigt
+(`ripple/proxy.py:3631`).
+
+| Zustand | Farbe | Form | Was er heißt |
+|---|---|---|---|
+| offen | `--fg-2` | Bügel endet oben | nicht gesperrt: RIPPLE darf das Modell verdrängen. Der ungeschützte Zustand ist kein Erfolg — deshalb kein `--ok` |
+| geschlossen | `--down`, Modellname in `--load` | Bügel sitzt am Körper | gesperrt; der Tooltip nennt die Knoten, die es halten, oder dass die Sperre nichts verweigert |
+| geschlossen, **nirgends machbar** (#126) | `--down`, Modellname in `--load`, Kontur **gestrichelt** | Bügel am Körper, `!` im Körper, Körper schraffiert | gesperrt, aber zurzeit nirgends resident machbar: die Sperre ist gespeichert, kein Knoten könnte das Modell halten. Der Tooltip nennt Knoten und Grund mit den Zahlen (`lock.warn_tip`) |
+| geschlossen, ohne Admin-Schlüssel | `--down`, `opacity: .55` | wie geschlossen | sichtbar, aber nicht bedienbar: `aria-disabled`, der Tooltip sagt warum |
+| geschlossen, Builtin | `--down`, `opacity: .55` | wie geschlossen | MarkItDown: immer gesperrt, nie aufhebbar, eigenes Tooltip, kein Policy-Feld |
+
+Die Farben stehen in `ripple/static/dashboard.css:558` (offen `--fg-2`) und `:560`
+(geschlossen `--down`); der Modellname folgt mit `:564`. Offen und geschlossen
+unterscheiden sich in der **Form des Bügels**, nicht nur im Ton
+(`ripple/static/dashboard.js:3369`) — bei 26 px ist die Form die primäre
+Information, die Farbe verstärkt sie. Der Zustand hängt an `data-locked`, damit
+der 2-s-Patch Attribut und Pfad umschreiben kann, ohne den Knoten zu ersetzen.
+
+**Der dritte Zustand: gespeichert, aber nirgends machbar (#126).** Zwischen offen
+und geschlossen liegt er nicht — das Schloss ist **geschlossen**, die Sperre ist
+gesetzt und gespeichert; sie kann nur gerade nirgends eingelöst werden. Unterschieden
+wird er nicht im Ton, sondern in der **Kontur**: gestrichelt statt durchgezogen,
+dazu ein `!` im Körper und eine Schraffur — das bleibt auch in Graustufen und für
+ein Auge, das `--down` von `--fg-2` nicht trennt. `aria-label` und Tooltip sagen
+dasselbe in Worten: `lock.warn` als Zustandswort über `lock.aria` („Sperre für
+{model}: gesperrt, nirgends resident machbar"), der Grund in `lock.warn_tip` mit
+`{host}` und `{reason}`. Die Zahlen stehen im Tooltip, nicht am Icon — 26 px
+tragen keine GB-Angabe. Geschrieben wird wie jeder Lock: die Antwort sagt
+„gespeichert, aber …" (`lock.warn_saved`), keine 409, und nichts wird automatisch
+verdrängt, entsperrt oder neu gepinnt.
+
+**Eine Rechnung, nicht zwei.** `feasible` je Modell und `fits`/`fit_reason` je Host
+in `GET /admin/models` kommen aus derselben Prognose, mit der der Preload
+entscheidet, ob ein gesperrtes Modell Platz findet. Die Seite rechnet nichts nach:
+sie malt den dritten Zustand aus dem Feld und zitiert den Grund. Eine zweite
+Rechnung im Browser wäre die Stelle, an der das Schloss „machbar" sagt und der
+Preload zwei Sekunden später „does not fit" meldet.
+
+**Die Ausnahme: ein oMLX-Builtin (#118).** MarkItDown ist kein Modell, sondern
+eine virtuelle Engine (`engine_type: markitdown`, `ripple/backends.py:57`): ohne
+Gewichte resident, an das nichts geroutet wird, in keiner Allow-List. Sein
+Schloss ist **immer** geschlossen und **nicht** aufhebbar — es ist abgeleitet,
+nicht gespeichert (`ripple/proxy.py:986`). Deshalb ist es abgeschaltet
+(`aria-disabled`), trägt ein eigenes Tooltip und hat in seiner Zeile **kein**
+Policy-Auswahlfeld: eine Auswahl würde eine Entscheidung anbieten, die es nicht
+gibt. Ein Klick schreibt nichts; die Admin-Routen antworten `409 lock_builtin`.
+
+**Das Schloss wandert nie in die Knotenzelle.** Es gibt genau ein Icon je Modell,
+und es sitzt in der Zelle, die die Zeilen des Modells zusammenfasst
+(`ripple/static/dashboard.js:1553`). Eine Sperre je Knoten wäre eine andere,
+gröbere Aussage — sie würde behaupten, ein Modell sei auf einem Knoten geschützt
+und auf einem anderen verdrängbar, was der Zustand nicht hergibt.
+
+**Was das Icon nicht sagt.** Ein geschlossenes Schloss bei einem kalten Modell ist
+`locked, not resident`: die Zusage steht, es ist nur nichts da, was sie schützt.
+Der Tooltip sagt das (`lock.nowhere`), und das Icon bleibt geschlossen, weil die
+Sperre gesetzt ist. Zwei Aussagen in einem Zeichen: das Schloss ist der Eintrag,
+der Tooltip seine Wirkung. Ein geschlossenes Schloss bei einem Modell, das kein
+Knoten routet, sieht genauso aus — dort ist die Wirkung ebenfalls null, der Satz
+im Tooltip nennt aber den falschen Grund (er sagt „nicht geladen", obwohl das
+Modell geladen ist). Das ist ein Satz in der Seite, nicht im Entwurf; die
+Kombinationen stehen in `docs/model-policy.md`, *The combinations*.
 
 ### Verteilung
 
@@ -840,9 +1035,49 @@ Reihen.
 |---|---|---|
 | **Schlüssel** | Der Client-Schlüssel, der diesen Thread geöffnet hat; `ohne Schlüssel` heißt, die Anfrage kam ohne Schlüssel an (Loopback). Der Name bleibt beim Öffner, auch wenn ein anderer Schlüssel den Thread per Prefix-Match übernimmt. | `/healthz → threads.registry[].key_name` |
 | **Züge** | Anfragen, die dieser Thread seit seinem Anlegen geführt hat. | `/healthz → threads.registry[].turns` |
-| **idle** | Sekunden seit der letzten Anfrage dieses Threads. | `/healthz → threads.registry[].idle_seconds` |
+| **idle** | Alter der letzten Anfrage dieses Threads — **in seiner Einheit** (`vor 2 min`, `vor 1 T.`), nicht in Sekunden: `86 400 s` war in sieben der sechzehn Kataloge breiter als die Zeile (#93). | `/healthz → threads.registry[].idle_seconds` |
+| **still** | Der Thread hat länger als `THREAD_SILENT_SECONDS` (900 s) keine Anfrage mehr bekommen. Das Abzeichen steht nur dann; der Tooltip nennt die Schwelle. Siehe unten. | `berechnet aus threads.registry[].idle_seconds, .active` |
 | **TTL** | Nach dieser Zeit ohne Anfrage wird der Thread verworfen und gibt seinen Slot frei. Die Zeile zeigt seit #34 nicht mehr die feste Zahl, sondern die Restzeit („27 min"), bei null „frei"; die eingestellte TTL steht im Tooltip. | `/healthz → threads.registry[].ttl_seconds − idle_seconds (server_time)` |
 | **Anfrage läuft** | Anfragen, die gerade auf diesem Thread laufen. Solange eine läuft, hält der Thread seinen Slot, und der Löschknopf ist aus — der Endpunkt antwortet dann 409. | `/healthz → threads.registry[].active` |
+
+**Der stille Thread (#93).** Ein Thread, der nie wieder eine Anfrage bekommt,
+hält seinen Slot trotzdem bis zum TTL — und die Thread-Zahl wird als „was läuft"
+gelesen. Am 19.11. auf der laufenden Instanz gemessen: drei Threads, zwei an
+`alpha` gebunden, aber nur eine Aufgabe lief dort. Der zweite stand auf
+`turns=23`, `active=0`, `idle_seconds=1394` und bekam nie wieder etwas — der
+Cache-Scope desselben Gesprächs, bevor die Session-Id des Clients wechselte. Ist
+die Id einmal weitergezogen, kann dieser Thread nie wieder aufgenommen werden;
+er ist von einem lebenden, nur gerade ruhenden Thread nicht zu unterscheiden.
+
+Die Seite zeigt die Stille deshalb **in der Zeile** (Option 1 des Issues), ohne
+neuen Backend-Schlüssel und ohne Änderung an `ripple/registry.py` oder am
+TTL-Verhalten: `/healthz → threads.registry[]` trägt `idle_seconds`, `turns` und
+`active` längst.
+
+- **Schwelle.** `THREAD_SILENT_SECONDS = 900` in `dashboard.js`, eine benannte
+  Konstante mit Begründung im Kommentar: 900 s ist das Thread-Decay-Fenster der
+  Platzierung (`placement.thread_decay_seconds`) — der Punkt, ab dem die
+  Platzierung den Thread selbst nicht mehr als warm zählt — und die Hälfte der
+  voreingestellten `affinity.ttl_seconds` (1800 s). Ein Thread, der eine Viertel-
+  stunde nichts bekommen hat, wird in der Praxis nicht wieder aufgenommen.
+- **Zeichen.** Ein Chip mit dem Wort (`still`) und ein Attribut
+  (`data-silent="true"`), keine bloße Abwesenheit von `active`: `active: 0`
+  beschreibt auch einen Thread, der vor einer Sekunde geantwortet hat. Die Farbe
+  (`--warn`) verstärkt das Wort, sie trägt es nicht allein; der Tooltip nennt die
+  Schwelle in Minuten. Das Attribut fehlt bei einem gesunden Thread — ein
+  `false` wäre eine zweite Wahrheit, die im Takt mitgepflegt werden müsste.
+- **Alter in seiner Einheit.** Die Zeile zeigt `vor 2 min` / `vor 1 T.` aus den
+  Ids `fleet.ago_s|ago_min|ago_h|ago_d` (Grenzen 60/60/24), nicht die rohen
+  Sekunden. Der alte Id `threads.idle` interpolierte `{n} s`; er nimmt jetzt das
+  fertige Alter (`{t}`), damit die Falle nicht in einem zweiten Katalog
+  weiterlebt.
+
+**Die Aufteilung steht im Tooltip, nicht in der Zelle.** Die Karte eines Knotens
+zeigt in der Zelle weiter **eine** Angabe — belegte Slots / maximale Slots. Wie
+sich die Slots aufteilen (`1 arbeitend · 2 ruhend · 1 still`), steht im Tooltip:
+eine zweite Zahl in einer 150-px-Zelle bricht das Layout in der Hälfte der
+Sprachen. Dieselbe Regel wie überall auf der Seite — eine Angabe in der Zelle,
+die Aufschlüsselung im Tip.
 
 **Der Löschknopf (#35).** Ein Thread hält den Slot seines Knotens bis zum TTL
 (1800 s) nach seiner letzten Anfrage; die Seite konnte das bisher nur abwarten.
@@ -1014,6 +1249,25 @@ Sprachen mit den längsten Wörtern (en, de, pl, cs, el): das breiteste Wort je
 Zelle plus Feld plus Polsterung muss in die Spalte passen. Der Block ist früher
 in acht von sechzehn Sprachen übergelaufen, solange er rohe Sekunden druckte.
 
+**Der Knoten-Streifen in der Scope-Spalte (issue #131).** Die Spalte wiederholte
+den Namen eines Knotens siebenmal — und sagte nirgends, wo seine Zeilen
+aufhören. Jede Knotenzeile trägt deshalb links in der Scope-Zelle denselben
+sechs Pixel breiten Streifen wie die Flottenkarte, im selben Ton und Muster:
+der Platz fällt aus der `node_id`, die `/config` und `/healthz` beide führen,
+und wird nicht aus dem Namen neu gebaut — sonst stünde neben der Karte
+„alpha" ein anderer Streifen als sieben Zeilen tiefer. Der Streifen steht im
+Textfluss, nicht absolut wie auf der Karte (die Zelle ist kein positionierter
+Block), und er trägt keinen Text: `aria-hidden`, keine i18n-Id — der Name steht
+daneben, ein zweites Wort wäre eine zweite Auskunft. `global`, `placement`,
+`affinity`, `discovery` und `proxy` bekommen einen **leeren Slot von genau
+derselben Breite** (6 px plus 6 px Abstand): ohne ihn spränge der Text der
+Nicht-Knoten-Zeilen um diese Breite nach links, und die Spalte wäre keine
+Flucht mehr. Gemessen bei 1440 px: alle 40 Scope-Texte beginnen auf x = 78,5,
+keine Zelle läuft über. Beide Tabellen tragen ihn — die mit Feldern und die
+read-only-Liste eines älteren Servers. Unter 1100 px wandern zwölf Pixel von
+der Parameterspalte in die Scope-Spalte: „placement" lag dort schon vorher
+knapp über dem Innenraum, und der Streifen darf die Wertespalte nicht kosten.
+
 ### Gründe im Entscheidungsstrom
 
 | Grund | Bedeutung |
@@ -1166,6 +1420,7 @@ Spalte es sagt — das ist die Regel aus dem Abschnitt oben, keine Ausnahme.
 |---|---|
 | Höhe bei 1440 px | unter 2 800 px |
 | waagerechter Überlauf bei 741 px | keiner (`scrollWidth == clientWidth`) |
+| Telefon (390 px, #134) | 6.5 und Verlauf als Blöcke, jede Wertzelle ≥ 300 px, kein zeichenweiser Umbruch, `scrollWidth == innerWidth` |
 | Spaltenkopf-Schrift | ≥ 12 px |
 | Zahlen ohne Tooltip | 0 |
 | Tooltip ohne Quelle | 0 |

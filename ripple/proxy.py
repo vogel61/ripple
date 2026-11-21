@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .build import build_info
 from . import replication
+from . import update as update_check
 from .calibration_api import build_router as build_calibration_router
 from .config import (Config, ConfigError, HostConfig, apply_overlay, host_block,
                      host_from_block, load_overlay, policy_assign, policy_read,
@@ -606,6 +607,15 @@ class Ripple:
             follow_redirects=False,
         )
         self._purge_task: asyncio.Task | None = None
+        # The start-up update check (issue #123): the answer `/healthz` carries
+        # and the one background task that produces it. `unknown` until the
+        # answer arrives — the header draws nothing for it, so a slow network
+        # costs the page no line and no wait. `disabled` is known before the
+        # task would run, so it is set here rather than by the task.
+        self.update_state: update_check.UpdateState = (
+            update_check.UpdateState(state="disabled") if not cfg.update.check
+            else update_check.UpdateState())
+        self._update_task: asyncio.Task | None = None
         # The periodic placement optimizer (issue #80): its task and its own
         # move budget. A separate deque from `registry._rebinds` on purpose — the
         # optimizer's budget (`placement.optimizer.max_moves_per_hour`) and the
@@ -666,7 +676,15 @@ class Ripple:
         """
         for host in self.fleet.hosts:
             win = self.maintenance.active(host.cfg.name)
+            was = host.maintenance is not None
             host.maintenance = win.to_dict() if win else None
+            if was and host.maintenance is None:
+                # The window ended: the machine is the operator's to use again,
+                # and a locked model has to be resident on it without a request
+                # having to arrive first (issue #119). The node was healthy
+                # throughout the window, so no probe transition would ever fire
+                # here — this is the second trigger, not a second poller.
+                self.fleet.request_preload(host)
 
     def _maintenance_view(self, host: HostRuntime) -> dict[str, Any]:
         """One node as the admin maintenance routes describe it.
@@ -949,14 +967,53 @@ class Ripple:
     def _dispatch_hosts(self, model: str) -> list[str]:
         """Hosts that would route a request for `model` right now.
 
-        The lock's precondition, and the reason it is a list: a lock can only
-        refuse something where something is sent. oMLX infrastructure (a
-        MarkItDown, a tokenizer, a drafter) is resident everywhere and routed to
-        nowhere — `allowed: false` in the allow-list, so `dispatch` is false on
-        every node, and no request ever needs its memory.
+        Not the lock's precondition any more (issue #118 — the lock is an
+        attribute of the model, so it is settable on a cold model and on one no
+        node lists yet). It answers the narrower question `_lock_reason` needs:
+        is there a host a request for this model could be sent to? oMLX
+        infrastructure (a MarkItDown, a tokenizer, a drafter) is resident
+        everywhere and routed to nowhere — `allowed: false` in the allow-list, so
+        `dispatch` is false on every node, and no request ever needs its memory.
         """
         return sorted(h.cfg.name for h in self.fleet.hosts
                       if h.model_available(model))
+
+    def _builtin(self, model: str) -> bool:
+        """Is `model` an oMLX builtin (a virtual engine) rather than a model?
+
+        Derived from the fleet: a builtin is what a node reports as a builtin
+        (`Host.model_builtin` → `ModelInfo.engine_type`, i.e. oMLX's own
+        `engine_type: markitdown`). No id list lives in this repository, because
+        a hand-maintained list is what once put `*-drafter` ids into client
+        configs (issue #118).
+
+        A builtin is *always* locked and never unlockable: its "lock" is a
+        statement about what it is, not an operator decision, so it is derived on
+        every read and never written to `~/.ripple/models.yaml`.
+        """
+        return any(h.model_builtin(model) for h in self.fleet.hosts)
+
+    def _locked(self, model: str) -> bool:
+        """The model's lock state: the operator's entry **or** a derived builtin.
+
+        One predicate for every reader (`/healthz`, `GET /admin/models`, the
+        refusal sentence), so the three can never disagree about whether a model
+        reads as locked.
+        """
+        return self.policy.locked(model) or self._builtin(model)
+
+    def _locked_models(self) -> list[str]:
+        """Every model that reads as locked — stored entries plus builtins.
+
+        The flat list both payloads carry as `locks` (issue #21/#118). A builtin
+        is in it without a line in the policy file, because it is locked by
+        derivation; a reader that asks "is anything locked" must not have to know
+        where the answer came from.
+        """
+        out = set(self.policy.locked_models())
+        for h in self.fleet.hosts:
+            out.update(mid for mid in h.models if h.model_builtin(mid))
+        return sorted(out)
 
     def _lock_reason(self, model: str, *, loaded_on: list[str] | None = None) -> str | None:
         """The text `/healthz` carries while the lock is refusing something.
@@ -966,7 +1023,7 @@ class Ripple:
         its sake, and a reason text would be a claim about a refusal that cannot
         happen. `loaded_on` is passed in by callers that already know it.
         """
-        if not self.policy.locked(model):
+        if not self._locked(model):
             return None
         # Same rule for a model that no host dispatches: it is resident, but no
         # request is ever aimed at it, so nothing can be refused. The sentence
@@ -981,6 +1038,90 @@ class Ripple:
                 f"that would need its memory is refused with 503 model_locked. "
                 f"Unlock with DELETE /admin/models/{model}/lock")
 
+    def _lock_feasibility(self, model: str) -> dict[str, Any]:
+        """Can `model` be resident on any host at all? (issue #126)
+
+        A lock promises residency, and on the M5 the two big models together
+        exceed the ceiling: DeepSeek is 422.5 GB resident against a 487.7 GB
+        ceiling, so a lock on GLM-5.2-oQ4 (418.1 GB) is a promise the arithmetic
+        cannot keep. Before #126 the operator learned that from the next healthy
+        transition, when the preload answered `does not fit: … is locked and
+        cannot be evicted` — after the click, not before it. This helper answers
+        the question the page has to paint *before* the click.
+
+        It reads, it never acts: no eviction, no unlock, no pin to make room. The
+        arithmetic is `HostRuntime.preload_forecast()` and nothing else (issue
+        #119), so the lock view and the preload can never disagree about whether
+        a model fits.
+
+        `([], None)` from the forecast means *no forecast* (unknown size, no
+        ceiling, guard off — the node decides), not "does not fit": only a
+        non-`None` sentence makes a host block. Hence
+
+        * `feasible` is `false` only when at least one host offers the model and
+          **every** offering host refuses it — one host that could hold it is
+          enough for the promise to be deliverable somewhere;
+        * `null` only when no host offers the model — nothing to forecast, and
+          nothing that could be promised;
+        * `true` otherwise, including when every offering host answered
+          `([], None)`: nothing to say is not a warning, and a model whose
+          hosts all report `fits: true` must not carry an unknown verdict.
+
+        A builtin (an oMLX virtual engine) is never infeasible: it has no
+        weights and is resident without a load. A locked model that is merely not
+        routed here does not warn either: routing is the policy's axis, and only
+        memory infeasibility is a warning.
+
+        `hosts[name]` carries the same verdict per host: `fits` is `null` where
+        the host does not offer the model, `false` with the forecast's sentence
+        where it refuses, and `true` otherwise — including where there is no
+        forecast to make.
+        """
+        forecasts: dict[str, tuple[list[str], str | None]] = {}
+        for h in self.fleet.hosts:
+            if model in h.models:
+                forecasts[h.cfg.name] = h.preload_forecast(model)
+        blocked = sorted(name for name, (_evicts, refusal) in forecasts.items()
+                         if refusal is not None)
+        feasible: bool | None
+        reason: str | None
+        host: str | None
+        if self._builtin(model):
+            # A virtual engine: no weights, resident without a load. Locking it
+            # is not an operator decision either, but it is never infeasible.
+            feasible, reason, host = True, None, None
+        elif not forecasts:
+            feasible, reason, host = None, None, None
+        elif len(blocked) == len(forecasts):
+            # Every host that offers it refuses it: the lock cannot be delivered
+            # anywhere. The first blocking host in sorted order speaks for the
+            # fleet; its sentence is the one the preload would log.
+            feasible = False
+            reason = forecasts[blocked[0]][1]
+            host = blocked[0]
+        elif any(evicts or refusal is not None
+                 for evicts, refusal in forecasts.values()):
+            # At least one host can forecast and not all of them refuse: some
+            # host could hold the model, so the promise is deliverable.
+            feasible, reason, host = True, None, None
+        else:
+            # Every offering host answered `([], None)`: no forecast at all, so
+            # nothing blocks it — the node decides. `true`, not `null`: `null`
+            # is reserved for "no host offers it", and a model whose every host
+            # reports `fits: true` cannot carry an unknown verdict without the
+            # two readings disagreeing (the #124 class).
+            feasible, reason, host = True, None, None
+        per_host = {}
+        for h in self.fleet.hosts:
+            if h.cfg.name not in forecasts:
+                per_host[h.cfg.name] = {"fits": None, "fit_reason": None}
+                continue
+            refusal = forecasts[h.cfg.name][1]
+            per_host[h.cfg.name] = {"fits": refusal is None,
+                                    "fit_reason": refusal}
+        return {"feasible": feasible, "feasible_reason": reason,
+                "feasible_host": host, "hosts": per_host}
+
     def _models_lock_view(self) -> dict[str, Any]:
         """`GET /admin/models`: every model with the operator's lock on it.
 
@@ -989,6 +1130,13 @@ class Ripple:
         itself. A lock for a model no host currently lists is reported too
         (`offered: false`): otherwise a stale lock would be invisible exactly
         when someone asks why a request is refused.
+
+        `lock` is the model's lock state, not "the lock protects something"
+        (issue #118): a lock on a cold model is reported as `lock: true` with
+        `loaded_on: []` and `lock_reason: null`, because a lock says what happens
+        *when* the model is resident. `builtin` marks an oMLX virtual engine,
+        which is locked by derivation and has no operator entry behind it
+        (`since`/`by`/`note` stay null, `lockable` is false).
         """
         hosts = self.fleet.hosts
         loaded_on: dict[str, list[str]] = {}
@@ -1004,10 +1152,16 @@ class Ripple:
         rows = []
         for mid in sorted(known):
             lock = self.policy.lock(mid)
+            builtin = self._builtin(mid)
             here = sorted(loaded_on.get(mid, []))
+            feasibility = self._lock_feasibility(mid)
             rows.append({
                 "id": mid,
-                "lock": lock is not None,
+                "lock": lock is not None or builtin,
+                # An oMLX builtin: always locked, never unlockable, not routable
+                # and not selectable in a node cell (issue #118).
+                "builtin": builtin,
+                "lockable": not builtin,
                 "since": lock.since.isoformat(timespec="seconds") if lock else None,
                 "by": lock.by if lock else None,
                 "note": lock.note if lock else "",
@@ -1016,6 +1170,12 @@ class Ripple:
                 # /healthz shows).
                 "loaded_on": here,
                 "lock_reason": self._lock_reason(mid, loaded_on=here),
+                # Whether the promise can be delivered at all (issue #126): a
+                # lock the arithmetic cannot keep is stored and warns, it is not
+                # refused. `null` is "nothing to forecast with", not "fits".
+                "feasible": feasibility["feasible"],
+                "feasible_reason": feasibility["feasible_reason"],
+                "feasible_host": feasibility["feasible_host"],
                 "listed": mid in served,
                 "hosts": [{
                     "host": h.cfg.name,
@@ -1027,9 +1187,16 @@ class Ripple:
                     "policy": (h.policy.level(h.cfg.name, mid)
                                if h.policy else None),
                     "dispatch": h.model_available(mid),
+                    # Serve-able *now*, as opposed to `dispatch` (issue #116):
+                    # a listed-but-cold model is dispatchable and not routable.
+                    "routable": h.model_routable(mid),
+                    # Could this node hold it at all? `null` where it does not
+                    # offer the model; the forecast's sentence when it refuses.
+                    "fits": feasibility["hosts"][h.cfg.name]["fits"],
+                    "fit_reason": feasibility["hosts"][h.cfg.name]["fit_reason"],
                 } for h in hosts],
             })
-        return {"locks": self.policy.locked_models(), "models": rows}
+        return {"locks": self._locked_models(), "models": rows}
 
     # -- restart (issue #22) -------------------------------------------------
     def restart_state(self) -> dict[str, Any]:
@@ -1171,13 +1338,25 @@ class Ripple:
     def _build_app(self) -> FastAPI:
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-            await self.fleet.start()
+            # Non-blocking on purpose (issue #117): the dashboard is served by
+            # this same app, so it must not wait for a node to answer. With oMLX
+            # on the M5 switched off, the synchronous resolution held the startup
+            # for 30 s and the page appeared only once a reachable node existed.
+            # The hosts read `unknown` until their probes answer, then `down`.
+            await self.fleet.start(blocking=False)
             self._purge_task = asyncio.create_task(self._purge_loop(), name="ripple-purge")
             # The per-host ledger's sampler (issue #33) runs on the probe tick.
             self.start_host_stats()
             # The placement optimizer (issue #80) runs on its own interval: it
             # decides per *thread*, on measured curves, never on the request path.
             self.start_optimizer()
+            # The update check (issue #123) runs once, after the listeners are up
+            # and never before them: the same lesson as #117 — the dashboard is
+            # served by this app, so nothing on the start-up path may wait for a
+            # network. `unknown` (no internet, a timeout) draws nothing.
+            if self.cfg.update.check:
+                self._update_task = asyncio.create_task(
+                    self._update_check(), name="ripple-update-check")
             log.info("RIPPLE %s listening on %s:%d — hosts=%s", __version__,
                      self.cfg.listen_host, self.cfg.listen_port,
                      ", ".join(h.cfg.name for h in self.fleet.hosts))
@@ -1192,6 +1371,8 @@ class Ripple:
                     self._host_stats_task.cancel()
                 if self._optimizer_task:
                     self._optimizer_task.cancel()
+                if self._update_task:
+                    self._update_task.cancel()
                 # The last numbers before the process ends: a restart must not
                 # lose the interval since the last flush.
                 self.host_stats.flush(force=True)
@@ -1785,40 +1966,79 @@ class Ripple:
         @app.post("/admin/models/{model:path}/lock")
         async def model_lock(model: str, request: Request,
                              note: str = "") -> JSONResponse:
-            """Lock a model: no request, calibration or replication may evict it."""
+            """Lock a model: no request, calibration or replication may evict it.
+
+            Lockability is an attribute of the model, not of its routability
+            (issue #118): the lock says what happens *when* the model is
+            resident, so it is settable on a cold model, on one no host lists
+            yet (a fresh oMLX start, an unreadable model list), and on one the
+            allow-list keeps out of routing. #28 refused every such write with
+            `409 lock_not_dispatchable`; that refusal is gone — the one thing
+            left that cannot be locked is an oMLX builtin, because it always is.
+            """
             denied = self._require_admin(request, status=403)
             if denied is not None:
                 return denied
             body = await _json_body(request)
             note = str(body.get("note") or note)
-            if not self._dispatch_hosts(model):
-                # A lock is a veto on an eviction that a *request for another
-                # model* would cause. Where no host routes to this model, no
-                # such request exists: the lock would protect nothing and
-                # /healthz would have to claim a 503 that cannot happen (#28).
-                # Refuse the write and leave the store untouched.
-                message = (f"{model} is dispatchable on no host: RIPPLE never "
-                           f"sends a request to it, so a lock could never refuse "
-                           f"one. Nothing was stored — a lock only protects a "
-                           f"model RIPPLE routes.")
-                log.warning("model_lock_refused model=%s reason=not_dispatchable "
-                            "client=%s", model, self.client_address(request) or "?")
+            if self._builtin(model):
+                # MarkItDown and friends: a virtual engine, resident without
+                # weights, routed to by nothing. Its lock is derived from what
+                # oMLX says it is, so a stored entry would be a second source of
+                # truth for a state the operator cannot change (#118).
+                message = (f"{model} is an oMLX builtin (a virtual engine): it is "
+                           f"always locked and cannot be unlocked or re-locked. "
+                           f"Nothing was stored — its lock is derived from the "
+                           f"node's engine_type, not from the policy file.")
+                log.warning("model_lock_refused model=%s reason=builtin client=%s",
+                            model, self.client_address(request) or "?")
                 return JSONResponse({"error": {"message": message,
-                                               "code": "lock_not_dispatchable"}},
+                                               "code": "lock_builtin"}},
                                     status_code=409)
             lock = self.policy.set_lock(model, by="dashboard", note=note)
             save_policy(self.policy)
+            if not any(model in h.models for h in self.fleet.hosts):
+                # Not an error: the operator may be locking ahead of a start.
+                # Worth a line in the log, because the dashboard cannot offer
+                # this row (it has no host) — the write came from curl.
+                log.warning("model_lock_unknown_model model=%s — no host lists "
+                            "it (yet); the lock is stored", model)
             log.warning("model_lock model=%s note=%s since=%s loaded_on=%s",
                         model, note or "-", lock.since.isoformat(timespec="seconds"),
                         ",".join(self._lock_hosts(model)) or "-")
+            # The write is stored even when the arithmetic cannot deliver it
+            # (issue #126): the operator's intent is a decision, the prognosis
+            # only says it cannot be kept right now. Nothing is evicted,
+            # unlocked or pinned to make room — the forecast reads.
+            feasibility = self._lock_feasibility(model)
+            if feasibility["feasible"] is False:
+                log.warning("model_lock_infeasible model=%s host=%s reason=%s",
+                            model, feasibility["feasible_host"],
+                            feasibility["feasible_reason"])
             return JSONResponse(self._models_lock_view())
 
         @app.delete("/admin/models/{model:path}/lock")
         async def model_unlock(model: str, request: Request) -> JSONResponse:
-            """Unlock: evictions of this model are the operator's business again."""
+            """Unlock: evictions of this model are the operator's business again.
+
+            An oMLX builtin is refused here with `409 lock_builtin`: it is locked
+            because of what it is, and no release can change that. A stale entry
+            for it in the policy file (written before #118) is left untouched and
+            stays inert — the derived state wins on every read.
+            """
             denied = self._require_admin(request, status=403)
             if denied is not None:
                 return denied
+            if self._builtin(model):
+                message = (f"{model} is an oMLX builtin (a virtual engine): it is "
+                           f"always locked and cannot be unlocked. RIPPLE sends "
+                           f"no request to it, so the lock protects nothing and "
+                           f"there is nothing to release. Nothing was changed.")
+                log.warning("model_unlock_refused model=%s reason=builtin client=%s",
+                            model, self.client_address(request) or "?")
+                return JSONResponse({"error": {"message": message,
+                                               "code": "lock_builtin"}},
+                                    status_code=409)
             if self.policy.clear_lock(model):
                 save_policy(self.policy)
                 log.warning("model_unlock model=%s loaded_on=%s", model,
@@ -2179,6 +2399,34 @@ class Ripple:
         async def handler(request: Request) -> Response:
             return await self.handle(request, path)
         return handler
+
+    async def _update_check(self) -> None:
+        """Ask once whether a newer release exists, then never again (issue #123).
+
+        One task, one answer, no retry loop and no polling: the operator asked
+        for a start-up check, and a dashboard that keeps calling an API nobody
+        is watching would be a background cost with no reader. The state is
+        written in one assignment, so `/healthz` sees either the old answer or
+        the new one, never half of it.
+
+        Only `newer` logs — that is a fact worth having in the log. `unknown`
+        and `current` are silent by contract: a hint that failed must not turn
+        into an error line on every start, and a machine ahead of the last
+        release (a GitHub checkout, handover §5) must not be told to go back.
+        """
+        try:
+            state = await update_check.check(
+                self.cfg.update.url, __version__,
+                timeout=self.cfg.update.timeout_seconds, enabled=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:                 # noqa: BLE001 — never kill the task log
+            log.debug("update check failed", exc_info=True)
+            state = update_check.UpdateState()
+        self.update_state = state
+        if state.state == "newer":
+            log.info("RIPPLE %s is released (running %s) — `ripple update`",
+                     state.latest, __version__)
 
     async def _purge_loop(self) -> None:
         while True:
@@ -3522,12 +3770,21 @@ class Ripple:
                     # request would actually be sent here.
                     "policy": h.policy.level(h.cfg.name, mid) if h.policy else None,
                     "dispatch": h.model_available(mid),
+                    # What the availability column shows (issue #116): would this
+                    # node serve `model` *right now*. `dispatch` is the wider
+                    # question (it includes a cold load) and stays as it is —
+                    # placement, admission and the policy view ask that one.
+                    "routable": h.model_routable(mid),
                     # The lock (issue #21) protects *this* node's copy: true only
                     # where the model is locked and resident here. `models[].lock`
                     # is the model-level flag; this one is what a padlock per row
                     # in the table needs.
                     "lock": bool(h.policy is not None and h.policy.locked(mid)
                                  and info.loaded),
+                    # Whose preload displaced this model on this node (issue
+                    # #119), or None. The lock wins an eviction, but a model that
+                    # vanished without a word is a mystery — the row says why.
+                    "evicted_by": (h.displaced.get(mid) or {}).get("by"),
                 })
         model_rows = []
         for mid in sorted(models):
@@ -3538,8 +3795,17 @@ class Ripple:
             # force — i.e. while the locked model is resident somewhere, which is
             # exactly when a request can be refused for its sake. None otherwise:
             # a lock on a model that is not loaded refuses nothing.
-            entry["lock"] = bool(self.policy.locked(mid))
+            # Since #118 `lock` is the model's state and not "the lock protects
+            # something": it is true for a cold model too, and for an oMLX builtin
+            # (`builtin` below), whose lock is derived rather than stored.
+            entry["lock"] = self._locked(mid)
+            entry["builtin"] = self._builtin(mid)
             entry["lock_reason"] = self._lock_reason(mid)
+            # The model-level availability the page paints (issue #116): routable
+            # while at least one node holds it. A lock does not enter here either
+            # — a locked model nobody has loaded is `locked, not resident`, and
+            # `lock_reason` is None for it (the lock refuses nothing).
+            entry["routable"] = any(r["routable"] for r in entry["hosts"])
             model_rows.append(entry)
 
         share = {}
@@ -3551,6 +3817,11 @@ class Ripple:
         return {
             "ok": True,
             "version": __version__,
+            # The update hint (issue #123): `state` is newer|current|unknown|
+            # disabled, and the header draws something only for `newer`. It sits
+            # here and not behind its own endpoint so the page keeps reading one
+            # source, and the 2 s patch keeps the hint current.
+            "update": self.update_state.as_dict(),
             # `version` is the package version and never moved; the commit is what
             # answers "is the new build running?".
             "build": build_info(),
@@ -3616,8 +3887,10 @@ class Ripple:
             "hosts": hosts,
             "models": model_rows,
             # The locked models (issue #21), as a flat list: the dashboard needs
-            # the set, the rows above carry the per-model flag and reason.
-            "locks": self.policy.locked_models(),
+            # the set, the rows above carry the per-model flag and reason. Since
+            # #118 an oMLX builtin is in it without an entry in the policy file —
+            # it is locked by derivation, and `models[].builtin` says which ones.
+            "locks": self._locked_models(),
             # The restart control (issue #22): whether this process may end
             # itself at all, and how much work is in flight right now. In
             # /healthz and not only behind /admin so the page can disable the

@@ -143,6 +143,10 @@ const systemLang = () => {
 function applyLang(code) {
   lang = supported(code) || FALLBACK;
   fillShell();
+  /* Der Chip im Kopf trägt seinen Tooltip aus dem Katalog und seinen Zustand
+     im Attribut: `fillShell()` schreibt das Wort, `adminPaint()` den Rest
+     (#130). */
+  adminPaint();
   if (last) render(last.h, last.s, last.c);
   const sel = $('langSel');
   if (sel && sel.value !== lang) sel.value = lang;
@@ -441,7 +445,8 @@ const SRC = {
   ctx:          '/healthz → models[].hosts[].context_len (oMLX /v1/models)',
   running:      '/healthz → models[].hosts[].inflight',
   threads_m:    '/healthz → models[].hosts[].threads',
-  tps_m:        '/healthz → models[].hosts[].tg_tps, /config → hosts[].tg_tps',
+  tps_m:        '/healthz → models[].hosts[].tg_tps',
+  tps_cap:      '/config → hosts[].tg_tps (AS-6 calibration, a property of the machine)',
   share_t:      '/healthz → threads.target_share',
   share_a:      '/healthz → threads.actual_share',
   delta:        'computed from threads.actual_share − target_share',
@@ -581,6 +586,10 @@ function tipLayer() {
   return tipEl;
 }
 
+/* Wann der Kasten zuletzt aufging — der Klick-Handler unterscheidet damit
+   „Finger hoch" von „zweiter Tipp" (#139). */
+let tipShownAt = 0;
+
 function tipHide() {
   tipOwner = null;
   if (tipEl) { tipEl.classList.remove('on'); tipEl.textContent = ''; }
@@ -606,6 +615,7 @@ function tipShow(owner) {
   el.textContent = text;            // textContent: der Text ist Daten, kein Markup
   el.classList.add('on');
   tipOwner = owner;
+  tipShownAt = Date.now();          // siehe den click-Handler: Tipp-Ende erkennen
   tipPlace(owner, el);
 }
 
@@ -627,7 +637,21 @@ document.addEventListener('focusin', ev => {
   if (owner) tipShow(owner); else tipHide();
 });
 document.addEventListener('focusout', tipHide);
-document.addEventListener('click', tipHide, true);
+/* Seit dem 21.11.2026 öffnet auch ein Klick den Kasten (#139). Am Handy gibt es
+   kein Hover: `pointerover` feuert beim Antippen zwar, aber dieser Handler hat
+   den Kasten im nächsten Moment wieder geschlossen — kein Tooltip war dort
+   erreichbar, und ein Icon ohne Tooltip ist stumm. Jetzt zeigt der Klick, statt
+   zu verstecken; zwei Ausnahmen: innerhalb von 400 ms nach einem Zeiger-Show
+   (das ist das Ende des Tippens, kein zweiter Wunsch) bleibt er stehen, und ein
+   zweiter Klick auf denselben Besitzer schließt ihn wie bisher. Ein Klick
+   daneben schließt immer. */
+document.addEventListener('click', ev => {
+  const owner = tipTarget(ev);
+  if (!owner) { tipHide(); return; }
+  if (tipOwner === owner && Date.now() - tipShownAt < 400) return;
+  if (tipOwner === owner) { tipHide(); return; }
+  tipShow(owner);
+}, true);
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape') tipHide(); });
 /* Der Kasten ist viewport-fixiert: Scrollen und Größenänderung machen seine
    Position falsch, also verschwindet er statt zu wandern. */
@@ -637,12 +661,24 @@ window.addEventListener('resize', tipHide);
 /* ── Admin-Schlüssel ──────────────────────────────────────────────────────── */
 /* Same rule as /keys: sessionStorage for this tab, Bearer on each call, never
    in the URL, never rendered into the page. Calibrate uses it, and the
-   maintenance toggle (#10) is the second caller — both go through `adminApi()`. */
+   maintenance toggle (#10) is the second caller — both go through `adminApi()`.
+
+   `key` is the one exception (#130): the admin chip verifies a key the operator
+   just typed, and that key is not in the storage yet — it is only put there
+   after the answer. Passing it in keeps the header in one place instead of a
+   second `fetch()` that builds its own. */
+/* Der Name im `sessionStorage` für die zwei **neuen** Zugriffe (#130): der Chip
+   schreibt den Schlüssel nach der Prüfung und löscht ihn beim Abmelden. Das
+   Lesen steht weiter als Literal in `adminKey()` — es ist die Zeile, die
+   `tests/test_dashboard_loading.py` als Vertrag liest (`getItem('ripple_admin')`),
+   und ein zweiter Name für denselben Speicher wäre der Fehler, den die
+   Konstante hier verhindert. */
+const ADMIN_STORE = 'ripple_admin';
 const adminKey = () => sessionStorage.getItem('ripple_admin') || '';
 const keyHelp = () => t('key.help');
 
-async function adminApi(method, path, body) {
-  const key = adminKey();
+async function adminApi(method, path, body, given) {
+  const key = given === undefined ? adminKey() : given;
   if (!key) throw new Error(keyHelp());
   const init = {
     method,
@@ -666,6 +702,164 @@ async function adminApi(method, path, body) {
   }
   return data;
 }
+
+/* ── Admin-Modus im Masthead (issue #130) ─────────────────────────────────── */
+/* Bis hierher war der Admin-Zustand eine unsichtbare Tatsache: der Schlüssel
+   lag in `sessionStorage['ripple_admin']`, und nur die Betreiberblöcke wussten
+   davon. Der Chip im Kopf macht ihn sichtbar — und zwar erst, nachdem der
+   Server ihn bestätigt hat. Die Reihenfolge ist der Punkt: `checking` →
+   `GET /admin/models` → `200` → **erst jetzt** in den Speicher und auf `admin`.
+   Ein Schlüssel, den die Seite nur deshalb behauptet, weil ein String in einem
+   Storage steht, wäre eine Anzeige ohne Messung.
+
+   Drei Zustände, drei Wörter aus dem Katalog (`admin.readonly`,
+   `admin.checking`, `admin.admin`); das Skript setzt beim Wechsel `data-i18n`
+   mit, damit `fillShell()` nach einem Sprachwechsel dasselbe Wort schreibt.
+   Der Schlüssel selbst wird nie gerendert: er geht als `Authorization: Bearer`
+   hinaus, steht in keiner URL und in keinem Log. */
+const ADMIN_WORDS = {readonly: 'admin.readonly', checking: 'admin.checking',
+                     admin: 'admin.admin'};
+let adminState = 'readonly';       // readonly | checking | admin
+
+/* `hidden` als Attribut, nicht als Eigenschaft: der Patch und die Tests lesen
+   das Attribut, und ein blosses `el.hidden = false` liesse es stehen. */
+function adminHide(el, on) {
+  if (!el) return;
+  if (on) el.setAttribute('hidden', ''); else el.removeAttribute('hidden');
+}
+
+/* Offen heisst: kein `hidden`-Attribut. Über `getAttribute`, nicht über
+   `hasAttribute` — die zwei Messharnesse der Seite bauen verschiedene kleine
+   DOMs, und nur `getAttribute` gibt es in beiden. */
+const adminIsOpen = el => !!el && el.getAttribute('hidden') === null;
+
+function adminPaint() {
+  const chip = $('adminChip');
+  const word = $('adminWord');
+  const ask = $('adminAsk');
+  const id = ADMIN_WORDS[adminState] || ADMIN_WORDS.readonly;
+  if (word) {
+    word.setAttribute('data-i18n', id);
+    word.textContent = t(id);
+  }
+  if (chip) {
+    chip.setAttribute('data-state', adminState);
+    /* Das Label ist das Wort des Zustands; der Tooltip sagt, was er bedeutet,
+       und nennt die Quelle des Schlüssels (`sessionStorage`, nur dieser Tab). */
+    chip.setAttribute('data-i18n-aria', id);
+    chip.setAttribute('aria-label', t(id));
+    chip.setAttribute('data-tip',
+                      t(adminState === 'admin' ? 'admin.tip_admin' : 'admin.tip'));
+    chip.setAttribute('aria-expanded', adminIsOpen(ask) ? 'true' : 'false');
+  }
+  /* Abmelden gibt es nur, wenn es etwas abzumelden gibt. */
+  adminHide($('adminOut'), adminState !== 'admin');
+}
+
+function adminSay(text) {
+  const msg = $('adminMsg');
+  if (msg) msg.textContent = text || '';
+}
+
+/* Das Feld öffnen und schliessen. Schliessen räumt es leer: ein getippter
+   Schlüssel, der nicht abgeschickt wurde, bleibt nicht im DOM stehen. */
+function adminOpen(on) {
+  const ask = $('adminAsk');
+  const field = $('adminKey');
+  adminHide(ask, !on);
+  if (field) {
+    field.value = '';
+    if (on && typeof field.focus === 'function') field.focus();
+  }
+  if (on) adminSay('');
+  adminPaint();
+  return !!on;
+}
+
+function adminToggle() {
+  if (adminState === 'checking') return false;
+  return adminOpen(!adminIsOpen($('adminAsk')));
+}
+
+/* Die keyed-Blöcke neu zeichnen, ohne Reload: derselbe Weg wie ein Tick, also
+   dieselbe DOM-Form. Der nächste 2-s-Takt bestätigt sie. */
+function adminRepaint() {
+  if (last) render(last.h, last.s, last.c);
+}
+
+/* `GET /admin/models` ist die billigste Frage, die nur ein gültiger Schlüssel
+   mit 200 beantwortet: ein Modell-Lock ist lesbar, ohne etwas zu schreiben.
+   Sie geht über `adminApi()` — derselbe Header, dieselbe Fehlerform (`status`,
+   `message` aus dem Rumpf) wie jeder andere Admin-Aufruf der Seite. */
+async function adminSubmit() {
+  const field = $('adminKey');
+  const key = String((field && field.value) || '').trim();
+  if (!key) return false;
+  adminState = 'checking';
+  adminPaint();
+  adminSay('');
+  try {
+    await adminApi('GET', '/admin/models', undefined, key);
+  } catch (e) {
+    /* Kein 200, also kein Admin: der Chip bleibt, was er vorher war. Ein 401
+       ist die Ablehnung des Schlüssels (`admin.rejected`), alles andere die
+       Meldung des Servers, wörtlich. Das Feld bleibt offen und sagt es. */
+    adminState = adminKey() ? 'admin' : 'readonly';
+    adminPaint();
+    adminSay(e && e.status === 401 ? t('admin.rejected')
+                                  : (e && e.message ? e.message : String(e)));
+    return false;
+  }
+  /* Erst nach dem 200 in den Speicher: ein falscher Schlüssel landet hier nie. */
+  try { sessionStorage.setItem(ADMIN_STORE, key); } catch (e) { /* privater Modus */ }
+  adminState = 'admin';
+  adminOpen(false);
+  adminPaint();
+  adminRepaint();
+  return true;
+}
+
+function adminSignOut() {
+  try { sessionStorage.removeItem(ADMIN_STORE); } catch (e) { /* privater Modus */ }
+  adminState = 'readonly';
+  adminOpen(false);
+  adminPaint();
+  /* Die Betreiberblöcke lesen den Schlüssel beim Zeichnen — ein Repaint macht
+     sie wieder inert, ohne dass ein Tick abgewartet werden muss. */
+  adminRepaint();
+  return adminState;
+}
+
+/* Das Ergebnis der Prüfung, die beim Start ohnehin läuft: `loadFeasibility()`
+   liest `GET /admin/models` einmal mit dem Schlüssel aus `/keys` (die
+   Machbarkeit der Schlösser, #126). Genau diese Antwort sagt auch, ob der Tab
+   Admin ist — deshalb ein Request und nicht zwei. Ohne 200 wird der Schlüssel
+   gelöscht: Anzeige und Panels sollen nie auseinanderlaufen, und ein Schlüssel,
+   der nicht gilt, hat in diesem Tab nichts zu suchen. */
+function adminBooted(ok) {
+  if (ok) {
+    adminState = 'admin';
+    adminPaint();
+    return adminState;
+  }
+  try { sessionStorage.removeItem(ADMIN_STORE); } catch (e) { /* privater Modus */ }
+  adminState = 'readonly';
+  adminPaint();
+  return adminState;
+}
+
+document.addEventListener('click', ev => {
+  const el = ev.target;
+  if (!el || !el.closest) return;
+  if (el.closest('#adminChip')) { adminToggle(); return; }
+  if (el.closest('#adminOut')) adminSignOut();
+});
+document.addEventListener('keydown', ev => {
+  const el = ev.target;
+  if (!el || el.id !== 'adminKey') return;
+  if (ev.key === 'Enter') { ev.preventDefault(); adminSubmit(); }
+  else if (ev.key === 'Escape') { ev.preventDefault(); adminOpen(false); }
+});
 
 /* ── Legende: das Zustandssystem, einmal ausgeschrieben ───────────────────── */
 /* Der Zustand selbst ist ein Token (`healthy`, `loading`, …) und bleibt
@@ -695,11 +889,14 @@ function renderBanners(h) {
   return out.map(b => '<div class="banner">' + esc(b) + '</div>').join('');
 }
 
-/* Die kalibrierte Kapazität je Knoten (#30): `tg_tps` aus config.yaml, wie sie
-   `ripple/placement.py` für die Platzierung rechnet — eine Eigenschaft der
-   Maschine, nicht des Moments. Sie kommt aus /config, das der 2-s-Takt ohnehin
-   holt, und wird deshalb hier gehalten statt in jeder /healthz-Zeile zu
-   reisen: die Zahl ändert sich nur mit der Konfiguration. */
+/* The calibrated capability per node (#30): `tg_tps` from config.yaml, the
+   value `ripple/placement.py` decides with — a property of the machine, not of
+   the moment. It comes from /config, which the 2 s tick fetches anyway, and is
+   kept here instead of travelling in every /healthz row: the number changes
+   only with the configuration.
+   Since #124 it lives **only in the tooltip** of the tok/s cell, named as a
+   property of the machine: inside the cell it read as a measurement of the
+   model. */
 let capability = new Map();          // host name → calibrated tok/s, or undefined
 
 function rememberCapability(c) {
@@ -770,18 +967,28 @@ function seriesRows(entry) {
   };
 }
 
-/* Eine Reihe als Pfad. Ein `null` ist keine Probe — aber nicht jedes `null` ist
-   eine Lücke: die Sondierung läuft alle 10 s, ein Bucket ist 5 s breit, also
-   liegt zwischen zwei Proben **immer** genau ein leerer Bucket. Der Stift setzt
-   dort nicht ab (issue #96) — sonst besteht der Pfad aus lauter `M` und keinem
-   `L`, und SVG malt für einen Teilpfad aus einem Punkt gar nichts: gemessen
-   waren es sechs `M`, null `L` und eine Kurve, die seit Tagen unsichtbar war.
-   Zwei leere Buckets hintereinander sind dagegen eine Sondierung, die nicht
-   stattgefunden hat (ein verlorener Tick, ein Knoten, der weg war): dort endet
-   die Linie, damit ein abwesender Knoten nicht wie ein beschäftigter aussieht.
-   Nichts wird interpoliert und kein Slot verschoben — `x(i)` bleibt der Bucket,
-   in den die Probe fiel. */
-const SPARK_HOLD = 1;
+/* One row as a path. A `null` is not a sample — but not every `null` is a gap:
+   the probe runs every 10 s (`discovery.interval_seconds`) and a bucket is 5 s
+   wide (`stats.BUCKET_SECONDS`), so between two probes there is **always**
+   exactly one empty bucket. The pen does not lift there (issue #96) — otherwise
+   the path is all `M` and no `L`, and SVG paints nothing for a subpath of one
+   point: measured, six `M`, zero `L`, a curve that had been invisible for days.
+
+   One empty bucket is the cadence, not a measurement that went missing — and
+   `SPARK_HOLD = 1` sat exactly on that boundary, with no room for the probe's
+   own jitter. Measured on alpha, DeepSeek series, 180 buckets on 21.11.:
+   88 gaps of length 1 and **one gap of length 2**, from a probe that landed a
+   few seconds late and nothing more. At a hold of 1 that single gap tore the
+   line: `moves: 2`, seam at x 648 → 664.8, `dy 0` — the line continued at the
+   same height, so the break carried no information about the traffic.
+
+   So the hold is 10 s probe / 5 s bucket = 2: the one empty bucket the cadence
+   puts there, plus the jitter of one probe. A run of 3 or more empty buckets is
+   ≥ 15 s without a probe — a tick that did not happen, a node that was away —
+   and there the line still ends, so an absent node cannot look like a busy one.
+   Nothing is interpolated and no slot is moved: `x(i)` stays the bucket the
+   sample fell into. */
+const SPARK_HOLD = 2;
 
 function seriesPath(values, x, y) {
   let d = '', down = false, skipped = 0;
@@ -797,20 +1004,20 @@ function seriesPath(values, x, y) {
   return d;
 }
 
-/* Der Wert, den die Linie an einem Bucket zeigt — dieselbe Regel wie der Pfad,
-   und derselbe `hold`. Ohne diese eine Quelle liefen Zeichnung und Zahl beim
-   nächsten Tuning wieder auseinander (#105): `seriesPath()` überbrückt einen
-   leeren Bucket, der Readout antwortete `—` für genau diesen Bucket — das Bild
-   sagte „hier ist eine Linie", die Zahl „hier ist nichts".
+/* The value the line shows at a bucket — the same rule as the path, and the
+   same `hold`. Without that one source the drawing and the number drifted apart
+   at the next tuning (#105): `seriesPath()` bridged an empty bucket, the readout
+   answered `—` for exactly that bucket — the picture said "there is a line
+   here", the number said "there is nothing here".
 
-   Gebrückt wird nur, was die Linie wirklich überquert: ein Lauf von höchstens
-   `hold` leeren Buckets **zwischen** zwei Proben. Der Wert ist dann die Probe
-   davor, denn aus ihr kommt das Segment, das über den Bucket zeichnet — nicht
-   interpoliert, keine zweite Rechnung. `held` sagt dem Leser, dass die Zahl
-   nicht an dieser x-Position gemessen wurde. Ein längerer Lauf ist eine
-   Sondierung, die nicht stattfand: dort reißt die Linie ab, also `—`. Am Rand
-   der Reihe (vor der ersten oder nach der letzten Probe) zeichnet kein Segment
-   — auch dort gibt es keine Zahl, statt eine zu erfinden. */
+   Only what the line really crosses is bridged: a run of at most `hold` empty
+   buckets **between** two samples. The value is then the sample before it,
+   because that is the sample the segment crossing the bucket is drawn from —
+   not interpolated, no second computation. `held` tells the reader that the
+   number was not measured at this x position. A longer run is a probe that did
+   not happen: there the line tears, so `—`. At the edge of the row (before the
+   first or after the last sample) no segment is drawn — no number there either,
+   instead of inventing one. */
 function seriesValueAt(rows, index, hold) {
   const list = Array.isArray(rows) ? rows : [];
   const i = Number(index);
@@ -842,9 +1049,9 @@ function seriesValueAt(rows, index, hold) {
    malt gar nichts — genau das war der Defekt. */
 function seriesDots(values, x, y) {
   let d = '', run = 0, start = 0, skipped = 0;
-  /* Ein Lauf endet nach derselben Regel wie der Pfad: ein leerer Bucket wird
-     übersprungen, zwei heben den Stift. Ein Punkt, den die Linie erreicht, ist
-     kein einsamer Punkt — er braucht keine Marke. */
+  /* A run ends by the same rule as the path: one empty bucket is crossed, more
+     than `SPARK_HOLD` of them lift the pen. A point the line reaches is no lone
+     point — it needs no marker. */
   const close = () => {
     if (run === 1) d += 'M' + x(start) + ' ' + y(values[start]) + 'h0.01';
     run = 0;
@@ -930,16 +1137,16 @@ function sparkIndex(clientX, rect, span) {
   return Math.round(clamp((clientX - rect.left) / w, 0, 1) * Math.max(1, span));
 }
 
-/* Eine Zahl oder `—`. Ein Bucket ohne eigene Probe ist nicht automatisch keine
-   Messung: die Sondierung läuft alle 10 s in 5-s-Eimer, jeder zweite ist
-   planmäßig leer (#96), und die Linie zeichnet dort. Der Readout folgt ihr
-   (#105): ein einzelner leerer Bucket nennt den Wert des Segments — die Probe
-   davor —, markiert mit `~`. Die Marke ist das Tilde und nicht die Uhrzeit der
-   Probe: bei 12 px ist `~152,5` eine Zahl, `12:34` wären zwei Angaben in einer
-   Spalte, und mit `tabular-nums` wandert die Kopfzeile nicht um vier Ziffern,
-   wenn der Zeiger über eine Lücke fährt. Ein Lauf von zwei leeren Buckets (ein
-   verlorener Tick, ein abwesender Knoten) bleibt `—` — genau dort reißt die
-   Linie ab. `0` käme in keinem Fall in Frage: es wäre der Abtakt als Ergebnis. */
+/* A number, or `—`. A bucket without its own sample is not automatically no
+   measurement: the probe runs every 10 s into 5 s buckets, every second one is
+   empty by design (#96), and the line draws across it. The readout follows the
+   line (#105): an empty bucket the pen crosses names the value of the segment —
+   the sample before it — marked with `~`. The mark is the tilde and not the
+   sample's timestamp: at 12 px `~152.5` is a number, `12:34` would be two
+   readings in one column, and with `tabular-nums` the header does not shift by
+   four digits when the pointer crosses a gap. A run of three or more empty
+   buckets (a lost tick, an absent node) stays `—` — exactly where the line
+   tears. `0` would never do: it would be the clock as a result. */
 const sparkValue = (rows, i, hold) => {
   const v = seriesValueAt(rows, i, hold);
   return isNum(v.value) ? (v.held ? '~' : '') + nf(v.value, 1) : '—';
@@ -1159,14 +1366,39 @@ function memBar(h) {
       </div>`;
 }
 
-function calButton(x) {
+/* Welche Modelle sind auf diesem Knoten gesperrt **und** geladen? Das ist genau
+   die Prüfung, mit der `ripple/calibration_api.py` einen Kalibrierlauf ablehnt
+   (`host.locked_loaded()`), und die Seite hat sie längst: `models[].hosts[].lock`
+   steht für „gesperrt **und hier** geladen", nicht für „gesperrt". Ohne diese
+   Zeile war der Knopf genau dann frei, wenn der Klick eine 409 erzeugt — auf M5
+   und M3 liegt DeepSeek gesperrt und geladen, auf M3 ohne gebundenen Thread,
+   also sah der Knopf dort einladend aus und konnte nichts tun (issue #128). */
+function lockedOn(h, name) {
+  const out = [];
+  for (const m of ((h && h.models) || [])) {
+    for (const x of (m.hosts || [])) {
+      if (x.host === name && x.lock) out.push(m.id);
+    }
+  }
+  return out.sort();
+}
+
+/* Die Reihenfolge der Gründe ist die des Endpunkts (job → thread → lock): der
+   Tooltip nennt den Grund, der zuerst absagen würde, damit die Seite nie eine
+   andere Ursache verspricht als die Antwort nennt. `force=1` übergeht den
+   Thread, nie den Lock — das ist der Unterschied zwischen „warten" und
+   „entsperren", und er steht in beiden Tooltips. */
+function calButton(x, h) {
+  const locked = lockedOn(h, x.name);
   const held = (x.thread_slots || 0) > 0;
   const busy = !!calibBusy[x.name];
   const why = busy ? t('fleet.cal_busy')
             : held ? t('fleet.cal_held')
-                   : t('fleet.cal_ready');
+            : locked.length ? t('fleet.cal_locked', {models: locked.join(', ')})
+                            : t('fleet.cal_ready');
   return `<button class="btn" data-node="${esc(x.name)}" onclick="calibrate('${esc(x.name)}')"` +
-         `${busy || held ? ' disabled' : ''} title="${esc(why)}">${esc(t('fleet.calibrate'))}</button>`;
+         `${busy || held || locked.length ? ' disabled' : ''} title="${esc(why)}">` +
+         `${esc(t('fleet.calibrate'))}</button>`;
 }
 
 /* Das Ende des Ladevorgangs ist absolut: `started_at + eta_seconds` aus
@@ -1188,6 +1420,29 @@ function loadingLine(x) {
   return `<div class="loading tip" data-tip="${esc(tipBody(['loading', 'load_remaining']))}"><span>${t('fleet.loading', {model: esc(L.model)})}</span>` +
          `<span>${nf(L.size_gb, 1)} GB</span><span>${left === null ? '—' : left}</span>` +
          `${L.source ? '<span class="src">' + esc(L.source) + '</span>' : ''}</div>`;
+}
+
+/* Ein Preload (issue #119) ist ein Ladevorgang ohne Anfrage: das Schloss
+   verspricht Residenz, und der Dienst lädt das Modell, sobald der Knoten gesund
+   wird. Der laufende Vorgang steht in `loadingLine` (`source: preload`); hier
+   stehen nur die zwei Sätze, die der Ladezustand nicht sagen kann: warum ein
+   Preload nicht ging, und wen er verdrängt hat. Beides aus /healthz →
+   hosts[].preloads, nichts davon ist hier erfunden. */
+function preloadLine(x) {
+  const rows = [];
+  (x.preloads || []).forEach(p => {
+    const displaced = (p.displaced || []).join(', ');
+    if (p.state === 'failed') {
+      rows.push('<div class="loading preload-fail" data-model="' + esc(p.model) + '">' +
+        '<span>' + t('fleet.preload_failed',
+                     {model: esc(p.model), reason: esc(p.reason || '—')}) + '</span></div>');
+    } else if (displaced) {
+      rows.push('<div class="loading preload-evict" data-model="' + esc(p.model) + '">' +
+        '<span>' + t('fleet.preload_displaced',
+                     {model: esc(p.model), list: esc(displaced)}) + '</span></div>');
+    }
+  });
+  return rows.join('');
 }
 
 /* ── Wartung (Betreiberaktion, admin-Schlüssel, issue #10) ─────────────────── */
@@ -1324,15 +1579,28 @@ function cacheOf(x) {
   };
 }
 
+/* Ist dieses Modell auf diesem Knoten *jetzt* zu bedienen (Issue #116)?
+   `dispatch` beantwortet die weitere Frage („würde RIPPLE hierher senden?" — ein
+   Kaltstart zählt mit), und genau daraus wurde vorher die Verfügbarkeit
+   abgeleitet: ein gelistetes, aber nicht geladenes Modell stand als routbar neben
+   `loaded: false`. Das Backend schickt dafür `routable` (Residency, nicht Lock).
+   `phase === 'pp'` bleibt zusätzlich routbar: dort läuft bereits eine Anfrage,
+   der Kaltstart ist im Gange — das Abzeichen soll nicht bei jedem Laden blinken
+   (#18). Der Rückfall gilt nur für Payloads ohne das Feld (Fixtures). */
+const routableNow = r => !!r && (r.phase === 'pp' || (r.routable !== undefined
+  ? r.routable === true
+  : r.dispatch !== false && r.loaded === true));
+
 function renderFleet(h) {
   const keyed = !!adminKey();
   return (h.hosts || []).map(x => {
     const tps = hostTps(x);
     const age = tps && tps.measured_at ? Math.max(0, Math.round(Date.now() / 1000 - tps.measured_at)) : null;
     const cache = cacheOf(x);
+    const split = threadSplit(h, x.name);
     const loaded = (x.models_loaded || []).length;
     const routable = (h.models || []).filter(m =>
-      (m.hosts || []).some(r => r.host === x.name && r.dispatch !== false)).length;
+      (m.hosts || []).some(r => r.host === x.name && routableNow(r))).length;
     // The declared site against the one the used address falls into (issue #67).
     // A location is data, so a contradiction is shown here — the same fact
     // `ripple doctor` reports as one check.
@@ -1372,18 +1640,25 @@ function renderFleet(h) {
           <span class="addr">${T('address', esc(x.address))}</span>
           <span class="addr-note">${T('addr_sw', esc(t('fleet.addr_note', {n: nf((x.addresses || []).length),
             m: nf(x.addr_switches)})))}</span>
-          ${calButton(x)}
+          ${calButton(x, h)}
         </div>
       </div>
       ${memBar(x)}
       ${loadingLine(x)}
+      ${preloadLine(x)}
       <div class="metrics">
         ${metric(['inflight', 'max_inflight', 'spill'], esc(t('fleet.inflight')),
                  nf(x.inflight) + '<span class="den"> / ' + nf(x.max_inflight) + '</span>',
                  esc(t('fleet.spill_from', {v: nf(x.spill_threshold)})))}
         ${metric(['slots', 'max_threads', 'target_share', 'relative_load'], esc(t('fleet.slots')),
                  nf(x.thread_slots) + '<span class="den"> / ' + nf(x.max_threads) + '</span>',
-                 esc(t('fleet.target', {v: nf((x.target_share || 0) * 100, 0)})) + ' · ' + relLoad(x))}
+                 esc(t('fleet.target', {v: nf((x.target_share || 0) * 100, 0)})) + ' · ' + relLoad(x),
+                 false,
+                 /* The split lives in the tooltip (#93): the cell is one figure
+                    (slots used / slots available) in a 150 px box, and a second
+                    number there breaks the layout in half the languages. */
+                 t('fleet.slots_split', {active: nf(split.active), idle: nf(split.idle),
+                                         silent: nf(split.silent)}))}
         ${metric(['rtt'], 'RTT',
                  nf(x.rtt_ms, 1) + '<span class="den"> ms</span>',
                  esc(t('fleet.probe', {host: x.name})), true)}
@@ -1477,6 +1752,11 @@ const policyTip = level => tipBody(['policy']) + '\n' +
   (level ? t('models.policy_tip', {level: level}) : t('models.policy_tip_none'));
 
 function policyControl(m, x, keyed) {
+  /* Ein oMLX-Builtin bekommt kein Auswahlfeld (issue #118): es steht in keiner
+     Allow-List, `disabled`/`hidden` hätten dort keine Wirkung, und ein Feld, das
+     sich nie ändern lässt, sähe aus wie eine Entscheidung, die es nicht gibt.
+     Die Zelle bleibt ohne Feld; das Schloss daneben sagt, was das Modell ist. */
+  if (m.builtin) return '';
   const level = x.policy || '';
   const opts = POLICY_STATES.map(([value, label]) =>
     '<option value="' + value + '"' + (value === level ? ' selected' : '') + '>' +
@@ -1502,15 +1782,31 @@ function modelRows(m, order, keyed) {
          mitgekürzt. Der `title` trägt den Zustand deshalb mit, sonst wäre er
          beim Überfahren eines gekürzten Namens verloren (#19). Über dem Namen
          steht seit #23 das Schloss des Locks — in dieser Zelle, weil der Lock je
-         Modell gilt und die Zelle die Zeilen eines Modells zusammenfasst. */
-      const state = x.dispatch === false ? ' · ' + t('models.not_routable') : '';
+         Modell gilt und die Zelle die Zeilen eines Modells zusammenfasst.
+         Seit #116 heißt „routbar“ Residency, nicht `dispatch`: ein gelistetes,
+         aber nicht geladenes Modell trägt das Abzeichen jetzt auch dann, wenn ein
+         Eviction-Lock gesetzt ist. Der Lock verhindert das Entladen — er belegt
+         nicht, dass geladen ist; sein Tooltip sagt das (`lock.nowhere`). */
+      const notHere = x.dispatch === false || !routableNow(x);
+      const state = notHere ? ' · ' + t('models.not_routable') : '';
       out += '<td class="model-cell" rowspan="' + hosts.length + '" title="' + esc(m.id + state) + '">' +
-             (lockable(m) ? lockButton(m, keyed) : '') +
+             lockButton(m, keyed) +
+             /* Neben dem Schloss, nicht hinter dem Namen: das Schloss steht
+                ohnehin über dem Namen und kostet keine Zeilenhöhe — das Zeichen
+                hier erbt denselben Trick (#139). Es steht immer da: rot für
+                „hier nicht", grün für „hier ja". */
+             nrIcon(x) +
              '<span class="model-line"><span class="model-name">' + esc(m.id) + '</span>' +
-             (x.dispatch === false ? ' <span class="badge">' + esc(t('models.not_routable')) + '</span>' : '') +
              '</span></td>';
     }
     out += '<td class="node-cell"><span class="node-name">' + esc(x.host) + '</span>' +
+           /* Ein Modell, das ein Preload verdrängt hat (issue #119), bleibt im
+              Modell sichtbar: `evicted_by` nennt den Vorgang, der es gekostet
+              hat. Der Lock gewinnt die Eviction — verschwinden darf sie nicht. */
+           (x.evicted_by
+             ? '<span class="evicted tip" data-tip="' +
+               esc(t('models.evicted_by', {model: x.evicted_by})) + '">▼</span>'
+             : '') +
            policyControl(m, x, keyed) + '</td>';
     /* Der Punkt sagt seit #18 auch, was der Knoten mit dem Modell tut: `pp`
        blinkt orange (Prefill — warten), `tg` blinkt grün (es fließt). Steht
@@ -1525,6 +1821,39 @@ function modelRows(m, order, keyed) {
            ' title="' + esc((x.loaded ? t('models.dot_loaded') : t('models.dot_available')) +
                             (ph ? ' · ' + phaseTip(ph, 'models[].hosts[].phase') : '')) +
            '"></span></td>';
+    /* tok/s steht seit dem 21.11.2026 direkt hinter LOADED und in Fettdruck:
+       es ist die einzige Zahl der Zeile, die sich im Sekundentakt ändert, und
+       der Grund, warum man die Tabelle überhaupt aufschlägt. SIZE und CONTEXT
+       sind statisch und stehen deshalb am Ende — die Zeile liest sich von links
+       nach rechts als „was läuft, wie schnell, wie viel, wie groß".
+       One number, and it is the one measured for *this* (node, model) pair
+       (#124). The rate oMLX reports per request and the service smooths
+       (alpha 0.3) falls when requests run in parallel — it is not a property
+       of the machine. Until a request for this model has finished on this node
+       there is no such number, and the cell says so with the same dash the
+       rest of the table uses; a measured zero is a number and stays `0,0`.
+       An oMLX builtin is never routed (`builtin`, #118), so it never gets a
+       measurement and keeps the dash.
+
+       The machine's calibrated capability (`tg_tps` from config.yaml, the
+       AS-6 number `placement.py` decides with) is a different base and lives
+       only in the tooltip, explicitly labelled as the machine's — it must
+       never stand in the cell as if it described this model (#124). */
+    const measured = !m.builtin && isNum(x.tg_tps);
+    const cap = capability.get(x.host);
+    const tip = [
+      tipText('tps_m'),
+      m.builtin ? t('lock.builtin_tip', {model: m.id})
+                : measured ? t('models.tps_measured', {v: nf(x.tg_tps, 1)})
+                           : t('models.tps_never'),
+      isNum(cap) ? t('tip.tps_cap', {v: nf(cap, 1)}) + '  ' + t('common.source') +
+                   ': ' + SRC.tps_cap
+                 : t('models.tps_cap_none') + '  ' + t('common.source') + ': ' + SRC.tps_cap,
+    ].join('\n');
+    out += '<td class="num dtps"><span class="tip" data-tip="' + esc(tip) + '">' +
+           (measured ? nf(x.tg_tps, 1) : '—') + '</span></td>';
+    out += '<td class="num">' + T('running', nf(x.inflight)) + '</td>';
+    out += '<td class="num">' + T('threads_m', nf(x.threads)) + '</td>';
     /* Der Trenner zwischen geschätzter und gemessener Größe stand im dunkelsten
        Linienton und war auf dem Körper kaum zu sehen; er trägt jetzt die Farbe
        der Zahlen neben sich (#19). Nur im Körper — die Kopfzeile schreibt ihn
@@ -1533,21 +1862,52 @@ function modelRows(m, order, keyed) {
            '<span style="color:var(--fg)"> / </span>' +
            (x.actual_size === null || x.actual_size === undefined ? '—' : T('size_act', gb(x.actual_size))) + '</td>';
     out += '<td class="num">' + (x.context_len === null || x.context_len === undefined ? '—' : T('ctx', nf(x.context_len))) + '</td>';
-    out += '<td class="num">' + T('running', nf(x.inflight)) + '</td>';
-    out += '<td class="num">' + T('threads_m', nf(x.threads)) + '</td>';
-    /* tok/s in zwei Hälften (#30), mit demselben `.den` wie `inflight 3 / 6`:
-       links die Rate, die oMLX je Anfrage meldet und der Dienst glättet — sie
-       fällt, wenn Anfragen parallel laufen; rechts `tg_tps` aus config.yaml,
-       die kalibrierte Kapazität, mit der `placement.py` rechnet. Fehlt die
-       Messung, bleibt die Kapazität sichtbar: `— / 43,5` sagt mehr als `—`. */
-    const cap = capability.get(x.host);
-    const live = (x.tg_tps === null || x.tg_tps === undefined) ? '—' : nf(x.tg_tps, 1);
-    const capText = (cap === null || cap === undefined) ? '—' : nf(cap, 1);
-    out += '<td class="num">' + T('tps_m',
-      live + '<span class="den"> / ' + capText + '</span>') + '</td>';
     return out + '</tr>';
   }).join('');
 }
+
+/* Tabler `route-off` (outline, 24er Raster, Strichstärke 2 wie das Original) —
+   als Zeichen, nicht als Bild: `currentColor` nimmt die Farbe aus dem CSS, und
+   die Datei braucht keine zweite Anfrage. */
+const ROUTE_OFF =
+  '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor"' +
+  ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"' +
+  ' aria-hidden="true" focusable="false">' +
+  '<path d="M4 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>' +
+  '<path d="M16 5a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"/>' +
+  '<path d="M12 19h4.5c.71 0 1.372 -.212 1.924 -.576m1.545 -2.459a3.5 3.5 0 0 0 -3.469 -3.965h-.499m-4 0h-3.501a3.5 3.5 0 0 1 -2.477 -5.972m2.477 -1.028h3.5"/>' +
+  '<path d="M3 3l18 18"/></svg>';
+
+/* Dasselbe Zeichen ohne Strich (`route`), für den Fall, dass der Knoten das
+   Modell hier ausliefert. Rot und Grün sind dann zwei Zustände eines Zeichens
+   und nicht ein Fehler neben einem Nichts — die Balance, die das Auge sucht. */
+const ROUTE_ON =
+  '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor"' +
+  ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"' +
+  ' aria-hidden="true" focusable="false">' +
+  '<path d="M3 19a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/>' +
+  '<path d="M19 7a2 2 0 1 0 0 -4a2 2 0 0 0 0 4"/>' +
+  '<path d="M11 19h5.5a3.5 3.5 0 0 0 0 -7h-8a3.5 3.5 0 0 1 0 -7h4.5"/></svg>';
+
+/* Das Abzeichen ist seit dem 21.11.2026 ein Zeichen, kein Kasten (#139): „nicht
+   routbar" stand als 84 × 35 px großer Chip in einer 100 px breiten Zelle und
+   brach auf zwei Zeilen — 21 davon in der Tabelle. Das Icon sagt dasselbe und
+   gibt der Zeile ihre Höhe zurück; der Tooltip nennt den Grund, den der Chip
+   nie genannt hat. Zwei Ursachen, zwei Sätze: `dispatch === false` heißt, der
+   Knoten bietet das Modell nicht an; sonst ist es gelistet, aber nicht geladen,
+   und die erste Anfrage zahlt einen Kaltstart. `role="img"` und `aria-label`,
+   weil ein Screenreader das Zeichen nicht sieht, den Satz aber hören soll. */
+const nrIcon = x => {
+  /* Jeder Tooltip der Seite nennt seine Quelle — dieser auch, sonst ist der Satz
+     eine Behauptung ohne Adresse (`test_every_tooltip_names_its_source`). */
+  const here = !(x.dispatch === false) && routableNow(x);
+  const text = (here ? t('models.routable')
+                     : t('models.not_routable') + ' · ' +
+                       t(x.dispatch === false ? 'models.nr_dispatch' : 'models.nr_resident')) +
+               '\n' + t('common.source') + ': /healthz → models[].hosts[].dispatch, .routable';
+  return '<span class="nrt' + (here ? ' ok' : '') + ' tip" role="img" aria-label="' + esc(text) +
+         '" data-tip="' + esc(text) + '">' + (here ? ROUTE_ON : ROUTE_OFF) + '</span>';
+};
 
 function renderModels(h) {
   const keyed = !!adminKey();
@@ -1587,26 +1947,28 @@ function renderModels(h) {
      Hungarian 105 for the node and 99 for the context, Russian 93 for "req",
      Turkish 97 for threads. A column that is too narrow does not clip its
      header — the text runs into the neighbouring column, which reads as a
-     rendering bug (#53). The last column is 104 px since #30: its subtitle is
-     `live / capability` (`live / Kapazität`), which needs the room. */
+     rendering bug (#53). The last column keeps its 104 px: its subtitle names
+     the measurement (`measured here`), and the longest of the sixteen
+     translations still needs the room. Since #124 the cell holds one number —
+     the machine capability moved into the tooltip. */
   return `
     ${why}
     <table>
       <colgroup>
         <col style="width:auto"><col style="width:108px"><col style="width:108px">
-        <col style="width:122px"><col style="width:102px"><col style="width:96px">
-        <col style="width:100px"><col style="width:104px">
+        <col style="width:104px"><col style="width:96px"><col style="width:100px">
+        <col style="width:122px"><col style="width:102px">
       </colgroup>
       <thead>
         <tr>
           <th><span class="th-main">${esc(t('models.th_model'))}</span><span class="th-sub">${esc(t('models.th_model_sub'))}</span></th>
           <th><span class="th-main">${esc(t('models.th_node'))}</span><span class="th-sub">${esc(t('models.th_node_sub'))}</span></th>
           <th class="num"><span class="th-main">${T('loaded', esc(t('models.th_loaded')))}</span><span class="th-sub">${esc(t('models.th_loaded_sub'))}</span></th>
-          <th class="num"><span class="th-main">${esc(t('models.th_size'))}</span><span class="th-sub">${esc(t('models.th_size_sub'))}</span></th>
-          <th class="num"><span class="th-main">${T('ctx', esc(t('models.th_ctx')))}</span><span class="th-sub">${esc(t('models.th_ctx_sub'))}</span></th>
+          <th class="num"><span class="th-main">${T('tps_m', 'tok/s')}</span><span class="th-sub">${esc(t('models.th_tps_sub'))}</span></th>
           <th class="num"><span class="th-main">${T('running', esc(t('models.th_req')))}</span><span class="th-sub">${esc(t('models.th_req_sub'))}</span></th>
           <th class="num"><span class="th-main">${T('threads_m', esc(t('models.th_threads')))}</span><span class="th-sub">${esc(t('models.th_threads_sub'))}</span></th>
-          <th class="num"><span class="th-main">${T('tps_m', 'tok/s')}</span><span class="th-sub">${esc(t('models.th_tps_sub'))}</span></th>
+          <th class="num"><span class="th-main">${esc(t('models.th_size'))}</span><span class="th-sub">${esc(t('models.th_size_sub'))}</span></th>
+          <th class="num"><span class="th-main">${T('ctx', esc(t('models.th_ctx')))}</span><span class="th-sub">${esc(t('models.th_ctx_sub'))}</span></th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1892,6 +2254,30 @@ function threadSource(source, turns) {
   return source === 'new' && Number(turns) > 1 ? 'fp' : source;
 }
 
+/* A thread is **silent** when it has not been asked anything for this long
+   (#93). 900 s is the placement thread decay window
+   (`placement.thread_decay_seconds`) — the point at which placement itself
+   stops counting the thread as warm — and half of the default
+   `affinity.ttl_seconds` (1800 s). Measured on the live instance on 19.11.:
+   a thread sat at `turns=23, active=0, idle_seconds=1394` and never received
+   another request, because the client's session id had moved and the old
+   cache scope can never be resumed. It still held a slot and a row until the
+   TTL ran out, and the operator reads the thread count as "what is running".
+   A silent thread is not running — the row says so. */
+const THREAD_SILENT_SECONDS = 900;
+const threadSilent = th => !(Number(th.active || 0) > 0) &&
+  isNum(th.idle_seconds) && Number(th.idle_seconds) >= THREAD_SILENT_SECONDS;
+
+/* Per node: how many of its threads carry a request right now, how many are
+   idle, and how many of those have gone silent. The host card shows one figure
+   in the cell and this split in the tooltip (#93). */
+function threadSplit(h, host) {
+  const reg = ((h.threads || {}).registry || []).filter(th => th.host === host);
+  const active = reg.filter(th => Number(th.active || 0) > 0).length;
+  return {active: active, idle: reg.length - active,
+          silent: reg.filter(threadSilent).length};
+}
+
 function renderThreads(h) {
   const reg = (h.threads || {}).registry || [];
   const fetched = typeof h.server_time === 'number' ? h.server_time : pageNow();
@@ -1921,6 +2307,11 @@ function renderThreads(h) {
          nächsten Tick wieder weg. `data-busy` fehlt bei einem ruhenden Thread —
          ein Attribut mit `false` wäre eine zweite Wahrheit. */
       const busy = Number(th.active || 0) > 0;
+      /* The silence (#93): a thread past the threshold gets the word, not just
+         the absence of `data-busy` — `active: 0` also describes a thread that
+         answered a second ago. The chip carries the threshold in its tooltip;
+         the row keeps its slot until the TTL, so it cannot simply disappear. */
+      const silent = threadSilent(th);
       const why = !keyed ? keyHelp() : busy ? t('threads.delete_active') : '';
       const del = '<button class="btn" style="margin-left:auto"' +
         ' data-key="' + esc(th.key) + '" onclick="threadDelete(this)"' +
@@ -1928,7 +2319,7 @@ function renderThreads(h) {
         (why ? ' title="' + esc(why) + '"' : '') + '>' +
         T('th_delete', esc(t('threads.delete'))) + '</button>';
       return `
-      <div class="thread-item" data-key="${esc(th.key)}"${busy ? ' data-busy="true"' : ''}>
+      <div class="thread-item" data-key="${esc(th.key)}"${busy ? ' data-busy="true"' : ''}${silent ? ' data-silent="true"' : ''}>
         ${hostStripe(byName.get(th.host) || {name: th.host})}
         <div class="th-top">
           <span class="th-key">${esc(th.key)}</span>
@@ -1941,7 +2332,10 @@ function renderThreads(h) {
           <span>${esc(th.host)}</span>
           <span>${T('th_turns', esc(t('threads.turns', {n: nf(th.turns)})))}</span>
           <span>${busy ? T('th_idle', esc(t('threads.busy')))
-                       : T('th_idle', esc(t('threads.idle', {n: nf(th.idle_seconds, 0)})))}</span>
+                       : T('th_idle', esc(t('threads.idle', {t: ageText(Number(th.idle_seconds))})))}</span>
+          ${silent ? '<span class="chip th-silent tip" data-tip="' +
+            esc(t('threads.silent_tip', {min: nf(THREAD_SILENT_SECONDS / 60)})) + '">' +
+            esc(t('threads.silent')) + '</span>' : ''}
           <span><span data-deadline="${esc(at)}" data-deadline-kind="thread" class="tip" data-tip="${esc(tip)}">${esc(text)}</span></span>
           ${del}
         </div>
@@ -2178,9 +2572,15 @@ function renderLoad(h) {
   const head = cells => '<thead><tr><th style="width:96px"><span class="th-main">' +
     esc(t('dist.th_node')) + '</span></th>' + cells + '</tr></thead>';
   /* Kopfzelle: Kürzel oben, Einheit darunter (#37). Die Einheiten sind Symbole
-     (`s`, `Tok`) wie `h`/`min` in `loadDur` — sie werden nicht übersetzt. */
-  const th = (id, unit) => '<th class="num"><span class="th-main"' +
-    ' style="white-space:normal">' + esc(t(id)) + '</span>' +
+     (`s`, `Tok`) wie `h`/`min` in `loadDur` — sie werden nicht übersetzt.
+     Seit 21.11.2026 trägt auch der Kopf den Tooltip: `PTK`, `CTK` und `RQ`
+     erschließen sich nur dem, der die Abkürzung schon kennt, und die Erklärung
+     stand bisher allein an der Zahl darunter (Betreiber-Fund). Es ist derselbe
+     Text wie an der Zelle — keine zweite Quelle, kein zweiter Satz, der altern
+     kann. */
+  const th = (id, unit, tipKey) => '<th class="num' + (tipKey ? ' tip' : '') + '"' +
+    (tipKey ? ' data-tip="' + esc(tipText(tipKey)) + '"' : '') +
+    '><span class="th-main" style="white-space:normal">' + esc(t(id)) + '</span>' +
     (unit ? '<span class="th-sub">' + esc(unit) + '</span>' : '') + '</th>';
 
   /* `group-start` zieht die Trennlinie über die Summenzeile — die eine
@@ -2239,7 +2639,7 @@ function renderLoad(h) {
       </div>
       <div class="load-side">
         <table class="load-work">
-          ${head(LOAD_WORK.map(col => th(col.id, LOAD_UNIT[col.unit])).join(''))}
+          ${head(LOAD_WORK.map(col => th(col.id, LOAD_UNIT[col.unit], col.tip)).join(''))}
           <tbody>${workRows}</tbody>
         </table>
       </div>
@@ -2391,17 +2791,22 @@ function renderLog(s) {
        sich selbst zurück. */
     const whyId = 'reason.' + x.reason;
     const why = t(whyId) === whyId ? x.reason : t(whyId);
+    /* `data-label` an jeder Zelle (#134): unter 700 px steht die Zeile als
+       Block, die Kopfzeile ist dann fort — jeder Wert trägt seinen Bezeichner
+       selbst, aus demselben Katalog wie `thead` (`log.th_*`), keine neuen Ids.
+       Die Zeit ist `log.th_time`, nicht die Unterzeile `th_time_sub`
+       („Ortszeit"): im Block ist „Zeit" die Beschriftung, die trägt. */
     return `<tr data-key="${esc([x.time, x.model, x.host, x.reason, x.duration_ms, x.status, x.thread].join('|'))}">
-      <td class="t num">${T('d_time', esc(logTime(x)))}</td>
-      <td class="m" title="${esc(x.model)}">${T('d_model', esc(x.model))}</td>
-      <td class="sid" title="${esc(x.thread || '—')}" data-tip="${esc((x.thread || '—') + '  ' + t('common.source') + ': /stats → decisions[].thread')}">${esc(logShortSid(x.thread))}</td>
-      <td>${T('d_host', esc(x.host || '—'))}</td>
-      <td><span class="chip" data-tip="${esc(t('log.reason_tip', {why: why}) + '  ' + t('common.source') + ': /stats → decisions[].reason')}">${esc(x.reason)}</span></td>
-      <td class="num">${T('d_prompt', nf(x.prompt_chars))}</td>
-      <td class="num"><div class="dur">${T('d_dur', nf(x.duration_ms, 1))}
+      <td class="t num" data-label="${esc(t('log.th_time'))}">${T('d_time', esc(logTime(x)))}</td>
+      <td class="m" data-label="${esc(t('log.th_model'))}" title="${esc(x.model)}">${T('d_model', esc(x.model))}</td>
+      <td class="sid" data-label="${esc(t('log.th_sid'))}" title="${esc(x.thread || '—')}" data-tip="${esc((x.thread || '—') + '  ' + t('common.source') + ': /stats → decisions[].thread')}">${esc(logShortSid(x.thread))}</td>
+      <td data-label="${esc(t('log.th_node'))}">${T('d_host', esc(x.host || '—'))}</td>
+      <td data-label="${esc(t('log.th_reason'))}"><span class="chip" data-tip="${esc(t('log.reason_tip', {why: why}) + '  ' + t('common.source') + ': /stats → decisions[].reason')}">${esc(x.reason)}</span></td>
+      <td class="num" data-label="${esc(t('log.th_prompt'))}">${T('d_prompt', nf(x.prompt_chars))}</td>
+      <td class="num" data-label="${esc(t('log.th_dur'))}"><div class="dur">${T('d_dur', nf(x.duration_ms, 1))}
         ${T('d_bar', '<span class="dur-track"><i style="width:' + ((x.duration_ms || 0) / max * 100).toFixed(0) + '%"></i></span>')}
       </div></td>
-      <td class="num"><span class="st ${cls}">${T('d_status', nf(x.status))}</span></td>
+      <td class="num" data-label="${esc(t('log.th_status'))}"><span class="st ${cls}">${T('d_status', nf(x.status))}</span></td>
     </tr>`;
   }).join('');
 
@@ -2497,6 +2902,18 @@ function paramsMessage(e) {
    survives the 2 s patch until the next write. */
 let paramsErr = null;
 
+/* Die Scope-Zelle trägt links den Knoten-Streifen (#131): in der Flottenkarte
+   steht er am Kartenrand, hier im Textfluss vor dem Namen. Beide Zeilenarten
+   bekommen denselben 6-px-Platz — eine Knotenzeile den Streifen, `global`,
+   `placement`, `affinity` & Co. einen leeren Slot gleicher Breite. Ohne den
+   leeren Slot würde der Text der Nicht-Knoten-Zeilen um genau diese Breite
+   springen, und die Spalte wäre keine Spalte mehr. Der Streifen ist
+   `aria-hidden` und trägt keinen Text: er ist eine Marke, keine Auskunft — den
+   Namen liest man daneben. */
+function paramsSlot(host) {
+  return host ? hostStripe(host) : '<i class="pslot" aria-hidden="true"></i>';
+}
+
 /* One row: scope · parameter · value in effect · origin · reset. The `data-key`
    carries the value and the origin, so the reconciler replaces a row whose
    number changed on the server and leaves a row alone while the operator is
@@ -2537,9 +2954,21 @@ function paramsRow(scope, label, value, o) {
     : '';
 
   const key = (path || String(label)) + '|' + String(o.raw) + '|' + (o.over ? 'page' : 'file');
-  return '<tr data-key="' + esc(key) + '"><td>' + esc(scope) + '</td><td>' + esc(label) +
-         '</td><td class="pv">' + cell + '</td><td class="ps">' + src +
-         '</td><td class="pr">' + reset + '</td></tr>';
+  /* `data-label` an jeder Zelle (#134): unter 700 px ist die Zeile ein Block,
+     und die Spaltenüberschrift, die den Wert erklärt hätte, ist dann weg. Jede
+     Zelle trägt ihren Bezeichner selbst — dieselben Wörter wie `thead`, aus
+     demselben Katalog, keine neuen Ids. Die Klassen (`pname`, `pv`, `ps`, `pr`)
+     sind der Griff, an dem das Block-Styling die Zeilen formt. */
+  return '<tr data-key="' + esc(key) + '">' +
+         '<td class="pscope" data-label="' + esc(t('params.th_scope')) + '">' +
+         paramsSlot(o.host) + esc(scope) + '</td>' +
+         '<td class="pname" data-label="' + esc(t('params.th_param')) + '">' +
+           (o.help ? '<span class="tip" data-tip="' + esc(o.help) + '">' + esc(label) + '</span>'
+                   : esc(label)) +
+         '</td>' +
+         '<td class="pv" data-label="' + esc(t('params.th_value')) + '">' + cell + '</td>' +
+         '<td class="ps" data-label="' + esc(t('params.th_source')) + '">' + src + '</td>' +
+         '<td class="pr" data-label="' + esc(t('params.th_reset')) + '">' + reset + '</td></tr>';
 }
 
 function paramsTableLive(c, overrides, editable) {
@@ -2547,8 +2976,18 @@ function paramsTableLive(c, overrides, editable) {
   const keyed = !!adminKey();
   const onoff = b => b ? t('common.on') : t('common.off');
   const yesno = b => b ? t('common.yes') : t('common.no');
+  /* Der erklärende Satz kommt aus dem Config-Schema (`GET /config → help`,
+     #139): dort steht er neben dem Feld, das er beschreibt, und kann beim
+     Umbenennen eines Feldes nicht still falsch werden. Host-Pfade tragen den
+     Knotennamen, die Tabelle führt sie mit `*` — deshalb die zweite Suche. */
+  const helpMap = c.help || {};
+  const helpOf = path => {
+    if (!path) return '';
+    return helpMap[path] || helpMap[String(path).replace(/^hosts\.[^.]+\./, 'hosts.*.')] || '';
+  };
   const add = (scope, label, value, opts) => {
     const o = Object.assign({keyed: keyed}, opts || {});
+    o.help = helpOf(o.path);
     /* Both derived from the two keys the server sends, never hardcoded: a row
        is a field when its path matches an `editable` pattern, and it was set at
        the page when its path is in `overrides`. */
@@ -2634,22 +3073,29 @@ function paramsTableLive(c, overrides, editable) {
   for (const host of (c.hosts || [])) {
     const hp = 'hosts.' + host.name + '.';
     const models = host.models || [];
-    add(host.name, t('params.weight'), fmtNum(host.weight) + ' → ' + pctP(host.share),
+    /* Jede Zeile dieses Knotens trägt seinen Streifen (#131) — der Datensatz
+       kommt aus der Antwort, nicht aus `{name}`: `/config` führt dieselbe
+       `node_id` wie `/healthz`, und genau daraus fällt der Platz im
+       Flottenblock. Ein selbst gebauter Knoten hätte den Namen als Schlüssel
+       und bekäme einen anderen Ton als seine Karte. */
+    const row = (label, value, opts) =>
+      add(host.name, label, value, Object.assign({host: host}, opts || {}));
+    row(t('params.weight'), fmtNum(host.weight) + ' → ' + pctP(host.share),
         {path: hp + 'weight', kind: 'num', raw: host.weight});
-    add(host.name, t('params.max'), fmtNum(host.max_inflight) + ' / ' + fmtNum(host.max_threads),
+    row(t('params.max'), fmtNum(host.max_inflight) + ' / ' + fmtNum(host.max_threads),
         {path: hp + 'max_inflight', why: restart});
-    add(host.name, t('params.spill'), fmtNum(host.spill_threshold),
+    row(t('params.spill'), fmtNum(host.spill_threshold),
         {path: hp + 'spill_threshold', kind: 'num', raw: host.spill_threshold});
-    add(host.name, t('params.hard'), fmtNum(host.hard_threshold),
+    row(t('params.hard'), fmtNum(host.hard_threshold),
         {path: hp + 'hard_threshold', why: restart});
-    add(host.name, t('params.prefer_resident'), yesno(host.prefer_resident),
+    row(t('params.prefer_resident'), yesno(host.prefer_resident),
         {path: hp + 'prefer_resident', kind: 'bool', raw: !!host.prefer_resident});
-    add(host.name, t('params.pp_rate'),
+    row(t('params.pp_rate'),
         host.pp_tps === null || host.pp_tps === undefined
           ? t('params.pp_unmeasured') : t('params.pp_cold', {v: fmtNum(host.pp_tps)}));
-    add(host.name, 'allow list', fmtNum(models.length) + ' — ' + models.join(', '),
+    row('allow list', fmtNum(models.length) + ' — ' + models.join(', '),
         {path: hp + 'models', why: restart});
-    add(host.name, t('params.api_key'), host.api_key, {path: hp + 'api_key', why: restart});
+    row(t('params.api_key'), host.api_key, {path: hp + 'api_key', why: restart});
   }
 
   const head = '<thead><tr><th>' + esc(t('params.th_scope')) + '</th><th>' + esc(t('params.th_param')) +
@@ -2669,8 +3115,20 @@ function paramsTableLive(c, overrides, editable) {
    input and no empty column. */
 function paramsTableLegacy(c) {
   const rows = [];
-  const add = (scope, k, v) =>
-    rows.push(`<tr><td>${esc(scope)}</td><td>${esc(k)}</td><td>${esc(v)}</td></tr>`);
+  /* Dieselbe Scope-Zelle wie in der Tabelle mit Feldern (#131): der leere Slot
+     steht auch hier, sonst wäre die Spalte in der einen Tabelle eine andere als
+     in der anderen. `data-label` an beiden Bezeichnerzellen wie dort (#134):
+     unter 700 px wird auch diese Liste zu Blöcken. Die Wertzelle bleibt
+     absichtlich ein nacktes `<td>`: `tests/dashboard_dom_stub.js` misst die
+     Zahlen dieser Tabelle über `<td>…</td>` (deutsch/englisch dieselben Werte),
+     und das Stub gehört nicht zu diesem Issue. Im Block erkennt das Styling sie
+     als `td:last-child:not(.pr)` — sie ist die einzige Zelle hinter den zwei
+     Bezeichnern. */
+  const add = (scope, k, v, host) =>
+    rows.push(`<tr><td class="pscope" data-label="${esc(t('params.th_scope'))}">` +
+              `${paramsSlot(host)}${esc(scope)}</td>` +
+              `<td class="pname" data-label="${esc(t('params.th_param'))}">${esc(k)}</td>` +
+              `<td>${esc(v)}</td></tr>`);
   const onoff = b => b ? t('common.on') : t('common.off');
   const yesno = b => b ? t('common.yes') : t('common.no');
 
@@ -2719,16 +3177,16 @@ function paramsTableLegacy(c) {
   add('proxy', 'connect timeout', fmtNum(x.connect_timeout_seconds) + ' s');
 
   for (const host of (c.hosts || [])) {
-    add(host.name, esc(t('params.weight')), fmtNum(host.weight) + ' → ' + pctP(host.share));
-    add(host.name, esc(t('params.max')), fmtNum(host.max_inflight) + ' / ' + fmtNum(host.max_threads));
-    add(host.name, esc(t('params.spill')), fmtNum(host.spill_threshold));
-    add(host.name, esc(t('params.hard')), fmtNum(host.hard_threshold));
-    add(host.name, esc(t('params.prefer_resident')), esc(yesno(host.prefer_resident)));
+    add(host.name, esc(t('params.weight')), fmtNum(host.weight) + ' → ' + pctP(host.share), host);
+    add(host.name, esc(t('params.max')), fmtNum(host.max_inflight) + ' / ' + fmtNum(host.max_threads), host);
+    add(host.name, esc(t('params.spill')), fmtNum(host.spill_threshold), host);
+    add(host.name, esc(t('params.hard')), fmtNum(host.hard_threshold), host);
+    add(host.name, esc(t('params.prefer_resident')), esc(yesno(host.prefer_resident)), host);
     add(host.name, esc(t('params.pp_rate')),
         host.pp_tps === null || host.pp_tps === undefined
-          ? esc(t('params.pp_unmeasured')) : esc(t('params.pp_cold', {v: fmtNum(host.pp_tps)})));
-    add(host.name, esc(t('params.allow_list')), fmtNum(host.models.length) + ' — ' + host.models.join(', '));
-    add(host.name, esc(t('params.api_key')), host.api_key);
+          ? esc(t('params.pp_unmeasured')) : esc(t('params.pp_cold', {v: fmtNum(host.pp_tps)})), host);
+    add(host.name, esc(t('params.allow_list')), fmtNum(host.models.length) + ' — ' + host.models.join(', '), host);
+    add(host.name, esc(t('params.api_key')), host.api_key, host);
   }
 
   return '<table><thead><tr><th>' + esc(t('params.th_scope')) + '</th><th>' + esc(t('params.th_param')) +
@@ -3328,42 +3786,76 @@ const lockSvg = locked =>
    geladen“ — die Kopie, die eine Verweigerung auslösen kann. */
 const lockHosts = m => (m.hosts || []).filter(x => x.lock).map(x => x.host).sort();
 
-/* Sperrbar ist nur, was RIPPLE auch anspricht: ein Modell mit `dispatch: false`
-   auf **jedem** Knoten (MarkItDown, Tokenizer, Drafter — resident, aber in
-   keiner Allow-List) bekommt nie eine Anfrage, also kann eine Sperre darauf nie
-   etwas verweigern. Der Knopf fehlt dann ganz statt in eine 409-Meldung zu
-   führen: ein Knopf, der nur eine Absage erzeugt, ist eine Sackgasse. Ein
-   bereits gespeichertes Schloss wird dadurch ebenfalls nicht mehr gezeichnet —
-   der Backend-Refusal sagt dazu nichts Falsches (`lock_reason: null`), und
-   `DELETE` bleibt möglich, damit eine alte Sperre nicht festsitzt. */
-const lockable = m => (m.hosts || []).some(x => x.dispatch !== false);
+/* Der dritte Zustand (issue #126): gesperrt, aber auf keinem Host resident
+   machbar. Die Aussage kommt aus der Admin-Sicht — `feasible === false` heißt
+   „mindestens ein Host bietet das Modell an und **keiner** kann es aufnehmen“.
+   `feasible === null` ist etwas anderes: kein Host bietet es an, der Lock ist
+   dann nicht falsch, nur gegenstandslos — und das Schloss bleibt still, wie
+   bisher. Ein oMLX-Builtin hat keinen Betreiber-Zustand und warnt nie. */
+const lockWarn = m => !m.builtin && !!m.lock && m.feasible === false;
+
+/* Sperrbar ist **jedes** Modell (issue #118): Sperrbarkeit ist eine Eigenschaft
+   des Modells, nicht seiner Routbarkeit. Der Lock sagt, was passiert, *wenn* ein
+   Modell resident ist — also muss er auf einem kalten Modell setzbar sein, auf
+   einem, das die Allow-List nicht durchlässt, und auf einem, das noch kein
+   Knoten listet (frischer oMLX-Start). #28 verweigerte solche Schreibvorgänge,
+   weil eine Sperre dort nichts verweigern könne; das war die falsche Frage.
+   Die eine Ausnahme ist kein Modell, sondern ein oMLX-Builtin (MarkItDown,
+   `builtin: true` aus `/healthz`): immer gesperrt, nicht aufhebbar. Sein Schloss
+   ist abgeschaltet und sagt im Tooltip warum, statt in eine 409 zu führen. */
 
 /* Zustand, Wirkung und Quelle in einem Satz — dieselbe Regel wie bei jeder
    Kennzahl: die Farbe verstärkt die Aussage, sie trägt sie nicht allein. */
 const lockTip = (m, keyed) => {
+  /* Ein Builtin hat keinen Betreiber-Zustand: „offen" wäre dort eine Aussage,
+     die es nicht gibt. Der Tooltip nennt deshalb nur, was es ist — mit
+     derselben Quellenzeile wie jeder andere Tip der Seite, hier `builtin`
+     statt `lock`: der Zustand ist abgeleitet, nicht gespeichert (#118). */
+  if (m.builtin) return tipBody(['lock']) + '\n' +
+    t('lock.builtin_tip', {model: m.id}) + '  ' +
+    t('common.source') + ': /healthz → models[].builtin';
   const locked = !!m.lock;
   const here = lockHosts(m);
+  const warn = lockWarn(m);
+  /* Der Warnsatz nennt Host und Grund aus der Admin-Sicht (#126) — und nur,
+     was die Antwort wirklich trägt: fehlt einer der beiden, gibt es keinen
+     halben Satz. Der kurze Zustand `lock.warn` steht in der Zustandszeile. */
+  const at = warn && m.feasible_host ? String(m.feasible_host) : '';
+  const why = warn && m.feasible_reason ? String(m.feasible_reason) : '';
   return tipBody(['lock']) + '\n' +
-    t('lock.state', {state: locked ? t('lock.closed') : t('lock.open')}) +
+    t('lock.state', {state: locked ? (warn ? t('lock.warn') : t('lock.closed')) : t('lock.open')}) +
     (locked
       ? (m.lock_reason
           ? t('lock.in_effect', {hosts: here.join(', ') || t('lock.nohost')})
           : t('lock.nowhere'))
       : t('lock.may_evict')) +
+    (at && why ? '\n' + t('lock.warn_tip', {host: at, reason: why}) + '  ' +
+      t('common.source') + ': /admin/models → models[].feasible' : '') +
     (keyed ? '' : t('lock.no_key', {help: keyHelp()}));
 };
 
 /* Der Knopf ist ohne Schlüssel sichtbar, aber wirkungslos. `aria-disabled`
    statt `disabled`: ein abgeschaltetes Formularelement bekommt keine
    Zeigerereignisse, dann käme der Tooltip nicht — und der nennt genau den
-   Grund. Der Klick prüft den Schlüssel selbst und tut sonst nichts. */
+   Grund. Der Klick prüft den Schlüssel selbst und tut sonst nichts; beim
+   Builtin prüft er `data-builtin` und schreibt gar nicht erst. */
 function lockButton(m, keyed) {
-  const locked = !!m.lock;
+  const builtin = !!m.builtin;
+  const locked = builtin || !!m.lock;
+  const warn = lockWarn(m);
+  const inert = builtin || !keyed;
   return '<button type="button" class="model-lock tip" data-model="' + esc(m.id) + '"' +
     ' data-locked="' + (locked ? '1' : '0') + '"' +
+    (builtin ? ' data-builtin="1"' : '') +
+    /* Der dritte Zustand ist ein Attribut, keine Klasse (#126): `data-warn`
+       steht nur, wenn er gilt, und das Stylesheet hängt Kontur und
+       Ausrufezeichen daran — der Zustand überlebt also auch den Graustufen-
+       Blick. Die Farbe verstärkt ihn, sie trägt ihn nicht. */
+    (warn ? ' data-warn="1"' : '') +
     ' data-tip="' + esc(lockTip(m, keyed)) + '"' +
-    ' aria-disabled="' + (keyed ? 'false' : 'true') + '"' +
-    ' aria-label="' + esc(t('lock.aria', {model: m.id, state: locked ? t('lock.closed') : t('lock.open')})) + '"' +
+    ' aria-disabled="' + (inert ? 'true' : 'false') + '"' +
+    ' aria-label="' + esc(t('lock.aria', {model: m.id,
+      state: warn ? t('lock.warn') : (locked ? t('lock.closed') : t('lock.open'))})) + '"' +
     /* Der `title` der Zelle gilt sonst auch für das Schloss — zwei Tooltips
        übereinander. Ein leerer `title` schaltet den geerbten ab. */
     ' title="" onclick="modelLock(this)">' + lockSvg(locked) + '</button>';
@@ -3380,11 +3872,19 @@ const lockLine = (res, model) => {
   const row = ((res && res.models) || []).find(r => r.id === model);
   if (!row) return t('lock.saved');
   const here = (row.hosts || []).filter(x => x.lock).map(x => x.host);
+  /* Der Lock ist gespeichert, wirkt aber nicht (#126): `feasible === false`
+     heißt, kein Host kann das Modell aufnehmen. Die Notiz sagt das mit dem
+     Grund aus derselben Antwort, statt den Betreiber bis zum nächsten Preload
+     warten zu lassen. Fehlt der Grund, steht der Strich, den die Seite für
+     einen fehlenden Wert setzt — kein erfundener Satz. */
+  const warn = row.lock && row.feasible === false;
   return (row.lock ? t('lock.locked') : t('lock.free')) +
     (row.lock
       ? (here.length ? t('lock.resident', {hosts: here.join(', ')}) : t('lock.not_loaded'))
       : t('lock.evict_again')) +
-    (row.listed ? ' · ' + t('policy.in_models') : '');
+    (row.listed ? ' · ' + t('policy.in_models') : '') +
+    (warn ? ' · ' + t('lock.warn_saved', {model: model,
+      reason: row.feasible_reason || '—'}) : '');
 };
 
 /* Der Zustand aus der Antwort lokal nachziehen, damit das Schloss sofort kippt
@@ -3397,9 +3897,84 @@ function applyLockView(view, model) {
   if (!row || !m) return;
   m.lock = !!row.lock;
   m.lock_reason = row.lock_reason === undefined ? null : row.lock_reason;
+  if (row.builtin !== undefined) m.builtin = !!row.builtin;
+  /* Die Machbarkeit kommt aus derselben Antwort (#126): beide Schreib-Endpunkte
+     liefern `_models_lock_view()`, also dieselben drei Felder wie das Lesen. */
+  if (row.feasible !== undefined) m.feasible = row.feasible;
+  if (row.feasible_reason !== undefined) m.feasible_reason = row.feasible_reason;
+  if (row.feasible_host !== undefined) m.feasible_host = row.feasible_host;
+  /* Die Antwort ist die frischeste Sicht, die die Seite hat: sie wandert in den
+     Zwischenspeicher, damit der nächste /healthz-Tick den Warnzustand nicht
+     wieder ausradiert (#126). */
+  rememberFeasibility(view.models);
   const byHost = new Map((row.hosts || []).map(x => [x.host, !!x.lock]));
   (m.hosts || []).forEach(x => { if (byHost.has(x.host)) x.lock = byHost.get(x.host); });
   apply('models', renderModels(last.h));
+}
+
+/* Die Machbarkeit ist keine /healthz-Angabe: sie steht nur in der Admin-Sicht
+   (`GET /admin/models`). Der 2-s-Takt ersetzt `last.h` durch einen frischen
+   /healthz-Abzug — ohne diesen Zwischenspeicher wäre der Warnzustand zwei
+   Sekunden nach dem Start wieder weg. Gelesen wird beim Start und mit der
+   Antwort jedes Klicks; ändert sich der Speicher dazwischen, zeigt sich das mit
+   dem nächsten Klick oder einem Reload, nicht mit einer Anfrage alle zwei
+   Sekunden (der Takt bleibt bei seinen drei Endpunkten). */
+const feasibleById = new Map();
+
+function rememberFeasibility(rows) {
+  (rows || []).forEach(r => {
+    if (r.feasible === undefined) return;      // eine ältere Antwort sagt nichts
+    feasibleById.set(r.id, {
+      feasible: r.feasible,
+      feasible_reason: r.feasible_reason === undefined ? null : r.feasible_reason,
+      feasible_host: r.feasible_host === undefined ? null : r.feasible_host,
+    });
+  });
+}
+
+function mergeFeasibility(h) {
+  ((h && h.models) || []).forEach(m => {
+    const r = feasibleById.get(m.id);
+    if (!r) return;
+    m.feasible = r.feasible;
+    m.feasible_reason = r.feasible_reason;
+    m.feasible_host = r.feasible_host;
+  });
+  return h;
+}
+
+/* Die Machbarkeit **vor** dem Klick (#126): ein Lock auf ein Modell, das
+   nirgends mehr Platz hat, ist gespeichert und trotzdem wirkungslos — ohne
+   diese Zeile merkt der Betreiber das erst beim nächsten Preload. `GET
+   /admin/models` trägt je Modell `feasible`, `feasible_reason` und
+   `feasible_host`; die Seite legt genau diese drei an die Zeilen, die sie
+   schon zeigt, und zeichnet die Tabelle neu. Alles andere bleibt /healthz. */
+function applyFeasibility(view) {
+  if (!last || !view) return;
+  rememberFeasibility(view.models);
+  mergeFeasibility(last.h);
+  apply('models', renderModels(last.h));
+}
+
+/* Einmal beim Start, und nur mit Schlüssel: ohne Schlüssel antwortet die Route
+   403, und eine Anfrage, deren Antwort feststeht, ist keine Messung. Der
+   2-s-Takt bleibt bei seinen drei Endpunkten — die Machbarkeit ändert sich mit
+   dem Speicher, nicht mit der Sekunde. Nach einem Klick zieht `applyLockView`
+   sie aus der Antwort des Schreibens nach. */
+async function loadFeasibility() {
+  if (!adminKey() || !last) return;
+  try {
+    applyFeasibility(await adminApi('GET', '/admin/models'));
+    /* Dieselbe Antwort beantwortet die Frage des Chips (#130): der Schlüssel
+       im Tab ist gültig, der Tab ist Admin. */
+    adminBooted(true);
+  } catch (e) {
+    /* Nicht gelesen heißt unbekannt, nicht „machbar": die Zeilen behalten
+       `feasible: null`, und das Schloss bleibt still, statt eine Warnung zu
+       behaupten, die niemand gesehen hat. Und der Chip behauptet keinen Admin:
+       ein Schlüssel, der hier scheitert, wird gelöscht. */
+    adminBooted(false);
+  }
 }
 
 /* Derselbe Weg wie bei Policy, Wartung und Kalibrierung: Schlüssel prüfen,
@@ -3408,6 +3983,10 @@ function applyLockView(view, model) {
    kostet genau einen Request: POST zum Sperren, DELETE zum Aufheben. */
 async function modelLock(btn) {
   const model = btn.getAttribute('data-model') || '';
+  /* Ein oMLX-Builtin wird gar nicht erst geschrieben (issue #118): das Backend
+     verweigert beide Richtungen mit 409 `lock_builtin`, und ein Klick, der nur
+     eine Absage erzeugen kann, ist eine Sackgasse. Der Tooltip sagt warum. */
+  if (btn.getAttribute('data-builtin') === '1') return;
   const locked = btn.getAttribute('data-locked') === '1';
   if (!adminKey()) return;                      // sichtbar, aber wirkungslos
   const ask = locked
@@ -4291,6 +4870,22 @@ document.addEventListener('click', ev => {
   if (row) setDim(!showDim);
 });
 
+/* ── The update offer (issue #123) ────────────────────────────────────────── */
+/* The proxy asks the public GitHub releases API once at start-up and reports
+   the answer in `/healthz` → `update`. The page only draws it — and only for
+   `newer`: `current` (including a local build *ahead* of the last release),
+   `unknown` (no network, a timeout, a 404) and `disabled` (the config switch)
+   return the empty string, so the header never grows a line because a hint
+   failed. The command is a literal, not a catalog entry — a command is not
+   translated — the sentence around it is. */
+function renderUpdate(h) {
+  const u = (h && h.update) || {};
+  if (u.state !== 'newer' || !u.latest) return '';
+  const href = u.url ? ' href="' + esc(u.url) + '" target="_blank" rel="noopener"' : '';
+  return '<a class="update-link"' + href + ' data-tip="' + esc(t('update.tip')) + '">' +
+    esc(t('update.available', {v: u.latest})) + ' <code>ripple update</code></a>';
+}
+
 /* ── Ein Tick ─────────────────────────────────────────────────────────────── */
 function render(h, s, c) {
   rememberCapability(c);
@@ -4321,6 +4916,10 @@ function render(h, s, c) {
      das es nicht mehr gibt. */
   if (tipOwner && !tipOwner.isConnected) tipHide();
   apply('snapTime', T('taken', esc(clock(new Date()))));
+  /* The update offer (issue #123): the header line, or nothing. It hangs on the
+     same tick as everything else, so a language switch redraws it without a
+     reload and an answer that arrives late appears within 2 s. */
+  apply('updateHint', renderUpdate(h));
   /* Die Herkunft der Zahlen („Live-Abzug von /healthz und /stats") steht als
      Tooltip an der Uhr statt als eigene Zeile im Kopf (#57). Jeder Tick setzt
      sie neu, damit ein Sprachwechsel ohne Reload mitgeht. */
@@ -4344,6 +4943,10 @@ async function tick() {
       fetch('/config').then(r => r.json()),
     ]);
     last = {h, s, c};
+    /* Der /healthz-Abzug trägt die Machbarkeit nicht (#126): sie kommt aus der
+       zuletzt gelesenen Admin-Sicht und wird hier an die neuen Zeilen gelegt,
+       damit der Warnzustand den 2-s-Takt überlebt. */
+    mergeFeasibility(h);
     render(h, s, c);
     /* Eine Änderung an der Policy ist der eine Moment, in dem die Admin-Sicht
        der Regeln veraltet ist: einmal nachlesen, im ersten Tick danach. Ohne
@@ -4377,6 +4980,10 @@ const ready = (async () => {
      `Flotte`. */
   applyHash();
   await tick();
+  /* Der Warnzustand am Schloss muss vor dem ersten Klick da sein (#126): die
+     Machbarkeit steht nur in der Admin-Sicht, nicht in /healthz. Einmal, mit
+     Schlüssel, nach dem ersten Tick — ohne Schlüssel kostet sie keinen Request. */
+  await loadFeasibility();
   startTick();
   /* Der 1-s-Takt der Fristen lebt neben dem 2-s-Patch: er schreibt nur den Text
      der `data-deadline`-Elemente und rendert keinen Block neu (#34). */
@@ -4393,6 +5000,9 @@ globalThis.RIPPLE = {
   logShortSid, logMatch, logSetFilter, fillLogFilters,
   get logFilter() { return logFilter; },
   renderParams, renderLegend, renderBanners, render, tick, apply, setDim,
+  /* The update offer (#123): the one string builder, measured against a payload
+     in both languages instead of being eyeballed in a browser. */
+  renderUpdate,
   /* Der Parameterblock (#78): die zwei Tabellen (mit und ohne `editable`), die
      Pfadprüfung, das Lesen eines getippten Werts und die drei Aufrufe, die eine
      Zeile auslöst — der Test misst Payload und URL, nicht die Absicht. */
@@ -4414,7 +5024,8 @@ globalThis.RIPPLE = {
   relLoad,
   maintControl, maintenance, maintenanceClear, maintLine,
   policyControl, modelPolicy, policyLine, policyPath,
-  lockButton, lockTip, lockPath, lockLine, modelLock,
+  lockButton, lockTip, lockPath, lockLine, modelLock, lockWarn,
+  applyFeasibility, loadFeasibility,
   renderPolicyPanel, loadPolicyOrphans, policyOrphanRow,
   renderReplication, replicationCheck, replicationStart, replicationCancel,
   replState,
@@ -4458,5 +5069,11 @@ globalThis.RIPPLE = {
   anchorClock, pageNow, deadlineText, paintDeadlines, startDeadlines,
   countdown, countdownMin,
   get clockOffset() { return clockOffset; },
+  /* Der Admin-Modus im Masthead (#130): der Chip, das eine Feld, die
+     Verifikation vor der Anzeige und der Abmeldeweg — der Test fährt die
+     Zustände durch die echten Funktionen und misst, was im Storage landet. */
+  adminPaint, adminOpen, adminToggle, adminSubmit, adminSignOut, adminBooted,
+  adminSay, adminIsOpen,
+  get adminState() { return adminState; },
   ready,
 };

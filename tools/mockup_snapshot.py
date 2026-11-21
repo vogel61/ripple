@@ -43,11 +43,12 @@ Usage:
         --out /tmp/dashboard-mockup.html
 
 `--manual-crops` needs no configuration: it starts its own throwaway instance
-from a generated file and answers `/healthz`, `/stats` and `/config` through a
-fetch shim (`tools/mockup_fleet.py`), so the pictures show a documented test
-fleet and not this machine. The regions are the named list `CROPS` below, each
-one measured from the rendered DOM — a picture whose rectangle nobody can find
-in the code is the next drift.
+from a generated file and answers `/healthz`, `/stats`, `/config` and the admin
+calls the tabs make — including `GET /admin/models`, which carries the lock's
+feasibility (issue #126) — through a fetch shim (`tools/mockup_fleet.py`), so the
+pictures show a documented test fleet and not this machine. The regions are the
+named list `CROPS` below, each one measured from the rendered DOM — a picture
+whose rectangle nobody can find in the code is the next drift.
 
 Why a tool and not a hand-made page: the page keeps changing (three layout
 decisions landed within a day of this file being written), so a hand-maintained
@@ -622,10 +623,10 @@ def screenshot(cdp: CDP, base: str, out: Path, width: int, height: int,
 # is what makes the 11 px labels of the card readable in the manual.
 DEMO_CONFIG = """\
 # Throwaway configuration for the pictures (issue #104). The fleet in the
-# pictures does not come from here: `tools/mockup_fleet.py` answers
-# /healthz, /stats and /config through a fetch shim. This file only has to let
-# an instance start on a free port — the addresses point at a closed port so
-# start-up does not wait for a timeout.
+# pictures does not come from here: `tools/mockup_fleet.py` answers /healthz,
+# /stats, /config and the admin calls (incl. /admin/models) through a fetch
+# shim. This file only has to let an instance start on a free port — the
+# addresses point at a closed port so start-up does not wait for a timeout.
 listen_host: 127.0.0.1
 listen_port: {port}
 log_level: warning
@@ -684,6 +685,14 @@ class Crop:
     pad: int = 12             # detail crops: breathing room around the element
     lang: str = ""            # "" = --lang
     fixed: bool = False       # element is position:fixed — viewport coords, no scroll
+    # Whether the picture shows the tab in admin mode (`True`: the demo key is in
+    # `sessionStorage`, the chip says `admin`, the operator blocks draw live) or
+    # in the state a fresh tab has (`False`: nothing in the storage, the chip
+    # says `read-only`, the write controls are inert). It is a field because the
+    # pictures disagreed with each other while it was an implicit default: the
+    # crops were always admin, the README picture never was, and nothing said
+    # which was which. The manifest prints this per file.
+    admin: bool = True
 
 
 def _open_ops() -> str:
@@ -710,6 +719,23 @@ def _ops_maintenance() -> str:
     return ("(async () => { const d = document.querySelector('#ops');"
             " if (d) d.open = true;"
             " await RIPPLE.maintenance('node-b', 30); return true; })()")
+
+
+def _open_params() -> str:
+    """Open Operations and scroll to the parameter table (§5.5, block 6.5).
+
+    The table lives in the block that carries `#params`, inside the collapsed
+    `<details id="ops">`; without opening it there is nothing to photograph. The
+    scroll is part of the setup because the block sits at the bottom of a long
+    tab — `measure()` scrolls the element into view as well, but a picture that
+    depends on the scroll *after* the setup has run would be a picture of
+    whatever was on screen when the timer fired.
+    """
+    return ("(() => { const d = document.querySelector('#ops');"
+            " if (d) d.open = true;"
+            " const p = document.querySelector('.ops-block:has(#params)');"
+            " if (!p) return false;"
+            " p.scrollIntoView({block: 'center'}); return true; })()")
 
 
 def _scan() -> str:
@@ -784,6 +810,17 @@ CROPS: tuple[Crop, ...] = (
     Crop("manual-ops", "ops", "the Operations tab with a maintenance window set",
          mode="full", setup=_ops_maintenance()),
 
+    # Block 6.5 alone, at 2x: the parameter table, one row per setting, from
+    # `/config`. The whole block (`:has()` finds the one that carries the table),
+    # not the first screenful: the table puts `global`/`placement`/`affinity`/
+    # `discovery`/`proxy` first and the per-node rows last, and the statement of
+    # #131 — a node row carries the 6 px stripe, `global` carries an empty slot
+    # of the same width — is only visible with both kinds in the picture. No
+    # row is hidden by CSS to make it shorter; a table that is too tall is a
+    # table, not a lie.
+    Crop("manual-params", "ops", "the parameter table: node stripes, global rows",
+         selector=".ops-block:has(#params)", pad=14, setup=_open_params()),
+
     # Block 6.6 alone, at 2x: the restart control and the reasons it can be off.
     # The crop is the whole block (`:has()` finds the one that carries the
     # panel), because the heading "6.6 Restart" is part of what the manual says
@@ -813,9 +850,11 @@ CROPS: tuple[Crop, ...] = (
 
     # The key page: four keys, masks only, one disabled. Its own page, its own
     # height — the table is ~430 px tall and a 1000 px picture would be half
-    # empty.
+    # empty. `admin=False`: this is the page where the key is *typed*, so the
+    # picture shows the tab as it arrives, with nothing in `sessionStorage` (the
+    # shim answers `/admin/keys` anyway, so the table still has its rows).
     Crop("manual-keys", "keys", "the key page (/keys)",
-         mode="full", height=500, setup="(() => load())()"),
+         mode="full", height=500, admin=False, setup="(() => load())()"),
 
     # The four pictures the install guides carry: the same two tabs, in English
     # and in German. They exist so install.md and install-de.md show the same
@@ -839,7 +878,8 @@ def write_demo_config(scratch: Path, port: int) -> Path:
 
 
 def install_shim(cdp: CDP, now: float | None = None) -> None:
-    """Answer the page's `/healthz`, `/stats` and `/config` from the test fleet.
+    """Answer the page's endpoints (`/healthz`, `/stats`, `/config`, admin) from
+    the test fleet.
 
     `Page.addScriptToEvaluateOnNewDocument` runs before any page script on every
     navigation, so `dashboard.js` never sees the instance's own (empty) fleet and
@@ -934,8 +974,14 @@ def capture_crops(cdp: CDP, base: str, outdir: Path, *, width: int, height: int,
         cdp.call("Page.navigate", url=url)
         _wait_ready(cdp, "document.readyState === 'complete'")
         cdp.eval("localStorage.setItem('ripple_lang', %s);" % json.dumps(crop_lang))
-        key = admin_key or DEMO_ADMIN_KEY
-        cdp.eval("sessionStorage.setItem('ripple_admin', %s);" % json.dumps(key))
+        # The storage is the tab's, and it survives a navigation: a picture that
+        # wants the un-keyed state has to *remove* the key, not just not set it,
+        # or it would inherit the previous crop's.
+        if crop.admin:
+            key = admin_key or DEMO_ADMIN_KEY
+            cdp.eval("sessionStorage.setItem('ripple_admin', %s);" % json.dumps(key))
+        else:
+            cdp.eval("sessionStorage.removeItem('ripple_admin');")
         cdp.call("Page.reload", ignoreCache=True)
         _wait_ready(cdp, "document.readyState === 'complete'")
         if crop.tab != "keys":
@@ -969,7 +1015,8 @@ def capture_crops(cdp: CDP, base: str, outdir: Path, *, width: int, height: int,
                              % (crop.name, size))
         print("%-26s %4d x %-4d %7d B  %s" % (crop.name, w, h, size, crop.what))
         written.append({"name": crop.name + ".png", "w": w, "h": h, "bytes": size,
-                        "what": crop.what, "clip": clip})
+                        "what": crop.what, "clip": clip,
+                        "state": "admin" if crop.admin else "read-only"})
     return written
 
 
@@ -1000,13 +1047,21 @@ def write_manifest(path: Path, *, command: str, commit: str, dirty: bool,
         "| **Date** | %s |" % date,
         "| **Files** | %d |" % len(rows),
         "",
-        "| file | pixels | bytes | shows |",
-        "|---|---|---|---|",
+        "| file | pixels | bytes | shows | state |",
+        "|---|---|---|---|---|",
     ]
     for row in sorted(rows, key=lambda r: r["name"]):
-        lines.append("| `%s` | %d × %d | %d | %s |"
-                     % (row["name"], row["w"], row["h"], row["bytes"], row["what"]))
+        lines.append("| `%s` | %d × %d | %d | %s | %s |"
+                     % (row["name"], row["w"], row["h"], row["bytes"], row["what"],
+                        row.get("state", "admin")))
     lines += [
+        "",
+        "`state` is the tab's admin mode in that picture. `admin` means the demo",
+        "key was in `sessionStorage` when it was taken, so the masthead chip says",
+        "`admin` and the operator blocks drew live; `read-only` is the state a",
+        "fresh tab has — the chip says `read-only` and the write controls are",
+        "inert. Most pictures are `admin` because they are about the operator",
+        "blocks; the README picture and `/keys` are not.",
         "",
         "Detail crops are clipped from the rectangle of the panel they show",
         "(`getBoundingClientRect`, plus a few pixels of air) and rendered at 2×;",
@@ -1021,16 +1076,19 @@ def write_manifest(path: Path, *, command: str, commit: str, dirty: bool,
 def repo_commit() -> tuple[str, bool]:
     """`git rev-parse --short HEAD` and whether the tree is dirty.
 
-    The pictures this run writes are excluded from the dirtiness check: a run
-    that only differs from `HEAD` in `docs/images/` is exactly the run that is
-    supposed to produce them, and calling that tree dirty would put a warning on
-    every honest manifest.
+    The files this run writes are excluded from the dirtiness check: a run that
+    only differs from `HEAD` in `docs/images/` — or in `docs/dashboard-mockup.html`,
+    which the same run writes — is exactly the run that is supposed to produce
+    them, and calling that tree dirty would put a warning on every honest
+    manifest. (It did: every manifest before this one said "dirty tree", because
+    the snapshot was already written when the manifest was assembled.)
     """
     try:
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(REPO),
                                 capture_output=True, text=True, check=True).stdout.strip()
         status = subprocess.run(
-            ["git", "status", "--porcelain", "--", ".", ":(exclude)docs/images"],
+            ["git", "status", "--porcelain", "--", ".",
+             ":(exclude)docs/images", ":(exclude)docs/dashboard-mockup.html"],
             cwd=str(REPO), capture_output=True, text=True, check=True).stdout
         return commit, bool(status.strip())
     except (OSError, subprocess.CalledProcessError):
@@ -1096,7 +1154,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="device pixel ratio for --screenshot (default 2)")
     ap.add_argument("--manual-crops", action="store_true",
                     help="also write every picture of docs/images/ (the manual's "
-                         "15 crops, the install guides' 4 views) from the test "
+                         "16 crops, the install guides' 4 views) from the test "
                          "fleet in tools/mockup_fleet.py")
     ap.add_argument("--crop-out", type=Path, default=REPO / "docs" / "images",
                     help="directory for --manual-crops (default docs/images)")
@@ -1154,6 +1212,15 @@ def main(argv: list[str] | None = None) -> int:
         build = health.get("build") or {}
         commit = build.get("commit") or "unknown"
         dirty = bool(build.get("dirty"))
+        if not args.url:
+            # Der Instance-Prozess läuft in diesem Arbeitsbaum, und dieser Lauf
+            # schreibt `docs/images/` und diese HTML-Datei hinein: sein `dirty`
+            # meldet also unsere eigenen Ausgaben als bearbeiteten Baum (jeder
+            # Kopf sagte „dirty tree", obwohl nur die Bilder neu waren). Die
+            # Prüfung des Werkzeugs selbst lässt genau diese zwei Pfade aus und
+            # ist hier die ehrliche Antwort. Bei `--url` bleibt die fremde
+            # Instanz die Quelle — deren Baum können wir nicht sehen.
+            dirty = repo_commit()[1]
 
         chrome_proc, ws_url = launch_chrome(find_chrome(args.chrome), scratch / "chrome")
         cdp = CDP(ws_url)
@@ -1208,7 +1275,8 @@ def main(argv: list[str] | None = None) -> int:
             w, h = png_size(args.screenshot)
             rows.append({"name": args.screenshot.name, "w": w, "h": h,
                          "bytes": args.screenshot.stat().st_size,
-                         "what": "the Fleet tab, full height (the README picture)"})
+                         "what": "the Fleet tab, full height (the README picture)",
+                         "state": "admin" if args.admin_key else "read-only"})
         if args.manual_crops:
             rows += capture_crops(cdp, base, args.crop_out, width=args.width,
                                   height=args.height, lang=args.lang,
