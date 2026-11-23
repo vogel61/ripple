@@ -38,6 +38,8 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import yaml
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -45,7 +47,8 @@ import httpx
 
 from . import __version__
 from .backends import Backend, Health, OmlxBackend, OpenAICompatibleBackend
-from .config import Config, ConfigError, HostConfig, load_config
+from .config import (Config, ConfigError, HostConfig, default_config_path,
+                     empty_env_warning, load_config)
 from .hosts import ordered_addresses
 from .keys import KeyStore, KeyStoreError
 from .sites import is_local_address, network_summary
@@ -285,6 +288,110 @@ def _check_config(path: str) -> Tuple[Check, Optional[Config]]:
                  {"path": path, "hosts": hosts}), cfg
 
 
+def _env_checks(cfg: Config) -> List[Check]:
+    """One line per `${VAR}` that expanded to nothing (issue #153).
+
+    `_check_config` folds every warning into a single line — "warning: <first>
+    (+N more)" — and the empty key is the one warning that must not be folded:
+    the operator has to read "the variable is empty" before they read the 401
+    from every node. Same sentence `load_config` appends, by construction; the
+    field and the variable are named, the value never.
+    """
+    return [Check("config env", WARN, empty_env_warning(where, name))
+            for where, name in cfg.empty_env]
+
+
+def _check_secrets(cfg: Config) -> Check:
+    """Is this `config.yaml` safe to paste into a forum? (issue #179)
+
+    The configuration is the file an operator sends along when `ripple --check`
+    complains — and a literal credential inside it travels with the message.
+    `ripple init` writes references into a 0600 secret file instead; a literal
+    that is still there is an older file, and this check says which fields.
+    """
+    # The file as written, not the loaded configuration: `load_config` resolves
+    # the `*_file` references, so the resolved values would look like literals.
+    try:
+        raw = yaml.safe_load(Path(cfg.source).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        return Check("secrets", SKIP, f"cannot read the file as written: {exc}")
+    if not isinstance(raw, dict):
+        return Check("secrets", SKIP, "the file is not a mapping")
+
+    literal: list[str] = []
+    defaults = raw.get("defaults") or {}
+    if isinstance(defaults, dict) and defaults.get("api_key"):
+        literal.append("defaults.api_key")
+    for section, name in (("auth", "auth.admin_key"),
+                          ("replication", "replication.admin_key")):
+        block = raw.get(section) or {}
+        if isinstance(block, dict) and block.get("admin_key"):
+            literal.append(name)
+    for host in raw.get("hosts") or []:
+        if not isinstance(host, dict):
+            continue
+        name = host.get("name", "?")
+        if host.get("api_key"):
+            literal.append(f"hosts[{name}].api_key")
+        rep = host.get("replication") or {}
+        if isinstance(rep, dict) and rep.get("api_key"):
+            literal.append(f"hosts[{name}].replication.api_key")
+    if not literal:
+        return Check("secrets", OK,
+                     "no credential in this file — it can be pasted as it is; "
+                     "the keys are named by `*_key_file` references")
+    return Check(
+        "secrets", WARN,
+        f"this file carries {len(literal)} credential(s) in plain text "
+        f"({', '.join(literal[:3])}{' …' if len(literal) > 3 else ''}) — "
+        f"whoever receives the file receives the keys. `ripple init --force` "
+        f"writes them to ~/.ripple/secrets.yaml (mode 0600) and leaves "
+        f"references behind; it backs both files up first")
+
+
+def _check_plist(config_path: str) -> Check:
+    """Does the installed launchd job carry an oMLX key nobody needs? (issue #185)
+
+    The plist is the one place a credential used to land outside
+    `~/.ripple/secrets.yaml`: `install-service` copied the key into
+    `EnvironmentVariables`, which puts it into every backup of `~/Library`. A
+    configuration that names its key itself (`defaults.api_key_file`) does not
+    need it there — and a configuration that asks for `${OMLX_API_KEY}` does.
+    Both directions are wrong in a way the operator cannot see without this line.
+    """
+    from .service import label, needs_env_key, plist_path   # noqa: WPS433
+
+    path = plist_path(label())
+    if not path.is_file():
+        return Check("plist", SKIP,
+                     f"no launchd job installed ({path.name} does not exist); "
+                     f"`ripple -perm` installs one")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return Check("plist", SKIP, f"cannot read {path}: {exc.strerror or exc}")
+
+    carries = "OMLX_API_KEY" in text
+    wanted = needs_env_key(Path(config_path))
+    if carries and not wanted:
+        return Check(
+            "plist", WARN,
+            f"{path} carries the oMLX key in plain text, but the configuration "
+            f"names its own key (defaults.api_key_file) — every backup of "
+            f"~/Library carries a copy",
+            {"path": str(path), "next": "ripple -perm"})
+    if wanted and not carries:
+        return Check(
+            "plist", WARN,
+            f"{path} has no OMLX_API_KEY, but the configuration asks for "
+            f"${{OMLX_API_KEY}} — the job reads no model list",
+            {"path": str(path), "next": "ripple -perm"})
+    return Check("plist", OK,
+                 f"{path} — no key inside" if not carries
+                 else f"{path} — carries $OMLX_API_KEY, which the configuration asks for",
+                 {"path": str(path)})
+
+
 def _check_rebind(cfg: Config) -> Check:
     """Can `placement.rebind` price a move at all? (issue #81)
 
@@ -303,6 +410,12 @@ def _check_rebind(cfg: Config) -> Check:
     if not rebind.enabled:
         return Check("rebind", SKIP,
                      "placement.rebind.enabled is false — no move to price")
+    if len([h for h in cfg.hosts if h.enabled]) < 2:
+        # A move needs a destination (issue #176): with one node there is nowhere
+        # to move to, so a missing prefill rate is not a finding.
+        return Check("rebind", SKIP,
+                     "one enabled node — a move needs a destination, so there "
+                     "is nothing to price")
     priced, unpriced = cfg.rebind_prefill_rates()
     if priced:
         detail: Dict[str, Any] = {"priced": priced}
@@ -433,7 +546,20 @@ async def _probe_admin(probe: NodeProbe, client: httpx.AsyncClient,
     probe.admin_status = response.status_code
 
 
-def _node_checks(probes: List[NodeProbe]) -> List[Check]:
+def _sampling_admin_key(cfg: Config, host: HostConfig) -> str:
+    """The key the per-host state sampling would use for this host (issue #159).
+
+    Same resolution as `replication.endpoint_for` — the host's own
+    `replication.api_key`, otherwise `replication.admin_key` — and deliberately
+    *not* the client key this probe used. Doctor can reach `/admin/api/activity`
+    with `defaults.api_key`; the sampler cannot, which is exactly the gap the
+    admin line has to say out loud instead of reporting `OK`.
+    """
+    rep = getattr(host, "replication", None)
+    return str(getattr(rep, "api_key", "") or cfg.replication.admin_key or "")
+
+
+def _node_checks(probes: List[NodeProbe], cfg: Config) -> List[Check]:
     """Three groups, in the order of the issue: reach, identity, admin."""
     reach: List[Check] = []
     identity: List[Check] = []
@@ -505,8 +631,20 @@ def _node_checks(probes: List[NodeProbe]) -> List[Check]:
                                f"{name}: admin endpoint did not answer "
                                f"({probe.admin_error or 'no response'})"))
         elif probe.admin_status == 200:
-            admin.append(Check("admin", OK,
-                               f"{name}: admin rights (HTTP 200 on /admin/api/activity)"))
+            # The probe used the client key, the sampler reads
+            # `replication.admin_key`. Saying OK while the curves stay empty is
+            # the contradiction this line exists to avoid (issue #159).
+            if _sampling_admin_key(cfg, probe.host):
+                admin.append(Check("admin", OK,
+                                   f"{name}: admin rights (HTTP 200 on /admin/api/activity)"))
+            else:
+                admin.append(Check(
+                    "admin", WARN,
+                    f"{name}: admin rights (HTTP 200 on /admin/api/activity) with the "
+                    f"client key, but the per-host state sampling reads "
+                    f"replication.admin_key, which is unset — the state curves stay "
+                    f"empty; set it to the same oMLX key",
+                    {"host": name, "sampling_admin_key": False}))
         elif probe.admin_status in (401, 403):
             admin.append(Check("admin", WARN,
                                f"{name}: read-only, no admin rights "
@@ -848,19 +986,48 @@ async def _check_completion(client: httpx.AsyncClient, url: str,
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-async def diagnose(config_path: str, url: str, timeout: float) -> Report:
-    report = Report(config_path=config_path, url=url)
-    report.add(_check_python())
+DEFAULT_URL = "http://127.0.0.1:8010"
 
+
+def _proxy_url(cfg: Optional[Config]) -> str:
+    """The proxy to check when `--url` was not given: the one this config starts.
+
+    The port the proxy binds is `cfg.listen_port`, so an installation on 8013
+    must not be probed on 8010 — the fixed default belongs to `Config`'s own
+    default, not to doctor. A config that cannot be loaded has no port to read:
+    fall back to the default so the remaining checks still run and the config
+    line reports the failure.
+    """
+    if cfg is None:
+        return DEFAULT_URL
+    return f"http://127.0.0.1:{cfg.listen_port}"
+
+
+async def diagnose(config_path: str, url: Optional[str],
+                   timeout: float) -> Report:
     config_check, cfg = _check_config(config_path)
+    # `--url` wins; without it the URL is derived from the configuration, so
+    # the `proxy:` line names the instance that was actually checked.
+    effective_url = url if url is not None else _proxy_url(cfg)
+
+    report = Report(config_path=config_path, url=effective_url)
+    report.add(_check_python())
     report.add(config_check)
     if cfg is not None:
+        # Each empty `${VAR}` as its own line (issue #153) — before the probes,
+        # so "the variable is empty" is read before their 401.
+        for check in _env_checks(cfg):
+            report.add(check)
         # Configuration-derived, no probe needed (issue #81): does anything in
         # this fleet give a move a price at all?
         report.add(_check_rebind(cfg))
+        # …and would this file be safe to share? (issue #179)
+        report.add(_check_secrets(cfg))
+        # …and does the installed job still carry a key it no longer needs? (#185)
+        report.add(_check_plist(config_path))
 
     async with httpx.AsyncClient(timeout=timeout) as client:
-        port_check, serving = await _check_port(client, url, timeout)
+        port_check, serving = await _check_port(client, effective_url, timeout)
         report.add(port_check)
 
         store: Optional[KeyStore] = None
@@ -868,7 +1035,7 @@ async def diagnose(config_path: str, url: str, timeout: float) -> Report:
             # Concurrently: one dead node must not add its timeout to the next.
             probes = await asyncio.gather(*[_probe_host(host, client, timeout)
                                             for host in cfg.hosts])
-            for check in _node_checks(list(probes)):
+            for check in _node_checks(list(probes), cfg):
                 report.add(check)
             # The declared site against the address that actually answered
             # (issue #67) — after the probes, because the address is their fact.
@@ -887,8 +1054,9 @@ async def diagnose(config_path: str, url: str, timeout: float) -> Report:
                              "no configuration — no declared site to check"))
             report.add(Check("keys", SKIP, "no configuration — no key store path"))
 
-        report.add(await _check_dashboard(client, url, serving, timeout))
-        report.add(await _check_completion(client, url, cfg, store, serving, timeout))
+        report.add(await _check_dashboard(client, effective_url, serving, timeout))
+        report.add(await _check_completion(client, effective_url, cfg, store,
+                                           serving, timeout))
     return report
 
 
@@ -897,11 +1065,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         prog="ripple doctor",
         description="Check an installation of RIPPLE: one line per check, exit 0 "
                     "when nothing is FAIL.")
-    parser.add_argument("-c", "--config", default="config.yaml",
+    parser.add_argument("-c", "--config", default=default_config_path(),
                         help="path to the YAML configuration (default: config.yaml)")
-    parser.add_argument("--url", default="http://127.0.0.1:8010",
+    parser.add_argument("--url", default=None,
                         help="base URL of the running proxy "
-                             "(default: http://127.0.0.1:8010)")
+                             "(default: http://127.0.0.1:<listen_port> from "
+                             "the configuration)")
     parser.add_argument("--json", action="store_true",
                         help="print the report as JSON instead of lines")
     parser.add_argument("--timeout", type=float, default=10.0,

@@ -42,6 +42,7 @@ site is a host without a claim.
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from typing import Any, Sequence, Union
 from urllib.parse import urlsplit
@@ -51,6 +52,10 @@ from urllib.parse import urlsplit
 #: in `pyproject.toml`) has no `type.__or__`.
 Network = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
 Address = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
+
+#: What separates two networks in one written entry: `ripple init` offers
+#: `10.0.0.0/24, 10.0.1.0/24`, and a pasted line may use spaces instead.
+_SEPARATORS = re.compile(r"[,\s]+")
 
 
 @dataclass(frozen=True)
@@ -89,28 +94,57 @@ def parse_networks(raw: Any, *, where: str) -> list[str]:
     is refused here instead of silently matching nothing later. The failure mode
     of an unparsed network is the one this issue exists for — a declaration that
     looks checked and is not.
+
+    A string may hold several networks — `ripple init` offers the interface
+    networks as one comma-separated line (`10.0.0.0/24, 10.0.1.0/24`) and
+    documents `--site-networks` as "CIDR networks of that location, comma
+    separated" (issue #152). So a string is split on commas *and* whitespace, and
+    so is each entry of a list, which keeps a YAML list working unchanged. What
+    is left after the split is one token and must parse as CIDR — with a prefix,
+    since `ip_network` would otherwise read a bare address as a `/32` — and a
+    token that does not is named in the error.
     """
     if raw in (None, ""):
         return []
     if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, (list, tuple)):
+        entries: Sequence[Any] = [raw]
+    elif isinstance(raw, (list, tuple)):
+        entries = raw
+    else:
         raise ValueError(f"{where}: 'networks' must be a list of CIDR networks "
                          f"(e.g. 192.0.2.0/24)")
     out: list[str] = []
-    for entry in raw:
-        text = str(entry or "").strip()
-        if not text:
-            continue
-        try:
-            net = ipaddress.ip_network(text, strict=False)
-        except ValueError as exc:
-            raise ValueError(f"{where}: {text!r} is not a CIDR network "
-                             f"(write the prefix, e.g. 192.0.2.0/24)") from exc
-        canonical = str(net)
-        if canonical not in out:
-            out.append(canonical)
+    for entry in entries:
+        written = str(entry or "").strip()
+        tokens = [token for token in _SEPARATORS.split(written) if token]
+        for text in tokens:
+            try:
+                net = _one_network(text)
+            except ValueError as exc:
+                # The token is what has to change; the entry it came from is
+                # shown too, so a mask pair still reads as the thing typed.
+                origin = (f" — read from {written!r}"
+                          if len(tokens) > 1 else "")
+                raise ValueError(f"{where}: {text!r} is not a CIDR network "
+                                 f"(write the prefix, e.g. 192.0.2.0/24){origin}"
+                                 ) from exc
+            canonical = str(net)
+            if canonical not in out:
+                out.append(canonical)
     return out
+
+
+def _one_network(text: str) -> Network:
+    """One token, parsed by `ipaddress` — but only when it carries a prefix.
+
+    `ip_network("192.0.2.0", strict=False)` quietly answers `192.0.2.0/32`, and
+    that is how a mask pair (`192.0.2.0 255.255.255.0`, split into two bare
+    addresses) would slip through as two host networks. The prefix is what makes
+    the token a network, so its absence is refused here.
+    """
+    if "/" not in text:
+        raise ValueError(f"{text!r} has no prefix")
+    return ipaddress.ip_network(text, strict=False)
 
 
 def ip_of(address: Any) -> Address | None:

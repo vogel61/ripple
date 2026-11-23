@@ -58,6 +58,9 @@ def _cfg(tmp_path, hosts, *, persist: bool = False, drain_seconds: float = 5.0,
            else make_config(hosts))
     cfg.fleet = FleetConfig(file=str(tmp_path / "runtime.yaml"), persist=persist,
                             drain_seconds=drain_seconds, drain_poll_seconds=0.01)
+    # A fleet key, as `load_config` would take it from `defaults` (issue #182):
+    # a node added at the page inherits it, and without one the merge warns.
+    cfg.fleet_api_key = "stub-fleet-key"
     return cfg
 
 
@@ -565,7 +568,10 @@ def test_an_override_for_an_unknown_host_is_a_warning_not_a_host(tmp_path):
 
 
 def test_an_overlay_host_is_added_whole_and_marked_as_such():
-    cfg = make_config([host_config("A", "http://192.0.2.11:8000")])
+    # A fleet key, because a node added at the page has none of its own (#182);
+    # without one the merge warns, which `test_config.py` covers.
+    cfg = make_config([host_config("A", "http://192.0.2.11:8000", api_key="k-fleet")])
+    cfg.fleet_api_key = "k-fleet"          # as `load_config` reads it from defaults
     overlay = FleetOverlay()
     overlay.add("B", {"addresses": ["http://192.0.2.40:8000"], "node_id": "node-b",
                       "weight": 2.0, "site": "home"})
@@ -576,6 +582,7 @@ def test_an_overlay_host_is_added_whole_and_marked_as_such():
     assert host.source == "overlay"
     assert host.node_id == "node-b"
     assert host.weight == 2.0
+    assert host.api_key == "k-fleet"       # inherited, the overlay has no key field
     assert cfg.host("A").source == "config"
 
 

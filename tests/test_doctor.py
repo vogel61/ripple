@@ -34,7 +34,9 @@ def write_config(tmp_path: Path, hosts: List[Dict[str, Any]], *,
                  auth: Optional[Dict[str, Any]] = None,
                  keys_file: Optional[Path] = None,
                  sites: Optional[List[Dict[str, Any]]] = None,
-                 rebind: Optional[Dict[str, Any]] = None) -> Path:
+                 rebind: Optional[Dict[str, Any]] = None,
+                 replication: Optional[Dict[str, Any]] = None,
+                 listen_port: Optional[int] = None) -> Path:
     """A config file that doctor and the live proxy both read.
 
     Every path that would otherwise be machine state (`~/.ripple/…`, the host
@@ -51,7 +53,7 @@ def write_config(tmp_path: Path, hosts: List[Dict[str, Any]], *,
         placement["rebind"] = rebind
     data: Dict[str, Any] = {
         "listen_host": "127.0.0.1",
-        "listen_port": closed_port(),
+        "listen_port": listen_port if listen_port is not None else closed_port(),
         "log_level": "warning",
         "hosts": hosts,
         "discovery": {"interval_seconds": 3600.0, "timeout_seconds": 2.0},
@@ -63,6 +65,11 @@ def write_config(tmp_path: Path, hosts: List[Dict[str, Any]], *,
                                                "keys_file": str(store)},
     }
     data["auth"].setdefault("keys_file", str(store))
+    # What `ripple init` writes since #159: the oMLX key under the second name
+    # the runtime reads, so the per-host state sampling has a key. `replication={}`
+    # is the pre-#159 (and hand-written) shape: only `defaults.api_key` set.
+    data["replication"] = ({"admin_key": "stub-admin-key"} if replication is None
+                           else replication)
     if sites:
         data["sites"] = sites
     path = tmp_path / "config.yaml"
@@ -289,6 +296,53 @@ def test_missing_admin_rights_is_a_warning_not_a_failure(live_proxy_factory,
     assert not failed_lines(out), out
 
 
+def test_admin_rights_without_the_sampling_key_are_not_reported_as_ok(
+        live_proxy_factory, stub_factory, tmp_path, capsys) -> None:
+    """Issue #159: doctor and the start warning have to agree.
+
+    The node answers `/admin/api/activity` with 200 for `defaults.api_key`, so
+    doctor can prove admin rights — but the per-host state sampling reads
+    `replication.admin_key`, which this configuration does not have. Reporting
+    `OK` here was the contradiction the operator saw: a green doctor and an empty
+    fleet-card history on the same file.
+    """
+    stub = stub_factory(models=[StubModel(id="m1", loaded=True)], chat_content="ok")
+    config = write_config(tmp_path, [host_entry("M5", stub.url,
+                                                node_id=stub.state.node_id)],
+                          replication={})
+    url = live_proxy_factory(load_config(config))
+
+    code = run_doctor(config, url)
+    out = capsys.readouterr().out
+
+    assert code == 0, out                  # a limitation, not a broken install
+    admin = line_for(out, "admin")
+    assert admin.startswith("WARN"), admin
+    assert "HTTP 200" in admin             # the fact doctor measured
+    assert "replication.admin_key" in admin
+    assert "state curves stay empty" in admin
+    assert not failed_lines(out), out
+
+
+def test_the_installed_config_reports_admin_rights_as_ok(live_proxy_factory,
+                                                         stub_factory, tmp_path,
+                                                         capsys) -> None:
+    """With the key `init` now writes, the admin line is OK again — no caveat."""
+    stub = stub_factory(models=[StubModel(id="m1", loaded=True)], chat_content="ok")
+    config = write_config(tmp_path, [host_entry("M5", stub.url,
+                                                node_id=stub.state.node_id)])
+    url = live_proxy_factory(load_config(config))
+
+    code = run_doctor(config, url)
+    out = capsys.readouterr().out
+
+    assert code == 0, out
+    admin = line_for(out, "admin")
+    assert admin.startswith("OK"), admin
+    assert "admin rights (HTTP 200 on /admin/api/activity)" in admin
+    assert "state curves" not in admin
+
+
 # ---------------------------------------------------------------------------
 # The key store
 # ---------------------------------------------------------------------------
@@ -483,18 +537,21 @@ def test_a_node_without_pp_tps_warns_that_rebind_cannot_fire(
 
     `plan_rebind` skips every destination it cannot price, so with this
     configuration rebinding is on and can never fire — silently, which is the
-    failure the issue names. One node, one warning, and the warning says which
-    field has to change.
+    failure the issue names. Two nodes (one node is `SKIP`: a move needs a
+    destination, issue #176), one warning, and the warning says which field has
+    to change.
     """
-    stub = stub_factory()
-    config = write_config(tmp_path, [host_entry("M5", stub.url,
-                                                node_id=stub.state.node_id)])
+    m5, m3 = stub_factory(), stub_factory()
+    config = write_config(tmp_path, [
+        host_entry("M5", m5.url, node_id=m5.state.node_id),
+        host_entry("M3", m3.url, node_id=m3.state.node_id)])
 
     code = run_doctor(config, dead_url())
     out = capsys.readouterr().out
 
     assert code == 0, out                 # a warning, not a broken install
-    warned = [line for line in out.splitlines() if line.startswith("WARN ")]
+    warned = [line for line in out.splitlines()
+              if line.startswith("WARN ") and "rebind" in line]
     assert len(warned) == 1, out          # exactly one warning, not one per node
     line = warned[0]
     assert line.split()[1] == "rebind", line
@@ -506,35 +563,44 @@ def test_a_node_without_pp_tps_warns_that_rebind_cannot_fire(
 
 def test_a_measured_pp_tps_silences_the_rebind_warning(stub_factory, tmp_path,
                                                        capsys) -> None:
-    stub = stub_factory()
-    host = host_entry("M5", stub.url, node_id=stub.state.node_id)
-    host["pp_tps"] = 3680.0
-    config = write_config(tmp_path, [host])
+    m5, m3 = stub_factory(), stub_factory()
+    a = host_entry("M5", m5.url, node_id=m5.state.node_id)
+    a["pp_tps"] = 3680.0
+    b = host_entry("M3", m3.url, node_id=m3.state.node_id)
+    b["pp_tps"] = 1200.0
+    config = write_config(tmp_path, [a, b])
 
     code = run_doctor(config, dead_url())
     out = capsys.readouterr().out
 
     assert code == 0, out
-    assert not [line for line in out.splitlines() if line.startswith("WARN ")], out
+    # The `secrets` line is a different finding (issue #179) and is expected
+    # here: these fixtures carry a literal key on purpose.
+    assert not [line for line in out.splitlines()
+                if line.startswith("WARN ") and "rebind" in line], out
     line = line_for(out, "rebind")
     assert line.startswith("OK"), line
-    assert "M5 can be priced" in line
+    assert "M5, M3 can be priced" in line
     assert "every enabled node has a prefill rate" in line
 
 
 def test_a_default_pp_tps_prices_every_node(stub_factory, tmp_path,
                                             capsys) -> None:
     """A non-zero default is a rate too — then nothing is missing."""
-    stub = stub_factory()
-    config = write_config(tmp_path, [host_entry("M5", stub.url,
-                                                node_id=stub.state.node_id)],
-                          rebind={"default_pp_tps": 970.0})
+    m5, m3 = stub_factory(), stub_factory()
+    config = write_config(tmp_path, [
+        host_entry("M5", m5.url, node_id=m5.state.node_id),
+        host_entry("M3", m3.url, node_id=m3.state.node_id)],
+        rebind={"default_pp_tps": 970.0})
 
     code = run_doctor(config, dead_url())
     out = capsys.readouterr().out
 
     assert code == 0, out
-    assert not [line for line in out.splitlines() if line.startswith("WARN ")], out
+    # The `secrets` line is a different finding (issue #179) and is expected
+    # here: these fixtures carry a literal key on purpose.
+    assert not [line for line in out.splitlines()
+                if line.startswith("WARN ") and "rebind" in line], out
     assert line_for(out, "rebind").startswith("OK")
 
 
@@ -550,7 +616,10 @@ def test_one_priced_destination_is_enough(stub_factory, tmp_path, capsys) -> Non
     out = capsys.readouterr().out
 
     assert code == 0, out
-    assert not [line for line in out.splitlines() if line.startswith("WARN ")], out
+    # The `secrets` line is a different finding (issue #179) and is expected
+    # here: these fixtures carry a literal key on purpose.
+    assert not [line for line in out.splitlines()
+                if line.startswith("WARN ") and "rebind" in line], out
     line = line_for(out, "rebind")
     assert line.startswith("OK"), line
     # the node that can never be a destination is named, not hidden
@@ -586,7 +655,8 @@ def test_json_report_is_machine_readable(stub_factory, tmp_path, capsys) -> None
     names = [check["check"] for check in payload["checks"]]
     # `site` sits after `admin` (issue #67): it reads the address the probes
     # found, so it can only be answered once they are.
-    assert names == ["python", "config", "rebind", "port", "node", "identity",
+    assert names == ["python", "config", "rebind", "secrets", "plist", "port",
+                     "node", "identity",
                      "admin", "site", "keys", "dashboard", "completion"]
     assert all(check["status"] in ("OK", "WARN", "FAIL", "SKIP")
                for check in payload["checks"])
@@ -683,3 +753,187 @@ def test_a_hand_written_site_on_a_loopback_node_is_unconfirmed_not_contradicted(
     assert site_line.startswith("SKIP"), site_line
     assert "declares site local (local)" in site_line, site_line
     assert "loopback" in site_line and "unconfirmed" in site_line, site_line
+
+
+# ---------------------------------------------------------------------------
+# An empty `${VAR}` gets a line of its own (issue #153)
+# ---------------------------------------------------------------------------
+def test_empty_variable_is_its_own_line_not_a_folded_warning(tmp_path, monkeypatch):
+    """`_check_config` folds warnings into "warning: <first> (+N more)".
+
+    The empty key must not be folded: the operator has to read "the variable is
+    empty" before the 401 from every node, or they conclude RIPPLE lost the key
+    and start over. Same sentence `load_config` appends, by construction.
+    """
+    monkeypatch.delenv("UNSET_VAR_FOR_TEST", raising=False)
+    path = write_config(tmp_path, [
+        host_entry("alpha", "http://127.0.0.1:1", api_key="${UNSET_VAR_FOR_TEST}")])
+    cfg = load_config(path)
+
+    checks = doctor._env_checks(cfg)
+    assert len(checks) == 1
+    check = checks[0]
+    assert (check.name, check.status) == ("config env", doctor.WARN)
+    assert "hosts[0].api_key" in check.reason
+    assert "UNSET_VAR_FOR_TEST" in check.reason
+
+    report = doctor.Report(config_path=str(path), url="http://127.0.0.1:8010")
+    report.add(check)
+    line = [ln for ln in doctor.render(report).splitlines() if "config env" in ln]
+    assert len(line) == 1, doctor.render(report)
+    assert "UNSET_VAR_FOR_TEST" in line[0]
+
+
+# ---------------------------------------------------------------------------
+# The proxy URL is the configured one (issue #162)
+# ---------------------------------------------------------------------------
+def test_without_url_the_proxy_is_the_configured_listen_port(
+        stub_factory, tmp_path, capsys) -> None:
+    """An install on 8013 must be checked on 8013, not on a fixed 8010.
+
+    Doctor used to carry `http://127.0.0.1:8010` as the default and derive the
+    port check from it, so a wheel install with `listen_port: 8013` read
+    "port 8010 … is free" and skipped dashboard and completion with "no RIPPLE
+    on http://127.0.0.1:8010" while the instance was serving on 8013.
+    """
+    stub = stub_factory()
+    config = write_config(tmp_path, [host_entry("M5", stub.url,
+                                                node_id=stub.state.node_id)],
+                          listen_port=8013)
+
+    doctor.main(["--config", str(config), "--timeout", "2"])
+    out = capsys.readouterr().out
+
+    # The header line names the instance that was actually checked.
+    assert "proxy: http://127.0.0.1:8013" in out, out
+    assert "8013" in line_for(out, "port"), out
+    # The checks that need a proxy point at the same instance.
+    assert "http://127.0.0.1:8013" in line_for(out, "dashboard"), out
+    assert "8010" not in out.splitlines()[1], out
+
+
+def test_an_explicit_url_wins_over_the_configured_port(
+        stub_factory, tmp_path, capsys) -> None:
+    stub = stub_factory()
+    config = write_config(tmp_path, [host_entry("M5", stub.url,
+                                                node_id=stub.state.node_id)],
+                          listen_port=8013)
+    url = dead_url()
+
+    run_doctor(config, url, "--json")
+    payload = json.loads(capsys.readouterr().out)
+
+    port = next(c for c in payload["checks"] if c["check"] == "port")
+    assert payload["url"] == url
+    assert port["detail"]["port"] == doctor._host_port(url)[1]
+    assert "8013" not in payload["url"]
+
+
+def test_an_unloadable_config_falls_back_to_the_default_url(
+        tmp_path, capsys) -> None:
+    """No port to read means the old default, not a crash before the checks.
+
+    The config line has to report the broken file, so the remaining checks must
+    still run — and they need some URL to run against.
+    """
+    path = tmp_path / "broken.yaml"
+    path.write_text("listen_port: not-a-port\nhosts: []\n", encoding="utf-8")
+
+    code = doctor.main(["--config", str(path), "--timeout", "2", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    config_check = next(c for c in payload["checks"] if c["check"] == "config")
+    port = next(c for c in payload["checks"] if c["check"] == "port")
+    assert payload["url"] == "http://127.0.0.1:8010"
+    assert config_check["status"] == doctor.FAIL
+    assert port["detail"]["port"] == 8010
+    assert code == 1
+
+# -- is this file safe to share? (issue #179) ------------------------------
+def test_a_literal_credential_in_the_config_is_named_as_one(
+        stub_factory, tmp_path, capsys):
+    """The file an operator pastes into a forum carries the key with it."""
+    stub = stub_factory()
+    config = write_config(tmp_path, [host_entry("M5", stub.url,
+                                                node_id=stub.state.node_id)])
+
+    code = run_doctor(config, stub.url, "--json")
+    report = json.loads(capsys.readouterr().out)
+    line = {c["check"]: c for c in report["checks"]}["secrets"]
+
+    assert code in (0, 1)
+    assert line["status"] == "WARN", line
+    assert "hosts[M5].api_key" in line["reason"], line["reason"]
+    assert "ripple init --force" in line["reason"], line["reason"]
+    assert "secrets.yaml" in line["reason"], line["reason"]
+
+
+def test_a_reference_is_not_a_credential(stub_factory, tmp_path, capsys):
+    """`api_key_file` is what `init` writes — the file is shareable again."""
+    stub = stub_factory()
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text("omlx:\n  fleet: k-from-file\n", encoding="utf-8")
+    entry = host_entry("M5", stub.url, node_id=stub.state.node_id, api_key="")
+    entry["api_key_file"] = f"{secrets}#omlx.fleet"
+    # …and the same shape under the second name the runtime reads (#159/#179).
+    config = write_config(tmp_path, [entry],
+                          replication={"admin_key_file": f"{secrets}#omlx.fleet"})
+
+    run_doctor(config, stub.url, "--json")
+    report = json.loads(capsys.readouterr().out)
+    line = {c["check"]: c for c in report["checks"]}["secrets"]
+
+    assert line["status"] == "OK", line
+    assert "no credential in this file" in line["reason"], line["reason"]
+
+# --- the launchd plist and the key in it (issue #185) ----------------------
+
+def _plist_at(tmp_path, monkeypatch, text: str):
+    """Point the service module at a plist in tmp_path."""
+    from ripple import service
+    path = tmp_path / "ai.ripple-test.plist"
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(service, "plist_path", lambda lab=None: path)
+    monkeypatch.setattr(service, "label", lambda: "ai.ripple-test")
+    return path
+
+
+def test_a_plist_with_a_key_nobody_needs_is_a_warning(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("hosts:\n  - name: a\n    addresses: [http://127.0.0.1:8000]\n"
+                   "defaults:\n  api_key_file: ~/.ripple/secrets.yaml#omlx.fleet\n",
+                   encoding="utf-8")
+    _plist_at(tmp_path, monkeypatch,
+              "<plist><dict><key>EnvironmentVariables</key><dict>"
+              "<key>OMLX_API_KEY</key><string>secret</string></dict></dict></plist>")
+    check = doctor._check_plist(str(cfg))
+    assert check.status == doctor.WARN
+    assert "carries the oMLX key in plain text" in check.reason
+    assert check.detail["next"] == "ripple -perm"
+
+
+def test_a_plist_without_a_key_is_ok_when_the_config_names_its_own(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("defaults:\n  api_key_file: ~/.ripple/secrets.yaml#omlx.fleet\n",
+                   encoding="utf-8")
+    _plist_at(tmp_path, monkeypatch, "<plist><dict><key>PATH</key></dict></plist>")
+    check = doctor._check_plist(str(cfg))
+    assert check.status == doctor.OK
+    assert "no key inside" in check.reason
+
+
+def test_a_plist_missing_the_key_the_config_asks_for_is_a_warning(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("defaults:\n  api_key: ${OMLX_API_KEY}\n", encoding="utf-8")
+    _plist_at(tmp_path, monkeypatch, "<plist><dict><key>PATH</key></dict></plist>")
+    check = doctor._check_plist(str(cfg))
+    assert check.status == doctor.WARN
+    assert "no OMLX_API_KEY" in check.reason
+
+
+def test_no_plist_is_a_skip(tmp_path, monkeypatch):
+    from ripple import service
+    monkeypatch.setattr(service, "plist_path", lambda lab=None: tmp_path / "none.plist")
+    check = doctor._check_plist(str(tmp_path / "config.yaml"))
+    assert check.status == doctor.SKIP
+    assert "ripple -perm" in check.reason

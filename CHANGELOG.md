@@ -5,6 +5,231 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-23
+
+The install path, repaired. Sixteen fixes in one release, because 0.2.2 was cut
+internally and never published: 0.2.3 is its first public appearance. Patch, not
+minor: the configuration surface is unchanged, except that an empty model
+allow-list now means the chat-capable models.
+
+Why a patch despite the behaviour change in #157: the previous behaviour was a
+defect, not a contract — an empty answer routed oMLX's utility engines as if they
+were chat models.
+
+The first ten fixes were found by reading `init` against a stranger's machine;
+the last six by running it on one that already had a fleet — a stale node in the
+overlay that answered 401, a configuration written into the checkout instead of
+the home directory, a plist that carried the oMLX key, and the site networks
+that were never searched although typing `192.0.2.0/24` reads as "look there".
+
+### Fixed
+
+- **A fresh install ended without an admin key** (issue #158). `init` generated
+  one, wrote it to `auth.admin_key` and said "not shown here", so the first thing
+  an operator did was copy a secret out of a mode-0600 file — or conclude there
+  was none. The question is `RIPPLE admin key (empty = generate a 32-hex one):`
+  now; an empty answer prints the key once, in the same shape as the client key,
+  and `--yes` does the same so a scripted run does not end without one.
+- **The oMLX key went to `defaults.api_key` only** (issue #159), so a fresh start
+  logged `host_stats: no oMLX admin key (replication.admin_key)` while `ripple
+  doctor` reported the admin rights as OK — two statements that contradict each
+  other on the same file, and the per-host curves never sampled. `init` writes
+  both names now; `replication.enabled` keeps its `false`.
+- **The add-node flow never asked for the node's own key** (issue #161). A node
+  inherits nothing from `defaults`, so it arrived with `models=0`, no residency
+  and FA-18 off fleet-wide. 7.1 has a field for it, the dry run and the add both
+  send it, and an empty answer is a valid read-only node that says so instead of
+  reporting "0 models".
+- **An empty allow-list made oMLX's utility engines routable** (issue #157):
+  `MarkItDown` (`model_type: markitdown`, loaded) appeared as its own block in
+  the distribution and was offered over `/v1/models`. The empty answer now means
+  the chat-capable models, `init` names what it left out, and `all` keeps the
+  documented way to route everything.
+- **A port a closed listener left in `TIME_WAIT` was called "in use by an
+  unidentified process"** (issue #151) — and under `--yes` `init` moved to 8011
+  while launchd and every client still pointed at 8010. The probe sets
+  `SO_REUSEADDR` like uvicorn does and checks both the wildcard and the loopback
+  address; a moved port is announced in one line at the end of the run.
+- **The comma-separated network line `init` proposed was refused** (issue #152):
+  the whole line was handed to `ipaddress`, so the site was written with
+  `networks: []` — a block `ripple doctor` can only report, never check. A string
+  is split on commas and whitespace now, every token must parse as CIDR and must
+  carry a prefix (`192.0.2.0` quietly became a `/32` before).
+- **A `${VAR}` that expanded to empty was silent** (issue #153). The message
+  names the field and the variable.
+- **`init --force` replaced the config and the key store without a backup**
+  (issue #154) — the destructive path ran at the worst moment. Both files are
+  copied aside as `<file>.bak-<YYYYmmdd-HHMMSS>`, mode 0600, before either is
+  written, and both paths are printed.
+- **The node sweep probed every candidate without the key** (issue #155), so
+  every candidate came back with `model_count: 0` and `admin: false` — the one
+  an operator will not add. `POST /admin/discover` sends the key the fleet
+  itself probes with, and a swept node that has no key keeps its reason.
+- **A rotated admin key looked like a broken sweep** (issue #156): the refusal
+  was a bare `admin key required`, which the page could not map to a step. It
+  carries `step: "admin"` and `code: "admin_key_refused"` now, with its own
+  sentence in all sixteen catalogs that says where the current key is.
+- **`ripple doctor` checked the wrong port** (issue #162): `--url` had a fixed
+  default of 8010, so an installation on any other port was told its port was
+  free and had its dashboard and completion checks skipped. Without `--url` the
+  URL now comes from `listen_port` in the configuration that was just read.
+- **The port question accepted `80`** (issue #166). Everything from 1 to 65535
+  passed, and a port below 1024 then failed at start-up with `EACCES`, minutes
+  after the question. Now 1024–65535 is accepted, the documented range
+  `8010–8099` is named in the message, and the four ways to answer wrong (not a
+  number, `0`, needs root, too high) each get their own sentence. A typo asks
+  again instead of ending the install, and `--port 80` is refused the same way
+  instead of writing a configuration that cannot bind.
+- **An address typed at the question was never probed** (issue #167), so a typo
+  or a machine without oMLX became a node that never answers, silently. Typed
+  addresses go through the probe the automatic path already used, and the run
+  says what it found: oMLX answered with its `node_id`, something answered that
+  reports no `node_id` but a key-protected model list (which every
+  OpenAI-compatible server with auth produces — measured against this machine's
+  own gateway), something answered that is not oMLX at all, or nothing answered
+  at all. An address that answers nothing stays possible — a node that is
+  switched off today is the one you configure today — but it is confirmed once
+  instead of assumed.
+- **The launchd plist carried the oMLX key** (issue #185). `install-service`
+  copied `~/.omlx/api_key.txt` into `EnvironmentVariables.OMLX_API_KEY`, so the
+  key sat in a second file — one that every backup of `~/Library` picks up —
+  although a configuration written by `init` names it as `defaults.api_key_file`
+  and needs nothing there. The plist now carries the key **only** when the
+  configuration asks for the variable (`api_key: ${OMLX_API_KEY}`); the template
+  marks the block with `__KEY_BEGIN__`/`__KEY_END__` and `render_plist` drops it.
+  `ripple doctor` gained a `plist` line: it warns in both directions — a key
+  nobody needs, or a missing one the configuration asks for.
+- **The site networks were never searched** (issue #187). Entering
+  `192.0.2.0/24` at the networks question reads as "look there", but `init`
+  probes only the addresses it was given — so a second machine was never asked
+  for its name, weight or key. After the networks, `init` now offers the sweep
+  (default **no**: a sweep is traffic on someone else's network), and every node
+  it finds is asked the same three questions as one on loopback. A node already
+  in the fleet is skipped by `node_id`.
+- **`ripple -perm` read the checkout's config, which the install no longer
+  writes** (issue #186). `service.config_path()` defaulted to the working
+  directory — and the installed wrapper `cd`s into the checkout — so after #183
+  every service command died on `<repo>/config.yaml` with advice about copying
+  `config.example.yaml`. Both the command path and the plist path now use
+  `default_config_path()` (`~/.ripple/config.yaml`, else `./config.yaml`), the
+  job path always absolute, and the missing-file hint names `ripple init`.
+- **A node added at the page answered 401** (issue #182). The runtime overlay
+  has no field for a key — and must not have one, it is written by the API — so
+  the node had none, `/v1/models` answered 401 and the eviction guard switched
+  off fleet-wide. An overlay node now uses the fleet key (`defaults.api_key` or
+  its `api_key_file` reference); a key set on the block itself still wins, and a
+  fleet without any key says so once.
+- **`init` wrote the config into the directory it ran in** (issue #183).
+  `./install.sh` runs inside the checkout, so a stranger's `config.yaml` landed
+  in the clone — invisible to `ripple` started elsewhere, and gone after the
+  next re-clone — while the key store went to `~/.ripple/`. `init` now writes
+  `~/.ripple/config.yaml`, and `ripple`/`ripple doctor` read it without a flag
+  (`./config.yaml` stays the fallback).
+- **The last line of `init` named `auth.admin_key` in `config.yaml`** (issue
+  #184) — the file that stopped carrying it in #179. It names
+  `~/.ripple/secrets.yaml` now.
+- **The legend explained the fleet before the fleet was visible** (issue #181).
+  On the fleet tab the seven states and the shape note stood above the node
+  cards, so the first screen at 1440×900 was the explanation of a state nobody
+  had seen yet. The legend keeps its place and collapses: `▶ Legende anzeigen`
+  by default, `Legende ausblenden` when open, `aria-expanded`/`hidden` as a real
+  button. The choice is remembered in `localStorage`, and the shape note travels
+  inside the collapsible part.
+- **The node list said `model list not read (the key comes later)` and was read
+  a step later** (issue #180). The key question moved in front of the discovery,
+  so the line carries the count it measured — `local  http://127.0.0.1:8000  23
+  model(s)` — and a key that does not fit is visible there instead of one step
+  on. The sentence stays for the install without any key.
+- **The configuration carried the keys, so every shared file was a leak**
+  (issue #179). `init` wrote the oMLX key and the admin key into `config.yaml`
+  in plain text — the file an operator pastes into a forum. A credential may now
+  be a reference instead: `api_key_file: ~/.ripple/secrets.yaml#omlx.fleet`, with
+  the values in a 0600 file that `init` writes. A literal still works and wins
+  over the reference, so older files load unchanged. `ripple doctor` gained a
+  `secrets` check — `OK` when the file as written carries no credential, `WARN`
+  naming the fields when it does.
+- **The key question sent a fresh install to a file oMLX never writes** (issue
+  #177). `oMLX API key (usually in ~/.omlx/api_key.txt …)` and the docs said the
+  key "usually sits" there — but oMLX keeps it in `settings.json` under
+  `auth.api_key` (admin panel → Settings → API key) and writes no text copy; the
+  string appears in none of its binaries. A stranger with two fresh Mac Studios
+  was sent to a path that does not exist, twice. The question now names the
+  panel, per node; a file that *is* there is offered and called what it is — a
+  copy — and the same holds in `docs/install*.md` and in the launchd error.
+- **`install.sh` for the prerequisite nobody installs** (issue #178). macOS has
+  shipped no Python since 12.3, so `python3 -m venv` printed `command not found`
+  and the documentation listed "Python >= 3.9" without saying how to get it.
+  `./install.sh` finds an interpreter (3.9–3.13), refuses anything older, creates
+  `.venv`, installs, and offers `ripple init`; without Python it prints the two
+  lines that fix it (`xcode-select --install`, `brew install python@3.13`).
+  `Install.command` runs it by double-click. `--check` reports without writing.
+- **A fresh install opened with two warnings it could not act on** (issues #175,
+  #176). A missing `host_stats.json` on the first start is normal and is a note
+  now, not a warning; and `rebind` no longer warns that it "cannot fire" when
+  there is only one node — a move needs a destination, so with one node there is
+  nothing to price and `ripple doctor` says `SKIP` instead. A two-node fleet
+  behaves exactly as before.
+- **The German dashboard said `Calibrate`** (issue #174) in the node card and in
+  two sentences — the only untranslated strings in `de.json`. Now
+  `Kalibrieren`.
+- **One oMLX key for the whole fleet made a second node read-only** (issue #171).
+  `hosts.<name>.api_key` exists for the fleet whose machines each carry their own
+  `~/.omlx/api_key.txt`, but `init` asked once and wrote that key everywhere — the
+  second node answered 401, delivered no model list and no residency signal, and
+  FA-18 went off for the whole fleet without saying which node refused which key.
+  The key is asked per node now: the first answer is the fleet default, a node
+  that refuses it is asked once more for its own, and a key that differs is
+  written as `hosts.<name>.api_key`. `empty = read-only` stays an answer, and a
+  scripted run (`--yes`, `--omlx-key`) reports the refused node instead of
+  asking.
+- **A port outside 8010-8099 said `written as asked`** (issue #172) — a sentence
+  that admitted a deviation and then shrugged. It names the consequence now (the
+  dashboard, `ripple doctor` and `ripple start` follow that number) and asks
+  once, default no, so a typo like `8199` for `8099` no longer passes as a
+  decision. `--port` and `--yes` keep writing it: a flag is a decision, and a
+  scripted run has nobody to ask.
+- **A node typed at the address question got no name** (issue #173), so an empty
+  answer wrote `name: ''` and the run ended with `the written configuration does
+  not load: hosts[0]: 'name' missing` after the files were written. The typed
+  address gets the suggestion the automatic path gets (`local`, or a `node-…`
+  stub from its `node_id`), and the name question offers it as the default.
+- **An unchanged capability note was logged on every refresh** (issue #170), so
+  one node with an unreadable model list printed the same two lines twice inside
+  a single `init` check and would have kept printing them on every probe
+  interval. A note is news when it appears and when it goes away — the rule
+  `version` and `models_unreadable` already followed.
+- **The weight question explained nothing and validated nothing** (issue #169).
+  `weight` is a word from the configuration file: a stranger cannot tell that the
+  number is a *relative* share, and a typo (`abc`, `0`, `21`) was silently
+  replaced by the default `1`. The question now says what the number does
+  (`relative: higher takes more new threads, 1-20`) and insists: every wrong
+  answer gets its own sentence and asks again. The file stays as tolerant as it
+  was — `hosts.*.weight` is a positive float, so a hand-edited `1.5` keeps
+  working; the range is what the question asks for, not what the file allows.
+- **The discovered list said `0 model(s)` before the key was asked** (issue
+  #168). oMLX answers `401` on `/v1/models` without a key, so the number named a
+  measurement nobody had made. The line says what was measured now — that the
+  node answered, and that the model list needs the key — and keeps the real count
+  when a key was available.
+
+### Added
+
+- **One smoke test walks the install path** (issue #160): stop, `init --force
+  --yes` against a stub node, start, read the log. Six defects reached the
+  operator on one morning and every one had green unit tests; each part was
+  correct, the path between them was not, and no test walked it.
+- **The model dot blinks blue while a node loads** (issue #149): a cold load was
+  invisible as a load — the request that triggered it sits in `pp`, so the dot
+  blinked orange and read like a prefill on resident weights, for the minutes a
+  453 GB load runs. `load` wins over `pp`, and `/healthz` carries the fact as
+  `models[].hosts[].loading`.
+
+### Changed
+
+- **The two tok/s cells say "current", not "15 min"** (issue #150). The caption
+  named a period the number does not use and read as an average the page never
+  computes; the window stays on the chart, where it describes the line.
+
 ## [0.2.1] - 2026-11-21
 
 Six changes and three fixes. Patch, not minor: nothing new to configure, only

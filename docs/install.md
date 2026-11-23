@@ -36,7 +36,7 @@ $ curl -s http://127.0.0.1:8000/v1/models
 {"error":{"message":"API key required","type":"authentication_error","param":null,"code":null}}
 ```
 
-Without a key a node is unreadable to RIPPLE: it knows no models and can route nothing. The installation still works — the proxy starts, the dashboard shows the node, `ripple doctor` reports the limitation as a warning instead of a failure — but no traffic flows. A node's key usually sits in `~/.omlx/api_key.txt`; `ripple init` looks there and also accepts `$OMLX_API_KEY`.
+Without a key a node is unreadable to RIPPLE: it knows no models and can route nothing. The installation still works — the proxy starts, the dashboard shows the node, `ripple doctor` reports the limitation as a warning instead of a failure — but no traffic flows. The key is in oMLX itself: open the admin panel of that instance (`http://<host>:8000/admin`) → **Settings** → **API key**. It is stored in `~/.omlx/settings.json` under `auth.api_key`. oMLX writes **no** text copy of it — if `~/.omlx/api_key.txt` exists on a machine, someone put it there so that other tools could read it, and `ripple init` offers it when it is there; `$OMLX_API_KEY` works too. `ripple init` does not write the key into `config.yaml` — it writes `~/.ripple/secrets.yaml` (mode 0600) and leaves references behind (`api_key_file: ~/.ripple/secrets.yaml#omlx.fleet`), because the configuration is the file an operator pastes into a forum. `ripple doctor` reports `OK secrets` when a file carries no credential. With more than one node the key is asked per node: the first answer is the default for the rest, and a node that refuses the key is asked once more for its own — the difference is written as `hosts.<name>.api_key`, because each machine has its own key.
 
 ---
 
@@ -45,13 +45,29 @@ Without a key a node is unreadable to RIPPLE: it knows no models and can route n
 ```bash
 git clone <repo-url>
 cd ripple
+./install.sh
+```
 
+`install.sh` finds Python, creates `.venv`, installs RIPPLE and offers to run `ripple init` at the end. In the Finder you can double-click `Install.command` instead — macOS opens it in Terminal. The same steps by hand, if you prefer them:
+
+```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install .
 
 ./.venv/bin/ripple --version
-# RIPPLE 0.1.0
+# RIPPLE 0.2.3
 ```
+
+### No `python3`? That is the one thing the install cannot do for you
+
+macOS ships no Python since 12.3. RIPPLE's own dependencies (fastapi, uvicorn, httpx, PyYAML) are installed by pip; Python is not. `./install.sh` says so and prints the two lines that fix it — copy one into Terminal:
+
+```bash
+xcode-select --install      # Apple's Command Line Tools, brings python3
+brew install python@3.13    # or Homebrew, if you have it
+```
+
+Nothing else is missing: no compiler, no `uv`, no `pipx`.
 
 The distribution is named `ripple-proxy` (the PyPI name `ripple` belongs to unrelated projects); the import package and the console script are both `ripple`. The dashboard, its stylesheet and all 16 language catalogs travel inside the wheel.
 
@@ -86,7 +102,7 @@ uv pip install --python .venv/bin/python .
 ./.venv/bin/ripple init
 ```
 
-`init` asks five things and writes two files. A run against a single local node looks like this; anything in brackets is the default, and a line without an answer took it. (The configuration check at the end is shortened here to its per-node block.)
+`init` asks six things and writes two files. A run against a single local node looks like this; anything in brackets is the default, and a line without an answer took it. (The configuration check at the end is shortened here to its per-node block.)
 
 ```
 RIPPLE init — first-run configuration
@@ -100,17 +116,21 @@ discovered 1 node(s):
 Use these nodes? [Y/n]:
 node 1/1 (http://127.0.0.1:8000) name [local]: alpha
 node 1/1 (http://127.0.0.1:8000) weight [1]:
-node 1/1 (http://127.0.0.1:8000) models (comma separated, empty = all offered):
+node 1/1 (http://127.0.0.1:8000) models (comma separated; empty = the chat-capable ones, `all` = every model the node offers):
 Site name (room, building or city; empty = local) [local]:
 Site networks (CIDR, comma separated) [192.0.2.0/24]:
 site local: local — 192.0.2.0/24
   loopback: alpha — this machine, no site: written (loopback is in no site's networks; `ripple doctor` reports SKIP)
 Use the oMLX key from $OMLX_API_KEY? [Y/n]:
 oMLX key: read from $OMLX_API_KEY
-node alpha: 23 model(s) offered — allow-list stays empty, which means all of them (restrict with `models:` in the config)
-RIPPLE admin key: generated (32 hex) — it is in config.yaml at auth.admin_key and is not shown here
+node alpha: allow-list = 21 chat-capable model(s); left out 2 that are not chat models: MarkItDown (markitdown), Qwen3-Embedding-4B-4bit-DWQ (embedding) — name them (or answer `all`) to route them
+RIPPLE admin key (empty = generate a 32-hex one):
 
 wrote /Users/you/ripple/config.yaml (mode 0600)
+RIPPLE admin key — shown once, store it now:
+  4f1c8a2b7d3e90516caf42b8de710593
+  (also in config.yaml at auth.admin_key; it opens /keys and /admin/*)
+
 wrote /Users/you/.ripple/keys.yaml (mode 0600)
 
 client key "first-client" — shown once, store it now:
@@ -154,9 +174,17 @@ Take the suggestion, or answer `n` and type a port. Either way the rest of this 
 
 `discover` prints one line per node with address, `node_id`, model count, latency and whether admin rights exist; `--json` gives the same as data, `--address` probes a specific node instead of sweeping. Identity comes from `GET /api/cluster/node_id`, never from the address — a node that moved gets found again. An address that answers nothing still becomes a node in the configuration: a node that is down right now is exactly the one you want configured today, so it is picked up when it returns.
 
-**Name, weight, models.** The name is the stable key for thread slots, affinity and every log line; pick something you will recognise in a log. Weight is the target share of new threads — `3` and `2` mean 60 % / 40 %. Leave `models` empty unless you mean to restrict the node: empty means *everything this node offers*, and a written list is an allow-list that freezes today's fleet. A model you add to oMLX next month would stay invisible in RIPPLE, with nothing saying why. That silent failure is the reason the empty answer is the default.
+**Name, weight, models.** The name is the stable key for thread slots, affinity and every log line; pick something you will recognise in a log. Weight is the target share of new threads — `3` and `2` mean 60 % / 40 %. The models answer is an allow-list: empty takes the default, which is the **chat-capable** models the node offers — everything whose `model_type` is a chat type (`llm`, `vlm`, …). oMLX serves utility engines beside them (`markitdown` converts documents, `embedding` is an embedding model); they are legitimate but they are not threads to balance, so they stay out unless you name them. `init` says in one line what it allowed and which models it left out, with their type — the empty answer is a decision you can read, not a default. Answer `all` to keep `models` empty on purpose: every model the node offers is then routable, including the utility engines, and `init` says how many. A list you type is written exactly as typed, and it freezes today's fleet — a model you add to oMLX next month would stay invisible in RIPPLE, with nothing saying why, which is why the chat-capable default exists rather than tonight's full list. The type is the node's own declaration, and it is not always what an operator would call a chat model: a speculative-decoding draft model (`…-drafter`) is declared `llm` and would be routed like any other. If your node carries one, name it out of the list or hide it with the model policy (manual §6.2).
 
 **The location.** After the nodes, `init` asks where this machine stands: a name — the room, the building, the city — and the networks that belong to it, written as CIDR. The order is not cosmetic: those networks are matched against the node addresses, so the nodes have to be known first. The suggestion for the networks is derived from the interface that carries the default route (`ifconfig` on macOS, `ip -o -4 addr` on Linux); loopback (`127.0.0.0/8`) and link-local (`169.254.0.0/16`) are dropped, because an interface that carries only a self-assigned address is not a location. Where nothing can be derived, `init` asks instead of inventing `192.168.0.0/24`.
+
+**The networks are not a search area** — `init` probes the addresses it was given and nothing else, and the networks are a label for where this machine stands. An operator who types `192.0.2.0/24` reads that as "look there", so right after the networks `init` offers the sweep:
+
+```
+Scan 192.0.2.0/24 for further oMLX nodes? (a sweep: one request per address, port 8000) [y/N]:
+```
+
+The default is **no**: a sweep is traffic on someone else's network, which is why `ripple discover` keeps it behind an explicit `--scan` as well. Answer `y` and every node the sweep finds is asked the same three questions as the one that answered on loopback — name, weight, models — and then treated exactly like it (per-node key question, allow-list, `doctor`). A node the fleet already has is skipped by `node_id`: the same oMLX answers on every address it listens on, including this machine's LAN address.
 
 Pressing Enter takes the default `local` and the derived network. The location is written as one block — the id comes from the name, lower case with hyphens — and `site: <id>` goes **only** on a node whose address really lies inside one of the networks. A node on another network stays without a site instead of inheriting a claim that `doctor` would then have to contradict: a single local node reached over loopback keeps `site=-` while the block exists, and `init` says so in one line instead of leaving you to notice. That is the honest answer, not a gap: `127.0.0.1` means *this machine*, a site names *networks*, and loopback is in none of them — so there is nothing to compare and `ripple doctor` reports `SKIP` with the loopback as the reason (see §4). Once a second machine is configured, its address lies in a network and its `site:` is a claim that is actually checked.
 
@@ -198,10 +226,22 @@ A site written without `networks` is accepted rather than refused: it is a name 
 
 | File | Content |
 |---|---|
-| `config.yaml` (current directory, or `--config`) | the configuration, mode `0600`; contains the admin key |
+| `~/.ripple/config.yaml` (or `--config PATH`) | the configuration, mode `0600`; it names the credentials, it does not carry them |
 | `~/.ripple/keys.yaml` (or `<home-dir>/.ripple/keys.yaml`) | client keys, mode `0600` |
 
-The admin key is 32 hex characters, generated, written to `auth.admin_key`, and never printed. The client key is printed exactly once — copy it now; afterwards only the masked form is shown. Finally `init` loads the configuration it just wrote, prints the routing table and sends one real completion through the proxy, because a configuration that validates is not the same as one that answers. An existing `config.yaml` or key store is never overwritten: `init` refuses, names the path, and points at `--force`.
+The admin key is asked for: type one (it is used exactly as given and never echoed — only its length is reported, because a short key is a legitimate choice) or press Enter and `init` generates 32 hex characters and prints them once, in the same shape as the client key. Either way the key ends up in `~/.ripple/secrets.yaml` under `admin` (the configuration names it as `auth.admin_key_file`) and the operator ends the install holding it. The client key is printed exactly once — copy it now; afterwards only the masked form is shown. Neither key ever reaches the log file or the routing table. Finally `init` loads the configuration it just wrote, prints the routing table and sends one real completion through the proxy, because a configuration that validates is not the same as one that answers. An existing `config.yaml` or key store is never overwritten: `init` refuses, names the path, and points at `--force`.
+
+The oMLX key is written under **both** names, on purpose — one question, two fields:
+
+```yaml
+defaults:
+  api_key: …            # RIPPLE → oMLX: the client key it passes through
+replication:
+  admin_key: …          # the same oMLX key: admin calls and the state sampling
+  # `enabled` stays false — the key alone does not switch replication on
+```
+
+`defaults.api_key` is what RIPPLE sends to the nodes for completions. `replication.admin_key` is the same key under the name the per-host state sampling (`GET /admin/api/activity`, the curves on the fleet card) and the replication admin calls read. A configuration with only the first field is why a fresh install used to show a green `ripple doctor` and an empty fleet-card history at the same time; `init` writes both so the two agree. A hand-written configuration needs both lines as well — `replication.enabled` stays at its default (`false`) until you turn replication on deliberately.
 
 Flags (`ripple init --help`):
 
@@ -212,7 +252,7 @@ Flags (`ripple init --help`):
 | `--port N` | listen port (default 8010; a busy port moves to the next free one) |
 | `--host URL` | oMLX address, repeatable |
 | `--name NAME` | node name; only with exactly one node |
-| `--config PATH` | where to write `config.yaml` (default `./config.yaml`) |
+| `--config PATH` | where to write `config.yaml` (default `~/.ripple/config.yaml`) |
 | `--home-dir PATH` | home directory instead of `$HOME`; the key store goes to `<path>/.ripple/keys.yaml` |
 | `--omlx-key KEY` | the oMLX key on the command line instead of the environment |
 | `--no-check` | skip the final configuration check and the test request |
@@ -227,7 +267,7 @@ Exit codes: `0` configured and checked, `1` refused or cancelled (nothing writte
 ./.venv/bin/ripple doctor --config config.yaml
 ```
 
-Defaults: `config.yaml` in the current directory, `--url http://127.0.0.1:8010`, `--timeout 10` seconds per network check. Before the proxy runs, `dashboard` and `completion` are skipped — and `site` too, because this install's only node is reached over loopback and there is no network address to hold against the site's networks:
+Defaults: `~/.ripple/config.yaml` (or `./config.yaml` when that is the only one), `--url http://127.0.0.1:8010`, `--timeout 10` seconds per network check. Before the proxy runs, `dashboard` and `completion` are skipped — and `site` too, because this install's only node is reached over loopback and there is no network address to hold against the site's networks:
 
 ```
 RIPPLE 0.1.0 — doctor
@@ -321,14 +361,19 @@ ripple -perm        # autostart on: install the job from THIS checkout and start
 ripple shutdown -perm   # autostart off: stop the proxy, then remove the job
 ```
 
-`ripple -perm` renders the template for the directory the command runs from — `ProgramArguments`, `WorkingDirectory` and the config path are this checkout, never a copy of an older plist — writes the oMLX key into it with `plutil`, sets it to `0600`, bootstraps it, and reports only after `/healthz` answered:
+`ripple -perm` renders the template for the directory the command runs from — `ProgramArguments`, `WorkingDirectory` and the config path are this checkout, never a copy of an older plist — sets it to `0600`, bootstraps it, and reports only after `/healthz` answered. The oMLX key goes into the plist **only** when the configuration asks for it (`api_key: ${OMLX_API_KEY}`); a configuration `init` wrote names it as `defaults.api_key_file`, so the job carries no key and the line says so:
+
+```
+the job carries no oMLX key — config.yaml names it itself (defaults.api_key_file); nothing to copy into the plist
+```
+
 
 ```
 autostart: on (ai.ripple, /Users/you/Projects/ripple)
   verified: launchctl print gui/501/ai.ripple → loaded, pid 49841; /healthz answered after 0.6 s
 ```
 
-A manual instance holding the port is **not** killed: the plist is installed, that process keeps running, and launchd takes over at the next login (`ripple restart` does it immediately). Running `-perm` twice is a no-op while the job is loaded and answering. A missing `config.yaml` or a missing `~/.omlx/api_key.txt` is refused by name, and nothing is written; a process that is not RIPPLE holding the port is named and left alone.
+A manual instance holding the port is **not** killed: the plist is installed, that process keeps running, and launchd takes over at the next login (`ripple restart` does it immediately). Running `-perm` twice is a no-op while the job is loaded and answering. A missing `config.yaml` — or a missing `~/.omlx/api_key.txt` for a configuration that asks for the variable — is refused by name, and nothing is written; a process that is not RIPPLE holding the port is named and left alone.
 
 `ripple shutdown -perm` is the way back. It stops first — the launchd job if there is one, otherwise the listener — then removes the plist, then reads both facts back: `launchctl print gui/$(id -u)/ai.ripple` fails with `Could not find service`, and nothing listens on the port. It prints `autostart: off (ai.ripple)` plus which of the two it stopped. `ripple shutdown` **alone** stops the service but leaves the job installed, so it returns at the next login; that difference is the whole point of the flag.
 
@@ -412,13 +457,15 @@ Further down: **Models** (one row per model and node, models that are not loaded
 
 | Key | Where | What it opens |
 |---|---|---|
-| Admin key | `config.yaml` → `auth.admin_key` (generated by `init`, 32 hex) | `/admin/*` and `/keys`: maintenance, model policy, calibration, replication, key management |
+| Admin key | `config.yaml` → `auth.admin_key` (typed at `init`, or generated there — 32 hex) | `/admin/*` and `/keys`: maintenance, model policy, calibration, replication, key management |
 | Client keys | `~/.ripple/keys.yaml`, mode `0600` | `Authorization: Bearer …` on `/v1/*` |
 | oMLX key | `defaults.api_key`, or `hosts[].api_key` per node; `${VAR}` is expanded | RIPPLE → oMLX |
 
 Client keys are shown in full exactly once, at creation. On `/keys` you can create one (name, kind — `interactive`, `batch`, `one-shot` — and an optional model list), rotate it, disable it and revoke it; every one of those calls requires the admin key. Rotating prints the new value once, like creation does.
 
-**One trap worth naming:** do not set `auth.admin_key` to the same value as the oMLX key. A hand-made configuration invites it, and then one leaked admin key opens both the proxy's admin routes and every oMLX node behind it. `ripple init` generates a separate key for exactly this reason.
+A refused admin key is reported as a refused key, not as a broken panel: the usual cause is a rotation (`ripple init --force` writes a new `auth.admin_key`), and the open tab must be given the current one from `config.yaml`.
+
+**One trap worth naming:** do not set `auth.admin_key` to the same value as the oMLX key. A hand-made configuration invites it, and then one leaked admin key opens both the proxy's admin routes and every oMLX node behind it. `ripple init` asks for (or generates) a separate key for exactly this reason.
 
 ---
 

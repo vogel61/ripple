@@ -36,7 +36,7 @@ from .config import (Config, ConfigError, HostConfig, apply_overlay, host_block,
                      host_from_block, load_overlay, policy_assign, policy_read,
                      policy_refusal, policy_target, policy_value, save_overlay)
 from .dashboard import render_dashboard
-from .discover import scan_network
+from .discover import scan_network_detailed
 from .host_stats import HostStats, cross_from_usage, state_from_activity
 from .hosts import PHASE_PP, PHASE_TG, Fleet, HostRuntime, HostUnresolved
 from .keys import KINDS, AdminRateLimiter, ClientKey, KeyStore, KeyStoreError
@@ -548,6 +548,37 @@ def _client_key(request: Request) -> str | None:
     return None
 
 
+def admin_key_gap(cfg: Any, host: Any) -> str | None:
+    """The sentence the sampler logs when it cannot read a node (issue #159).
+
+    `None` means a key is configured and there is nothing to say. Otherwise the
+    text names the gap in the operator's terms — *which* key is missing and what
+    stops working because of it — and says whether `defaults.api_key` is set,
+    because `ripple doctor` probes `/admin/api/activity` with that client key and
+    would otherwise report admin rights while this sampling stays blind.
+
+    Resolved through `replication.endpoint_for`, the same call the sampler makes,
+    so the sentence can never describe a different key than the one it used.
+    """
+    endpoint = replication.endpoint_for(host, cfg)
+    if not endpoint.api_base or endpoint.api_key:
+        return None
+    host_cfg = getattr(host, "cfg", host)
+    # `defaults.api_key` is not kept as a config field: `load_config` applies it
+    # to every host, so the client key is `hosts[].api_key` — the one the probe
+    # in `ripple doctor` sends.
+    client_key = str(getattr(host_cfg, "api_key", "") or "")
+    if client_key:
+        return ("host_stats: no admin key for the per-host state sampling — "
+                "replication.admin_key is unset, so the per-host state curves "
+                "stay empty; the client key (defaults.api_key) is set, but the "
+                "sampling reads replication.admin_key only")
+    return ("host_stats: no admin key for the per-host state sampling — "
+            "replication.admin_key is unset and defaults.api_key is unset too, "
+            "so the per-host state curves stay empty; put oMLX's key in both "
+            "(`ripple init` writes both)")
+
+
 class Ripple:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -862,6 +893,10 @@ class Ripple:
             "name": name,
             "address": host.resolved_address,
             "node_id": host.node_id_seen,
+            # Whether the request carried a key of its own (#161): a node
+            # inherits nothing from `defaults`, so "0 models" without one is a
+            # read-only node the operator chose, not an empty machine.
+            "keyed": bool(host.cfg.api_key),
             "version": host.version,
             "status": host.status,
             "models": models,
@@ -883,7 +918,25 @@ class Ripple:
             "warnings": warnings,
         }
 
-    def _candidate_row(self, found: Any) -> dict[str, Any]:
+    def _sweep_api_key(self) -> Optional[str]:
+        """The key a `/admin/discover` sweep probes with — the fleet's own.
+
+        `defaults.api_key` is merged into every host block at load
+        (`config._parse_host`), so the key RIPPLE talks to its nodes with lives
+        on the hosts and nowhere else; there is no second config path to read it
+        from. The first oMLX host that carries one decides, which is exactly the
+        key the fleet's own probes already send.
+
+        Without one the sweep still runs: identity (`/api/cluster/node_id`)
+        needs no key, so the candidates are found — and each one then carries
+        the 401 as its reason instead of a silent `model_count: 0` (#155).
+        """
+        for host in self.cfg.hosts:
+            if host.backend == "omlx" and host.api_key:
+                return host.api_key
+        return None
+
+    def _candidate_row(self, found: Any, reason: Optional[str] = None) -> dict[str, Any]:
         """One node `ripple discover` found, as the page offers it (#71).
 
         `known` is the important field: a node that is already in the fleet (by
@@ -911,6 +964,11 @@ class Ripple:
             "site_derived_name": site.name if site is not None else "",
             "known": bool(known),
             "known_nodes": sorted(known),
+            # Why `models` is empty, when that is not because the node carries
+            # nothing (issue #155): a sweep without the fleet's key gets a 401
+            # on every model list, and `model_count: 0` then reads as "empty
+            # node" — the one candidate an operator will not add.
+            "reason": reason,
         }
 
     # -- model policy (issue #11) -------------------------------------------
@@ -1622,6 +1680,13 @@ class Ripple:
             `host_stats` is touched (issue #71). The page shows that answer, the
             operator confirms, and the real `POST` follows with the weight, site
             and role they picked.
+
+            `api_key` in the body is the node's **own** oMLX key (#161): a node
+            is a standalone machine and inherits nothing from `defaults`, so the
+            key has to be asked for and sent. `host_from_block` parses it and
+            `host_block` writes it into the overlay, so a restart rebuilds the
+            same host. Empty is a valid answer — a read-only node, whose model
+            list is unread and which the preview reports as such.
             """
             denied = self._require_admin(request)
             if denied is not None:
@@ -1696,14 +1761,24 @@ class Ripple:
             # added must be in force from the first tick, not from the first
             # click after the add.
             self._apply_windows()
-            log.warning("node_added name=%s address=%s node_id=%s models=%d weight=%s "
-                        "by=%s", name, host.resolved_address, host.node_id_seen,
-                        len(host.models), host.cfg.weight,
+            # Why models=0 matters (#161): without the node's own key the model
+            # list is unreadable, and "models=0" alone reads as "the machine
+            # carries nothing". The reason goes into the line that is grepped.
+            models_note = ""
+            if not host.models:
+                models_note = (f" — model list unreadable: {host.models_error}"
+                               if host.models_error
+                               else " — the node lists no models")
+            log.warning("node_added name=%s address=%s node_id=%s models=%d%s keyed=%s "
+                        "weight=%s by=%s", name, host.resolved_address, host.node_id_seen,
+                        len(host.models), models_note,
+                        "yes" if host.cfg.api_key else "no", host.cfg.weight,
                         self.client_address(request) or "-")
             return JSONResponse({"node": self._node_row(host),
                                  "source": "overlay",
                                  "node_id": host.node_id_seen,
                                  "models": len(host.models),
+                                 "models_error": host.models_error,
                                  "ceiling_bytes": host.ceiling_bytes,
                                  "used_bytes": host.used_bytes,
                                  "address": host.resolved_address},
@@ -1742,7 +1817,12 @@ class Ripple:
                     status_code=400)
             started = time.monotonic()
             try:
-                found = await scan_network(cidr, port=port, timeout=timeout)
+                # The fleet's own key (#155): without it every `/v1/models`
+                # probe in the sweep answers 401, so every candidate reported
+                # `model_count: 0` and `admin: false` — and looked like a node
+                # not worth adding.
+                swept = await scan_network_detailed(cidr, port=port, timeout=timeout,
+                                                    api_key=self._sweep_api_key())
             except ValueError as exc:
                 # A CIDR the sweep refuses (too large, or not a network at all).
                 # The step is `cidr` so the page can name the field, not the
@@ -1750,9 +1830,10 @@ class Ripple:
                 return JSONResponse({"error": {"code": "bad_cidr", "step": "cidr",
                                                "message": str(exc)}}, status_code=400)
             took = time.monotonic() - started
-            candidates = [self._candidate_row(f) for f in found]
-            log.warning("node_discover cidr=%s port=%d found=%d took=%.2fs by=%s",
+            candidates = [self._candidate_row(p.found, reason=p.reason) for p in swept]
+            log.warning("node_discover cidr=%s port=%d found=%d took=%.2fs key=%s by=%s",
                         cidr, port, len(candidates), took,
+                        "yes" if self._sweep_api_key() else "no",
                         self.client_address(request) or "-")
             return JSONResponse({"cidr": cidr, "port": port, "timeout": timeout,
                                  "found": candidates, "count": len(candidates),
@@ -2720,11 +2801,11 @@ class Ripple:
         endpoint = replication.endpoint_for(host, self.cfg)
         if not endpoint.api_base:
             return None
-        if not endpoint.api_key:
+        gap = admin_key_gap(self.cfg, host)
+        if gap is not None:
             if not self._activity_warned:
                 self._activity_warned = True
-                log.warning("host_stats: no oMLX admin key (replication.admin_key) — "
-                            "the per-host state sampling stays blind")
+                log.warning(gap)
             return None
         try:
             resp = await self.proxy_client.get(
@@ -3290,6 +3371,11 @@ class Ripple:
         `status` is 401 by default. The model lock (issue #21) answers 403 for the
         same condition: the operator's decision is that this state is *forbidden*
         to everyone but them, not that a credential is missing.
+
+        The refusal carries `step: "admin"` beside the message (issue #156): the
+        page maps a step to its own sentence, and without it a refused key read
+        as the generic failure. `code` is the stable half — `admin_key_refused`
+        names the condition, the step names the place the page may explain it.
         """
         address = self.client_address(request)
         retry_after = self.admin_limits.retry_after(address)
@@ -3315,7 +3401,9 @@ class Ripple:
                         request.url.path, address or "?", self.admin_limits.limit,
                         self.admin_limits.window, blocked)
         return JSONResponse({"error": {"message": "admin key required",
-                                       "type": "invalid_request_error"}},
+                                       "type": "invalid_request_error",
+                                       "code": "admin_key_refused",
+                                       "step": "admin"}},
                             status_code=status)
 
     def _identify(self, request: Request, body: dict, model: str,
@@ -3763,6 +3851,14 @@ class Ripple:
                     # blinks the dot in that phase — from RIPPLE's own request
                     # bookkeeping, so reading /healthz costs the node nothing.
                     "phase": h.model_phase(mid),
+                    # Is this node loading *this* model right now (#149)? Not a
+                    # phase: the request that caused the load only sits in `pp`
+                    # because the weights are not there yet, and a 453 GB load
+                    # runs for minutes before the first token can even be
+                    # prefilled. The page blinks the dot blue from this flag and
+                    # derives nothing of its own.
+                    "loading": bool(h.loading is not None
+                                   and h.loading.get("model") == mid),
                     "tg_tps": (h.metrics.get(mid) or {}).get("tg_tps"),
                     "allowed": h.cfg.model_allowed(mid),
                     # The operator's decision on this (host, model) pair

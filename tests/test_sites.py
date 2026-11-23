@@ -28,7 +28,8 @@ from ripple import doctor
 from ripple.config import ConfigError, HostConfig, load_config
 from ripple.replication import (LocalSide, configured_ssh_targets,
                                 reachable_endpoint, ssh_target_for)
-from ripple.sites import SiteConfig, ip_of, site_for_address, site_id_for_address
+from ripple.sites import (SiteConfig, ip_of, parse_networks, site_for_address,
+                          site_id_for_address)
 
 from tests.support import (chat_body, closed_port, host_config, host_row,
                            make_config, prompt_for, stub_model_loaded)
@@ -122,6 +123,75 @@ def test_a_network_that_is_not_cidr_is_refused(tmp_path):
         load_config(path)
     assert "192.0.2.0 255.255.255.0" in str(exc.value)
     assert "CIDR" in str(exc.value)
+
+
+def test_a_comma_separated_string_is_more_than_one_network():
+    """Issue #152: the default `ripple init` offers is one comma-separated line.
+
+    It used to be wrapped as a one-element list, so the whole line was parsed as
+    a single network, refused, and the site was written with `networks: []`.
+    """
+    assert parse_networks("192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24",
+                          where="site sa") == ["192.0.2.0/24",
+                                               "198.51.100.0/24",
+                                               "203.0.113.0/24"]
+
+
+def test_a_comma_separated_string_without_spaces_is_split_too():
+    assert parse_networks("192.0.2.0/24,198.51.100.0/24", where="site sa") == [
+        "192.0.2.0/24", "198.51.100.0/24"]
+
+
+def test_a_whitespace_separated_string_is_split_too():
+    """A pasted line may separate with spaces rather than commas."""
+    assert parse_networks("192.0.2.0/24 198.51.100.0/24", where="site sa") == [
+        "192.0.2.0/24", "198.51.100.0/24"]
+
+
+def test_a_list_is_unchanged_and_still_canonical_and_deduplicated():
+    """The YAML list keeps working exactly as before, including the canonical
+    form (`strict=False`) and one entry per network."""
+    assert parse_networks(["192.0.2.7/24", "198.51.100.0/24", "192.0.2.0/24"],
+                          where="site sa") == ["192.0.2.0/24",
+                                               "198.51.100.0/24"]
+    assert parse_networks([], where="site sa") == []
+    assert parse_networks("", where="site sa") == []
+    assert parse_networks(None, where="site sa") == []
+
+
+def test_a_token_that_is_not_cidr_after_the_split_is_refused_and_named():
+    with pytest.raises(ValueError) as exc:
+        parse_networks("192.0.2.0/24, 198.51.100.9", where="site sa")
+    assert "'198.51.100.9'" in str(exc.value)      # the token, not the line
+    assert "CIDR" in str(exc.value)
+    assert "site sa" in str(exc.value)
+
+
+def test_a_bare_address_is_not_a_network():
+    """`ip_network` would read it as a `/32`; the prefix is the point."""
+    with pytest.raises(ValueError) as exc:
+        parse_networks(["192.0.2.5"], where="site sa")
+    assert "'192.0.2.5'" in str(exc.value)
+
+
+def test_a_bad_token_inside_a_list_entry_names_the_token():
+    with pytest.raises(ValueError) as exc:
+        parse_networks(["192.0.2.0/24, nope"], where="site sa")
+    assert "'nope'" in str(exc.value)
+
+
+def test_a_site_written_with_a_comma_line_keeps_its_networks(tmp_path):
+    """The symptom of #152, end to end: a site block with one written line.
+
+    Before the fix the whole line was refused, so the site was loaded with
+    `networks: []` and `ripple doctor` said "no networks".
+    """
+    path = write_config(tmp_path, [entry("a", "http://192.0.2.5:8000", site="sa")],
+                        sites=[{"id": "sa",
+                                "networks": "192.0.2.0/24, 198.51.100.0/24"}])
+    cfg = load_config(path)
+    assert cfg.sites[0].networks == ["192.0.2.0/24", "198.51.100.0/24"]
+    assert [w for w in cfg.warnings if "no networks" in w] == []
 
 
 def test_a_site_needs_an_id_and_a_unique_one(tmp_path):

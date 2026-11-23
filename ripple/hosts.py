@@ -792,10 +792,16 @@ class HostRuntime:
         if self.backend is None:
             return
         caps, notes, _models = await probe_capabilities(self.backend, health=health)
+        previous = set(self.capability_notes)
         self.backend.capabilities = caps  # type: ignore[misc]
         self.capability_notes = notes
+        # Only a note that was not there before is news (issue #170). A node whose
+        # model list stays unreadable would otherwise repeat the same two lines on
+        # every refresh — `_note_model_list` has logged on the transition all
+        # along, and the operator saw the pair twice in one `init` check.
         for note in notes:
-            log.warning("capability host=%s %s", self.cfg.name, note)
+            if note not in previous:
+                log.warning("capability host=%s %s", self.cfg.name, note)
         self._note_capabilities(caps)
 
     def _note_capabilities(self, caps: frozenset[str]) -> None:

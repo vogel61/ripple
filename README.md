@@ -39,8 +39,8 @@ Why a second Mac only helps when the work above RIPPLE is parallel:
 [`docs/manual-en.md`](docs/manual-en.md) §9.
 
 State: `ripple init`, `ripple discover` and `ripple doctor` exist, the
-distribution builds as `ripple-proxy`, and the suite has 1298 tests — 1298
-passed, 0 skipped, 231.71 s (`python -m pytest -q`, 20.11.2026; a snapshot with a
+distribution builds as `ripple-proxy`, and the suite has 1564 tests — 1564
+passed, 0 skipped, 266.52 s (`python -m pytest -q`, 23.11.2026; a snapshot with a
 date on it, not a target).
 Start with [`docs/install.md`](docs/install.md) (English, the primary document)
 or [`docs/install-de.md`](docs/install-de.md) (German).
@@ -154,6 +154,8 @@ fleet), but not in the response the client gets.
 ```bash
 git clone <repo-url>
 cd ripple
+./install.sh                           # finds python3, makes .venv, installs, offers init
+# or double-click Install.command in the Finder
 python3 -m venv .venv                  # Python >= 3.9 is enough (3.9.6 tested)
 ./.venv/bin/python -m pip install .    # `pip install .`, not `-e` — see below
 ./.venv/bin/ripple init                # port, nodes, oMLX key → config.yaml

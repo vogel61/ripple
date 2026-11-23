@@ -58,6 +58,12 @@
        desselben Tons ist eine Bewegung. */
     --ok-bright:#6fcf4a;
     --warn-bright:#f6c477;
+    /* Der dritte Ton der Blink-Familie (#149): `--load` eine Wahrnehmungsstufe
+       heller, im selben Lab-Schritt wie `--sum-loading` — der Wert ist derselbe,
+       der Name ein anderer, weil der eine nur in der Summenzeile gilt und der
+       andere nur am Punkt. Ein Blinken zwischen zwei Farbtönen wäre ein
+       Zustandswechsel; hier blinkt eine Helligkeit. */
+    --load-bright:#76c1ff;
 
     /* Die Summenzeile in 2.1 (#142): derselbe Farbton, eine Wahrnehmungsstufe
        heller — gerechnet in CIE Lab, nicht als HSL-Lichtigkeit +8 %: der
@@ -255,9 +261,21 @@
      Marke nicht. Kleiner wird nichts: 12-px-Untergrenze, Form und Farbtoken je
      Zustand bleiben, wie sie sind. Unter 1440 px ist Umbruch erlaubt und
      richtig — vier Spalten unter 1100 px, zwei unter 900 px. */
-  .legend{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--s3);
-          margin:var(--s5) 0 0;padding:var(--s3) var(--s4);background:var(--surface);
-          border:1px solid var(--line);border-radius:var(--radius)}
+  /* Seit #181 klappt die Legende: zugeklappt bleibt eine Zeile mit dem Knopf,
+     offen genau der Block, der sie vorher war. Die Wahl merkt sich der Browser
+     (`localStorage`), sonst käme der Overhead bei jedem Reload zurück. */
+  .legend{margin:var(--s5) 0 0}
+  .legend-toggle{display:inline-flex;align-items:center;gap:6px;background:none;
+                 border:1px solid var(--line);border-radius:999px;padding:3px 10px;
+                 font:inherit;font-size:var(--t-xs);color:var(--fg-3);cursor:pointer}
+  .legend-toggle::before{content:'\25B8';transition:transform .15s}
+  .legend-toggle[aria-expanded="true"]::before{transform:rotate(90deg)}
+  .legend-toggle:hover{color:var(--fg);border-color:var(--fg-3)}
+  .legend-toggle:focus-visible{outline:2px solid var(--fg-3);outline-offset:2px}
+  .legend-body{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:var(--s3);
+               margin-top:var(--s2);padding:var(--s3) var(--s4);background:var(--surface);
+               border:1px solid var(--line);border-radius:var(--radius)}
+  .legend-body[hidden]{display:none}
   .legend-item{display:flex;flex-direction:column;gap:3px;min-width:0}
   .legend-def{font-size:var(--t-xs);color:var(--fg-3);line-height:1.35}
   .legend-note{grid-column:1/-1;margin-top:2px;padding-top:var(--s2);border-top:1px solid var(--line);
@@ -723,6 +741,11 @@
                         animation:ripple-phase-pp 1s linear infinite}
   .dot[data-phase="tg"]{background:var(--ok);box-shadow:0 0 0 3px rgba(87,166,57,.14);
                         animation:ripple-phase-tg 1s linear infinite}
+  /* #149: der Knoten lädt dieses Modell — blau, der Ton der Ladephase. Er hat
+     Vorrang vor `pp`: die Gewichte fehlen noch, das ist die genauere Auskunft.
+     Dieselbe Uhr und dieselbe Bauform wie die beiden Phasen darüber. */
+  .dot[data-phase="load"]{background:var(--load);box-shadow:0 0 0 3px rgba(90,169,230,.14);
+                          animation:ripple-phase-load 1s linear infinite}
   /* Der Punkt der Gesundmarke rechts vom Knotennamen läuft auf derselben Uhr und
      ist immer grün: er sagt „mindestens ein Modell dieses Knotens arbeitet",
      nicht welches und nicht in welcher Phase. Nur an der `healthy`-Marke — an
@@ -735,6 +758,10 @@
   @keyframes ripple-phase-tg{
     0%,49.9%{background:var(--ok);box-shadow:0 0 0 3px rgba(87,166,57,.14)}
     50%,100%{background:var(--ok-bright);box-shadow:0 0 0 3px rgba(87,166,57,.34)}
+  }
+  @keyframes ripple-phase-load{
+    0%,49.9%{background:var(--load);box-shadow:0 0 0 3px rgba(90,169,230,.14)}
+    50%,100%{background:var(--load-bright);box-shadow:0 0 0 3px rgba(90,169,230,.34)}
   }
   .divider-row td{background:var(--surface-2);padding:7px 10px;font-size:var(--t-xs);
                   text-transform:uppercase;letter-spacing:.09em;color:var(--fg-3);
@@ -1395,7 +1422,7 @@
   }
   @media (max-width:1100px){
     .fleet{grid-template-columns:minmax(0,1fr)}
-    .legend{grid-template-columns:repeat(4,minmax(0,1fr))}
+    .legend-body{grid-template-columns:repeat(4,minmax(0,1fr))}
     #threads{column-count:1}
   }
   @media (max-width:900px){
@@ -1410,7 +1437,7 @@
        ohnehin 100 % breit. */
     #dist{grid-template-columns:minmax(0,1fr)}
     .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
-    .legend{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .legend-body{grid-template-columns:repeat(2,minmax(0,1fr))}
     .metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s3) var(--s4)}
     .masthead{flex-direction:column;gap:var(--s3)}
     .snapshot{text-align:left}
@@ -1580,6 +1607,73 @@
     .log table .dur{justify-content:flex-start}
     .log table .chip{white-space:normal;overflow-wrap:anywhere}
     .log table tr.log-none{padding:14px 10px}
+
+    /* ── Modelle: ein Block je Modell, Knotenzeilen als beschriftete Paare ──── */
+    /* Gemessen an einer Instanz mit zwei Knoten (CDP, 390 × 844): die Tabelle
+       stand mit 840 px in einem 356-px-Kasten (`scrollWidth 840` gegen
+       `clientWidth 356`), also 484 px seitwärts zu scrollen, und die
+       Modellspalte war 100 px breit. Dieselbe Entscheidung wie #134 — eine
+       Zeile ist ein Block, kein gequetschtes Spaltenbündel —, aber nicht
+       dieselbe Regel: die Modelltabelle hat acht Spalten und eine
+       `rowspan`-Zelle, die die Knotenzeilen **eines** Modells zusammenfasst.
+
+       Diese Gruppierung trägt der Block über den Streifen, nicht über eine
+       zweite Kopie des Namens: die `rowspan`-Zelle steht im Markup nur in der
+       ersten Zeile ihres Modells, sie wird hier der Kopf des Blocks, und alle
+       Zeilen dieses Modells hängen an einer durchgehenden linken Kante (2 px,
+       `--line-2`) — vom Kopf bis zur letzten Knotenzeile. Zwischen zwei
+       Modellen bricht die Kante: 12 px Luft und eine 2-px-Linie. „Dieselbe
+       Kante = dasselbe Modell" ist damit ohne neues Markup lesbar; der Name
+       steht einmal, so wie er im Modell einmal existiert. */
+    #models{overflow:visible}
+    #models table,#models table tbody,#models table td{display:block}
+    #models table colgroup,#models table thead{display:none}
+    /* Die 840 px waren die Zusage für den Kasten, nicht für den Inhalt: im Block
+       gibt es keine Spalte, die sie schützen müsste. */
+    #models table{min-width:0}
+    /* Eine Knotenzeile ist eine Zeile aus Paaren: der Knoten für sich, die
+       Messwerte nebeneinander, bis die Breite ausgeht. */
+    #models table tbody tr{display:flex;flex-wrap:wrap;align-items:baseline;
+                           column-gap:16px;row-gap:2px;padding:8px 10px 9px 12px;
+                           border-top:1px solid var(--line);
+                           border-left:2px solid var(--line-2)}
+    #models table tbody tr.group-start{margin-top:12px;
+                                       border-top:2px solid var(--line-2)}
+    #models table tbody tr:first-child{margin-top:0;border-top:0}
+    #models table tbody td{padding:0;border:0;text-align:left;min-width:0}
+    /* Der Blockkopf: die Zelle, die im Markup die Zeilen zusammenfasst. Sie
+       behält Schloss und Routenzeichen (beide inline, mit ihren negativen
+       Rändern — dieselbe Aufhängung wie in der Tabelle), der Name bricht hier
+       aber vollständig um statt nach zwei Zeilen mit „…" zu enden: im Block ist
+       Platz, und ein abgeschnittener Modellname ist die halbe Information. */
+    #models table td.model-cell{flex:1 1 100%;padding:0 0 7px;margin-bottom:8px;
+                                border-bottom:1px solid var(--line);
+                                font-weight:600;white-space:normal;
+                                overflow:visible;overflow-wrap:anywhere;
+                                line-height:1.35}
+    #models table td.model-cell .model-line{display:block;min-height:0;
+                                            white-space:normal;overflow:visible;
+                                            text-overflow:clip}
+    /* Der Knoten steht auf seiner Zeile, das Policy-Feld daneben statt darunter:
+       ein Feld über die ganze Panelbreite sähe aus wie das Feld des Blocks. */
+    #models table td.node-cell{flex:1 1 100%;white-space:normal;
+                               overflow-wrap:anywhere}
+    #models table td.node-cell .node-name{display:inline;font-family:var(--mono)}
+    #models table td.node-cell .pol-sel{display:inline-block;width:auto;
+                                        max-width:100%;margin:0 0 0 8px;
+                                        vertical-align:middle}
+    /* Jeder Messwert nennt sich selbst — das Wort der Kopfzeile, aus demselben
+       Katalog (`data-label`), keine zweite Beschriftung im Markup. */
+    #models table td[data-label]::before{content:attr(data-label);color:var(--fg-3);
+                                         font-size:var(--t-xs);margin-right:6px}
+    #models table td.num{flex:0 0 auto}
+    /* Die Trennzeile vor den nicht geladenen Modellen ist kein Modellblock: sie
+       behält die volle Breite, verliert die Kante und steht zwischen den Gruppen. */
+    #models table tr.divider-row{display:block;margin:12px 0;padding:0;
+                                 border:0;background:var(--surface-2);
+                                 border-radius:6px}
+    #models table tr.divider-row td{display:block;padding:9px 10px 9px 14px;
+                                    border:0}
   }
   @media (prefers-reduced-motion:reduce){
     *{transition:none!important}
@@ -1590,6 +1684,8 @@
                           box-shadow:0 0 0 3px rgba(232,163,61,.34)}
     .dot[data-phase="tg"]{animation:none!important;background:var(--ok-bright);
                           box-shadow:0 0 0 3px rgba(87,166,57,.34)}
+    .dot[data-phase="load"]{animation:none!important;background:var(--load-bright);
+                            box-shadow:0 0 0 3px rgba(90,169,230,.34)}
     [data-state="healthy"][data-phase] .glyph{animation:none!important;
                           background:var(--ok-bright);box-shadow:0 0 0 3px rgba(87,166,57,.34)}
   }

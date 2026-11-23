@@ -27,16 +27,17 @@ import pytest
 import yaml
 
 from ripple.config import (EDITABLE_PATHS, FIELD_HELP, ConfigError, FleetOverlay,
-                           apply_overlay, load_config, load_overlay, policy_assign,
-                           policy_read, policy_refusal, policy_target, policy_value,
-                           save_overlay)
+                           apply_overlay, empty_env_warning, load_config, load_overlay,
+                           policy_assign, policy_read, policy_refusal, policy_target,
+                           policy_value, save_overlay)
 
 from tests.support import closed_port
 
 
 def write_config(tmp_path: Path, *, placement: dict[str, Any] | None = None,
                  hosts: list[dict[str, Any]] | None = None,
-                 affinity: dict[str, Any] | None = None) -> Path:
+                 affinity: dict[str, Any] | None = None,
+                 defaults: dict[str, Any] | None = None) -> Path:
     """A minimal, loadable configuration with machine state inside `tmp_path`."""
     plc: dict[str, Any] = {
         "loading": {"calibration_file": str(tmp_path / "calibration.yaml")},
@@ -60,6 +61,8 @@ def write_config(tmp_path: Path, *, placement: dict[str, Any] | None = None,
     }
     if affinity is not None:
         data["affinity"] = affinity
+    if defaults is not None:
+        data["defaults"] = defaults
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     return path
@@ -448,3 +451,159 @@ def test_no_sentence_just_repeats_its_path():
         assert _squash(sentence) != _squash(path), f"{path}: the sentence is the path"
         assert len(_squash(sentence)) > len(_squash(path)), \
             f"{path}: the sentence says nothing beyond the name"
+
+
+# -- a `${VAR}` that expands to nothing names itself (issue #153) ------------
+#
+# `api_key: ${OMLX_API_KEY}` started from a shell that does not export the
+# variable used to load as the empty string, and the only trace was
+# `401 Unauthorized` from every node — which reads as "RIPPLE lost my key".
+# The loader now names the variable and the field it stood in, and the proxy
+# still starts: a node without a key is a documented state, not a refusal.
+
+def _with_api_key(tmp_path: Path, value: str) -> Path:
+    """The minimal config, with `hosts[0].api_key` set to `value` verbatim."""
+    path = write_config(tmp_path)
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["hosts"][0]["api_key"] = value
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_unset_variable_warns_once_naming_field_and_variable(tmp_path, monkeypatch):
+    monkeypatch.delenv("UNSET_VAR_FOR_TEST", raising=False)
+    cfg = load_config(_with_api_key(tmp_path, "${UNSET_VAR_FOR_TEST}"))
+
+    hits = [w for w in cfg.warnings if "UNSET_VAR_FOR_TEST" in w]
+    assert len(hits) == 1, cfg.warnings
+    assert hits[0] == empty_env_warning("hosts[0].api_key", "UNSET_VAR_FOR_TEST")
+    assert "hosts[0].api_key" in hits[0]
+    assert cfg.empty_env == [("hosts[0].api_key", "UNSET_VAR_FOR_TEST")]
+    # Still a warning: the config loaded and the host is there, key empty.
+    assert cfg.hosts[0].api_key == ""
+
+
+def test_set_variable_warns_about_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SET_VAR_FOR_TEST", "sk-live-value")
+    cfg = load_config(_with_api_key(tmp_path, "${SET_VAR_FOR_TEST}"))
+
+    assert cfg.empty_env == []
+    assert not [w for w in cfg.warnings if "SET_VAR_FOR_TEST" in w]
+    assert cfg.hosts[0].api_key == "sk-live-value"
+    # The sentence names the variable, never the value it holds.
+    assert not any("sk-live-value" in w for w in cfg.warnings)
+
+
+def test_variable_exported_empty_warns_too(tmp_path, monkeypatch):
+    """`export OMLX_API_KEY=` is the same empty field as not exporting it."""
+    monkeypatch.setenv("EMPTY_VAR_FOR_TEST", "")
+    cfg = load_config(_with_api_key(tmp_path, "${EMPTY_VAR_FOR_TEST}"))
+
+    assert cfg.empty_env == [("hosts[0].api_key", "EMPTY_VAR_FOR_TEST")]
+    assert len([w for w in cfg.warnings if "EMPTY_VAR_FOR_TEST" in w]) == 1
+
+# -- a credential may be a reference into a 0600 file (issue #179) ----------
+def test_an_api_key_file_is_resolved_into_the_host(tmp_path):
+    """`api_key_file: path#omlx.fleet` — the config names the place, not the key."""
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text("omlx:\n  fleet: k-fleet\n  nodes:\n    alpha: k-own\n",
+                       encoding="utf-8")
+    hosts = [{"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+              "weight": 1, "api_key_file": f"{secrets}#omlx.fleet"},
+             {"name": "M3", "addresses": ["http://192.0.2.9:8000"],
+              "weight": 1, "api_key_file": f"{secrets}#omlx.nodes.M3"}]
+    cfg = load_config(write_config(tmp_path, hosts=hosts))
+
+    assert cfg.hosts[0].api_key == "k-fleet"
+    # a name that is not in the file: warning, empty key, no crash
+    assert cfg.hosts[1].api_key == ""
+    assert any("has no 'omlx.nodes.M3'" in w for w in cfg.warnings), cfg.warnings
+
+
+def test_a_literal_key_wins_over_the_reference(tmp_path):
+    """Older files keep loading exactly as before."""
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text("omlx:\n  fleet: k-from-file\n", encoding="utf-8")
+    hosts = [{"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+              "weight": 1, "api_key": "k-literal",
+              "api_key_file": f"{secrets}#omlx.fleet"}]
+    cfg = load_config(write_config(tmp_path, hosts=hosts))
+
+    assert cfg.hosts[0].api_key == "k-literal"
+
+
+def test_a_reference_to_a_missing_file_is_a_warning_not_a_crash(tmp_path):
+    hosts = [{"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+              "weight": 1,
+              "api_key_file": f"{tmp_path / 'nowhere.yaml'}#omlx.fleet"}]
+    cfg = load_config(write_config(tmp_path, hosts=hosts))
+
+    assert cfg.hosts[0].api_key == ""
+    assert any("cannot read" in w and "nowhere.yaml" in w
+               for w in cfg.warnings), cfg.warnings
+
+
+def test_a_reference_without_a_key_name_says_how_it_is_written(tmp_path):
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text("omlx:\n  fleet: k-fleet\n", encoding="utf-8")
+    hosts = [{"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+              "weight": 1, "api_key_file": str(secrets)}]
+    cfg = load_config(write_config(tmp_path, hosts=hosts))
+
+    assert cfg.hosts[0].api_key == ""
+    assert any("file#section.key" in w for w in cfg.warnings), cfg.warnings
+
+# -- a node added at the page is a host like any other (issue #182) ---------
+def test_a_node_added_at_the_page_uses_the_fleet_key(tmp_path):
+    """The overlay has no field for a key, and it must not have one: it is
+    written by the API, not by `init`. A node added there answered 401 until
+    someone put the key into a file that is not meant to carry credentials."""
+    path = write_config(tmp_path, defaults={"api_key": "k-fleet"})
+    cfg = load_config(path)
+    overlay = FleetOverlay(path=tmp_path / "runtime.yaml")
+    overlay.hosts["M3"] = {"name": "M3", "addresses": ["http://192.0.2.9:8000"],
+                           "weight": 1}
+
+    assert apply_overlay(cfg, overlay) == []
+    assert cfg.host("M3").api_key == "k-fleet"
+    assert cfg.host("alpha").api_key == "k-fleet"
+
+
+def test_the_fleet_key_may_be_a_reference_into_the_secret_file(tmp_path):
+    """The pair #179 + #182: `defaults.api_key_file` is what `init` writes, so
+    the fleet key an overlay node inherits has to come through the reference."""
+    secrets = tmp_path / "secrets.yaml"
+    secrets.write_text("omlx:\n  fleet: k-from-file\n", encoding="utf-8")
+    path = write_config(tmp_path, defaults={"api_key_file": f"{secrets}#omlx.fleet"})
+    cfg = load_config(path)
+    overlay = FleetOverlay(path=tmp_path / "runtime.yaml")
+    overlay.hosts["M3"] = {"name": "M3", "addresses": ["http://192.0.2.9:8000"],
+                           "weight": 1}
+
+    assert apply_overlay(cfg, overlay) == []
+    assert cfg.host("M3").api_key == "k-from-file"
+
+
+def test_a_node_added_at_the_page_without_a_fleet_key_says_what_will_happen(tmp_path):
+    """No fleet key at all is a read-limited fleet — documented, but the node
+    that was just added must not fail silently."""
+    cfg = load_config(write_config(tmp_path))
+    overlay = FleetOverlay(path=tmp_path / "runtime.yaml")
+    overlay.hosts["M3"] = {"name": "M3", "addresses": ["http://192.0.2.9:8000"],
+                           "weight": 1}
+
+    warnings = apply_overlay(cfg, overlay)
+    assert any("401" in w and "M3" in w for w in warnings), warnings
+
+
+def test_a_bare_ripple_reads_the_config_in_the_ripple_home(tmp_path, monkeypatch):
+    """Issue #183: `ripple` without `--config` has to find what `init` wrote."""
+    from ripple.config import default_config_path
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert default_config_path() == "config.yaml"      # nothing installed yet
+
+    (tmp_path / ".ripple").mkdir()
+    written = tmp_path / ".ripple" / "config.yaml"
+    written.write_text("listen_port: 8010\n", encoding="utf-8")
+    assert default_config_path() == str(written)

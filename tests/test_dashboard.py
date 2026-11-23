@@ -248,13 +248,13 @@ def _healthz() -> dict:
                  "actual_size": 431_961_763_456, "context_len": 524288,
                  "vision": True, "threads": 0, "inflight": 0, "tg_tps": 17.5,
                  "allowed": True, "policy": None, "dispatch": True, "phase": None,
-                 "lock": False},
+                 "lock": False, "loading": False},
                 {"host": "alpha", "available": True, "loaded": True,
                  "estimated_size": 453_635_361_950,
                  "actual_size": M5_MEASURED, "context_len": 524288,
                  "vision": True, "threads": 1, "inflight": 0, "tg_tps": 69.6,
                  "allowed": True, "policy": None, "dispatch": True, "phase": "tg",
-                 "lock": False},
+                 "lock": False, "loading": False},
             ]},
             {"id": "GLM-5.2-oQ4", "lock": False, "lock_reason": None, "hosts": [
                 # Cold load: not resident yet, but the request that caused the
@@ -265,7 +265,7 @@ def _healthz() -> dict:
                  "context_len": 288768, "vision": False, "threads": 0,
                  "inflight": 0, "tg_tps": None, "allowed": True,
                  "policy": None, "dispatch": True, "phase": "pp",
-                 "lock": False},
+                 "lock": False, "loading": True},
             ]},
             # The oMLX-internal tool (#107): resident, but `dispatch: false` and
             # `allowed: false` on every node, `actual_size: 0`, `tg_tps: null` —
@@ -275,19 +275,19 @@ def _healthz() -> dict:
                  "estimated_size": 0, "actual_size": 0, "context_len": None,
                  "vision": False, "threads": 0, "inflight": 0, "tg_tps": None,
                  "allowed": False, "policy": None, "dispatch": False, "phase": None,
-                 "lock": False},
+                 "lock": False, "loading": False},
                 {"host": "alpha", "available": True, "loaded": True,
                  "estimated_size": 0, "actual_size": 0, "context_len": None,
                  "vision": False, "threads": 0, "inflight": 0, "tg_tps": None,
                  "allowed": False, "policy": None, "dispatch": False, "phase": "pp",
-                 "lock": False},
+                 "lock": False, "loading": False},
             ]},
             {"id": "Qwen3.5-9B-oQ4e-mtp", "lock": False, "lock_reason": None, "hosts": [
                 {"host": "beta", "available": True, "loaded": True,
                  "estimated_size": 6_542_399_089, "actual_size": 10_111_095_848,
                  "context_len": 262144, "vision": True, "threads": 0,
                  "inflight": 0, "tg_tps": None, "allowed": True,
-                 "policy": None, "dispatch": False, "phase": None, "lock": False},
+                 "policy": None, "dispatch": False, "phase": None, "lock": False, "loading": False},
             ]},
         ],
     }
@@ -465,7 +465,7 @@ NODE_PREVIEW = {
     "site": "", "site_name": "", "site_networks": [],
     "site_derived": "sa", "site_derived_name": "site-a",
     "site_mismatch": False, "site_unconfirmed": False,
-    "models_error": None, "step": None, "warnings": [],
+    "models_error": None, "step": None, "warnings": [], "keyed": True,
 }
 # The operator declares a site the address does not belong to: a warning in the
 # preview, not a refusal.
@@ -473,11 +473,12 @@ NODE_PREVIEW_MISMATCH = dict(
     NODE_PREVIEW, site="sb", site_name="site-b", site_mismatch=True,
     warnings=["site mismatch: declared site-b, the address is in site-a"])
 # The node answers, its model list does not (oMLX 401 without a key).
+# …and the case of #161: the key was not given, so nothing could be read.
 NODE_PREVIEW_PARTIAL = dict(
-    NODE_PREVIEW, models=[], model_count=0, step="models",
+    NODE_PREVIEW, models=[], model_count=0, step="models", keyed=False,
     models_error="401 Unauthorized", warnings=["model list unreadable: 401"])
 NODE_ADDED = {"source": "overlay", "node_id": "as5-m4", "models": 2,
-              "ceiling_bytes": 525_360_213_856, "used_bytes": 453_635_361_950,
+              "models_error": None, "ceiling_bytes": 525_360_213_856, "used_bytes": 453_635_361_950,
               "address": NODE_ADDRESS, "node": {"name": "192.0.2.40"}}
 DISCOVERY = {
     "cidr": "192.0.2.0/24", "port": 8000, "timeout": 0.5, "count": 2,
@@ -1075,9 +1076,13 @@ def test_the_chip_opens_one_password_field_and_escape_closes_it(rendered, page):
     assert admin["escaped"]["expanded"] == "false"
     assert admin["escaped_field"] == ""
     assert admin["escaped_storage"] is None
-    # Genau ein Passwortfeld auf der Seite, ohne Autovervollständigung.
-    assert page.count('type="password"') == 1
+    # Das Passwortfeld des Chips, ohne Autovervollständigung. Seit #161 gibt es
+    # ein zweites auf der Seite (`nodeApiKey`, der Schlüssel des Knotens selbst)
+    # — zwei maskierte Felder, beide ohne Autovervollständigung, und der Chip
+    # bleibt der einzige im Kopf.
+    assert page.count('type="password"') == 2
     assert 'id="adminKey" type="password" autocomplete="off"' in page
+    assert 'id="nodeApiKey" type="password" autocomplete="off"' in page
     # Kein Formular im Chip: Enter schickt, ohne die Seite zu verlassen. (Das
     # Knoten-Formular hat sein eigenes `onsubmit="return false"`; hier geht es
     # nur um den Kopf.)
@@ -1618,7 +1623,10 @@ def _px(css: str, value: str) -> float:
 
 
 def _legend_columns(css: str, width: int) -> int:
-    """How many columns `.legend` resolves to in a `width`-px window.
+    """How many columns `.legend-body` resolves to in a `width`-px window.
+
+    The grid sits on `.legend-body` since #181: the legend collapses, and the
+    outer element is only the toggle plus the space above the cards.
 
     The default rule plus every `@media (max-width:…)` that applies, in
     ascending order — the cascade the browser runs, so this is the column count
@@ -1631,13 +1639,13 @@ def _legend_columns(css: str, width: int) -> int:
         assert found, "the legend's columns are not a repeat() of equal columns (%s)" % where
         return int(found[1])
 
-    columns = count(_rule(css, ".legend"), "default rule")
+    columns = count(_rule(css, ".legend-body"), "default rule")
     blocks = re.findall(r"@media \(max-width:(\d+)px\)\{((?:[^{}]|\{[^{}]*\})*)\}", bare)
     # Document order, not ascending width: all these are `max-width`, they have
     # the same specificity, and the browser lets the last one in the file win.
     for limit, block in blocks:
-        if width <= int(limit) and ".legend{" in block:
-            columns = count(block.split(".legend{")[1].split("}")[0],
+        if width <= int(limit) and ".legend-body{" in block:
+            columns = count(block.split(".legend-body{")[1].split("}")[0],
                             "max-width:%s px" % limit)
     return columns
 
@@ -1666,7 +1674,7 @@ def test_the_legend_is_one_row_at_1440(css, js):
 
     # The column is what is left of the window after the page's and the
     # legend's own padding, the gaps and the two borders.
-    legend = _rule(css, ".legend")
+    legend = _rule(css, ".legend-body")
     pad = re.search(r"padding:(var\([^)]*\)|[0-9.]+px) (var\([^)]*\)|[0-9.]+px)", legend)
     assert pad, legend
     gap_found = re.search(r"gap:(var\([^)]*\)|[0-9.]+px)", legend)
@@ -1980,14 +1988,15 @@ def test_the_page_never_asks_for_an_id_the_catalog_lacks(rendered):
 
 # Seit #134 tragen die Zellen von 6.5 und des Verlaufs ein `data-label`: unter
 # 700 px ist die Zeile ein Block, und der Bezeichner muss dann am Wert stehen.
-# Der Wert ist übersetzt (dieselben Wörter wie die Spaltenköpfe). `skeleton()`
-# im Stub streicht die übersetzbaren Attribute `title`, `data-tip`,
-# `aria-label`, `placeholder` und `value` — `data-label` kennt es nicht, und das
-# Stub gehört nicht zu diesem Issue. Die Form dieser zwei Blöcke unterscheidet
-# sich zwischen den Sprachen deshalb in genau diesem Attributwert; der Aufbau
-# ist gleich, und das prüfen die Tabellentests (fünf Zellen je 6.5-Zeile, acht
-# im Verlauf).
-LANG_SHAPE_LABELS = ["log", "params"]
+# Die Modelltabelle trägt es seit #135 aus demselben Grund. Der Wert ist
+# übersetzt (dieselben Wörter wie die Spaltenköpfe). `skeleton()` im Stub
+# streicht die übersetzbaren Attribute `title`, `data-tip`, `aria-label`,
+# `placeholder` und `value` — `data-label` kennt es nicht, und das Stub gehört
+# nicht zu diesem Issue. Die Form dieser drei Blöcke unterscheidet sich zwischen
+# den Sprachen deshalb in genau diesem Attributwert; der Aufbau ist gleich, und
+# das prüfen die Tabellentests (fünf Zellen je 6.5-Zeile, acht im Verlauf, acht
+# in der Modelltabelle).
+LANG_SHAPE_LABELS = ["log", "models", "params"]
 
 
 def test_a_language_switch_changes_the_words_not_the_markup(rendered):
@@ -2173,7 +2182,9 @@ def test_the_size_slash_is_as_bright_as_the_numbers(js, rendered):
     # every *size* cell that carries the separator carries the brightened
     # span — the tok/s cell divides on purpose with the quieter `.den`
     # (#30), so a cell with `class="den"` is not one of them
-    cells = re.findall(r'<td class="num">(.*?)</td>', rendered["parts"]["models"], re.S)
+    # `[^>]*`: seit #135 trägt die Zelle zusätzlich `data-label` (der Block
+    # unter 700 px nennt seinen Wert); gesucht ist die Zelle über ihre Klasse.
+    cells = re.findall(r'<td class="num"[^>]*>(.*?)</td>', rendered["parts"]["models"], re.S)
     sized = [c for c in cells if " / " in c and 'class="den"' not in c]
     assert sized, "the model table has no size cell"
     for c in sized:
@@ -3352,10 +3363,16 @@ def test_the_phase_blink_runs_at_one_hertz(css):
     assert "animation:ripple-phase-tg 1s linear infinite" in generate
     assert "background:var(--ok)" in generate
 
+    # #149: the same clock for the load phase — blue, the tone of the load.
+    loading = _rule(css, '.dot[data-phase="load"]')
+    assert "animation:ripple-phase-load 1s linear infinite" in loading
+    assert "background:var(--load)" in loading
+
     # the keyframes: base colour for the first half, the brighter step for the
     # second — 500 ms of each in a 1 s cycle, so 1 Hz with a 500 ms bright half.
     for name, base, bright in (("ripple-phase-pp", "--warn", "--warn-bright"),
-                               ("ripple-phase-tg", "--ok", "--ok-bright")):
+                               ("ripple-phase-tg", "--ok", "--ok-bright"),
+                               ("ripple-phase-load", "--load", "--load-bright")):
         frames = _block(css, "@keyframes %s" % name)
         assert "0%%,49.9%%{background:var(%s)" % base in frames, frames
         assert "50%%,100%%{background:var(%s)" % bright in frames, frames
@@ -3372,7 +3389,8 @@ def test_the_brighter_half_is_the_same_hue(css):
     A blink between two hues would read as a state change, which is exactly what
     the page must not signal twice a second.
     """
-    for base, bright in (("--ok", "--ok-bright"), ("--warn", "--warn-bright")):
+    for base, bright in (("--ok", "--ok-bright"), ("--warn", "--warn-bright"),
+                         ("--load", "--load-bright")):
         hue_a, light_a = _hue_lightness(_token(css, base))
         hue_b, light_b = _hue_lightness(_token(css, bright))
         assert abs(hue_a - hue_b) <= 3, (base, bright, hue_a, hue_b)
@@ -3396,7 +3414,8 @@ def test_reduced_motion_turns_the_blink_into_a_steady_brighter_tint(css):
     deliberate extension of it."""
     block = _block(css, "@media (prefers-reduced-motion:reduce)")
     assert "transition:none!important" in block
-    for phase, bright in (("pp", "--warn-bright"), ("tg", "--ok-bright")):
+    for phase, bright in (("pp", "--warn-bright"), ("tg", "--ok-bright"),
+                          ("load", "--load-bright")):
         rule = re.search(r'\.dot\[data-phase="%s"\]\{([^}]*)\}' % phase, block)
         assert rule, "no reduced-motion rule for %s" % phase
         body = rule.group(1)
@@ -3430,15 +3449,31 @@ def test_a_model_that_is_not_working_keeps_the_steady_dot(rendered):
     assert 'title="loaded"' in dot.group(1)
 
 
-def test_a_model_that_is_cold_loading_shows_the_prefill_on_its_empty_dot(rendered):
-    """The one case where "not resident" and "a request is waiting" are true at
-    once: the model is being loaded by the request that sits in prefill. The dot
-    is empty and blinks — the page shows the phase, not only the residency."""
+def test_a_model_that_is_cold_loading_blinks_blue_on_its_empty_dot(rendered):
+    """#149: the one case where "not resident" and "a request is waiting" are
+    true at once — and since #149 the dot says the more specific thing: blue
+    `load` (the weights are not there yet), not orange `pp` (the request waits).
+
+    The tooltip names the phase and its own field, so colour stays a second
+    carrier and the page cannot be accused of deriving the state itself.
+    """
     row = _row_markup(rendered["parts"]["models_expanded"], "GLM-5.2-oQ4", "alpha")
     dot = re.search(r'<span class="dot off"([^>]*)>', row)
     assert dot, "the cold-loading model has no dot"
+    assert 'data-phase="load"' in dot.group(1)
+    title = html.unescape(dot.group(1))
+    assert "loading (load)" in title
+    assert "Source: /healthz → models[].hosts[].loading" in title
+
+
+def test_a_prefill_without_a_load_keeps_its_orange_dot(rendered):
+    """The precedence is not a blanket: `pp` on a model whose weights *are*
+    resident keeps its own phase and its own source field."""
+    row = _row_markup(rendered["parts"]["models"], "MarkItDown", "alpha")
+    dot = re.search(r'<span class="dot on"([^>]*)>', row)
+    assert dot
     assert 'data-phase="pp"' in dot.group(1)
-    assert "prefill (pp)" in html.unescape(dot.group(1))
+    assert "Source: /healthz → models[].hosts[].phase" in html.unescape(dot.group(1))
 
 
 def test_the_host_health_dot_blinks_only_while_a_model_works(rendered):
@@ -3480,8 +3515,11 @@ def test_the_phase_tooltip_names_the_phase_and_its_source(rendered, js):
     assert "prefill (pp)" in chip_tip
     assert "Source: /healthz → hosts[].phase" in chip_tip
 
-    # both fields are the ones the backend actually sends
-    assert "phaseTip(ph, 'models[].hosts[].phase')" in js
+    # both fields are the ones the backend actually sends — and since #149 the
+    # load phase names its own field instead of borrowing the phase's path
+    assert "phaseTip(ph, where)" in js
+    assert "'models[].hosts[].loading'" in js
+    assert "'models[].hosts[].phase'" in js
     assert "phaseTip(x.phase, 'hosts[].phase')" in js
 
 
@@ -5369,7 +5407,9 @@ def _tps_cell(markup: str, model: str = TPS_MODEL,
     falsche Feld.
     """
     row = _row_markup(markup, model, host)
-    cells = re.findall(r'<td class="num dtps">(.*?)</td>', row, re.S)
+    # `[^>]*`: die Zelle trägt seit #135 auch `data-label`; gefunden wird sie
+    # über ihre Klasse, nicht über die Abwesenheit weiterer Attribute.
+    cells = re.findall(r'<td class="num dtps"[^>]*>(.*?)</td>', row, re.S)
     assert len(cells) == 1, row[:400]
     found = re.search(r'<span class="tip" data-tip="([^"]*)">(.*?)</span>$',
                       cells[0], re.S)
@@ -7288,7 +7328,7 @@ def test_the_svg_survives_the_two_second_patch(series_stub):
     assert series_stub["parts"]["fleet"].count("<svg") == 3
     assert series_stub["i18n_misses"] == []
     assert series_stub["unchanged_templates"] == 0
-    # Nur die zwei Blöcke mit übersetztem `data-label` (#134) — siehe
+    # Nur die drei Blöcke mit übersetztem `data-label` (#134, #135) — siehe
     # `LANG_SHAPE_LABELS`; die Flotte ist keiner davon.
     assert sorted(series_stub["lang_shape_diffs"]) == LANG_SHAPE_LABELS
     assert "fleet" not in series_stub["lang_shape_diffs"]
@@ -7987,8 +8027,12 @@ def test_the_two_rate_cells_show_what_the_chart_draws(series_run):
 
     Der Wert ist der letzte Sample des Eintrags, den `sparkline()` zeichnet —
     nicht die Modellrate aus `metrics` und keine zweite Rechnung im Browser.
-    `total > per thread`, weil die Summe ueber die Stroeme laeuft; beide
-    Unterzeilen nennen dasselbe Fenster wie der Kopf der Kurve.
+    `total > per thread`, weil die Summe ueber die Stroeme laeuft.
+
+    Die Unterzeile nannte frueher dasselbe Fenster wie der Kopf der Kurve
+    ("15 min") und las sich damit als Viertelstundenmittel, das die Seite
+    nirgends rechnet (#150). Sie sagt jetzt, was der Wert ist: der aktuelle
+    Sample. Das Fenster bleibt an der Kurve, wo es die Linie beschreibt.
     """
     (tip_p, lbl_p, val_p, sub_p), (tip_t, lbl_t, val_t, sub_t) = \
         _rate_cells(_cards(series_run["fleet"])["alpha"])
@@ -7997,7 +8041,8 @@ def test_the_two_rate_cells_show_what_the_chart_draws(series_run):
     assert " tok/s" in val_p and " tok/s" in val_t
     number = lambda v: float(v.split("<")[0].replace(",", "."))
     assert number(val_t) > number(val_p) > 0
-    assert sub_p == sub_t == "15 min"
+    assert sub_p == sub_t == "current"
+    assert '<span class="spark-win">15 min</span>' in series_run["fleet"]
 
     # die Rechnung und die Quelle stehen im Tip, in vorhandenen Woertern
     assert "\u03a3 per thread" in tip_t and "hosts[].series[].total" in tip_t
@@ -9071,3 +9116,305 @@ def test_above_the_breakpoint_the_columns_are_what_they_were(css):
     assert log == {"c-time": 104, "c-sid": 168, "c-node": 100, "c-reason": 116,
                    "c-prompt": 84, "c-dur": 126, "c-status": 96}
     assert "width:auto" in _rule(css, ".log col.c-model")
+
+
+# ── Unter 700 px: die Modelltabelle wird ein Block je Modell (issue #135) ────
+# Gemessen an einer Instanz mit zwei Knoten (CDP, 390 × 844): die Tabelle stand
+# mit 840 px in einem 356-px-Kasten (`scrollWidth 840` gegen `clientWidth 356`)
+# — 484 px seitwärts, und die Modellspalte war 100 px breit. Dieselbe
+# Entscheidung wie #134, aber nicht dieselbe Regel: die Modelltabelle hat acht
+# Spalten und eine `rowspan`-Zelle, die die Knotenzeilen **eines** Modells
+# zusammenfasst. Diese Gruppierung muss der Block tragen.
+
+def test_every_model_value_cell_names_itself(rendered):
+    """Acht Zellen je (Modell, Knoten)-Zeile: die Modellzelle ist der Blockkopf
+    und trägt keinen Bezeichner, die sieben Werte tragen ihren.
+
+    Die Wörter sind die der Kopfzeile (dieselben Katalog-Ids), also keine neue
+    Übersetzung für dieselbe Sache. Die Modellzelle bleibt ohne `data-label`,
+    weil sie den Block benennt statt einen Wert — ein „Modell: …" über dem
+    Modellnamen wäre das Wort zweimal.
+    """
+    markup = rendered["parts"]["models"]
+    body = markup[markup.index("<tbody>"):markup.index("</tbody>")]
+    rows = [cells for attrs, cells in
+            re.findall(r"<tr([^>]*)>(.*?)</tr>", body, re.S)
+            if "divider-row" not in attrs]
+    assert rows, "the model table is empty"
+    seen_head = 0
+    for row in rows:
+        cells = re.findall(r"<td([^>]*)>", row)
+        # Acht Zellen in der ersten Zeile eines Modells (sie trägt die
+        # `rowspan`-Zelle), sieben in jeder weiteren — der Modellname steht
+        # einmal, nicht je Knoten.
+        assert len(cells) in (7, 8), cells
+        if len(cells) == 8:
+            seen_head += 1
+            assert "model-cell" in cells[0], cells[0]
+            assert "data-label" not in cells[0], cells[0]
+            cells = cells[1:]
+        labels = [re.search(r'data-label="([^"]*)"', c) for c in cells]
+        assert all(labels), row[:200]
+        assert all(html.unescape(found[1]).strip() for found in labels if found), labels
+    # The fixture has more (model, node) rows than models, or this proves nothing.
+    assert seen_head == len(_healthz()["models"]), seen_head
+
+
+def test_below_seven_hundred_pixels_the_model_table_is_a_block_per_model(css):
+    """Die Gruppierung der `rowspan`-Zelle trägt der Streifen: die Modellzelle
+    steht im Markup nur in der ersten Zeile ihres Modells, sie wird der Kopf des
+    Blocks, und alle Zeilen dieses Modells hängen an derselben linken Kante.
+    Zwischen zwei Modellen bricht die Kante (`group-start` + 12 px Luft).
+
+    Die 840 px waren die Zusage für den Kasten, nicht für den Inhalt: im Block
+    gibt es keine Spalte, die sie schützen müsste.
+    """
+    block = re.search(r"@media \(max-width:700px\)\{(.*?)\n  \}", css, re.S)
+    assert block, "the 700-px rule of #134 is gone"
+    body = block[1]
+    assert "#models{overflow:visible}" in body          # kein Balken am Kasten
+    assert re.search(r"#models table,.*?\{[^}]*display:block", body, re.S)
+    assert re.search(r"#models table\{min-width:0\}", body)
+    assert "thead{display:none}" in body or re.search(r"#models table thead\{display:none\}", body)
+    assert "content:attr(data-label)" in body
+    # Der Kopf des Blocks ist die Zelle mit der `rowspan`-Gruppe.
+    found = re.search(r"#models table td\.model-cell\{([^}]*)\}", body)
+    assert found
+    assert "flex:1 1 100%" in found[1]
+    # Die Kante, die die Zeilen eines Modells zusammenhält, und ihr Bruch
+    # zwischen zwei Modellen.
+    found = re.search(r"#models table tbody tr\{([^}]*)\}", body)
+    assert found
+    assert "border-left:2px solid var(--line-2)" in found[1]
+    assert "flex-wrap:wrap" in found[1]
+    found = re.search(r"#models table tbody tr\.group-start\{([^}]*)\}", body)
+    assert found
+    assert "margin-top:12px" in found[1]
+    assert "border-top:2px solid var(--line-2)" in found[1]
+
+
+def test_the_model_table_above_the_breakpoint_is_what_it_was(css, js):
+    """Ab 1440 px bleibt die Tabelle eine Tabelle: acht Spalten, 840 px Sockel,
+    Modellspalte als Rest. Gemessen vor und nach der Änderung an derselben
+    Instanz (1440 × 1000): Tabelle 1374 px, Spalten 634 · 108 · 108 · 104 · 96 ·
+    100 · 122 · 102, Modellzelle 634 px — in beiden Fassungen gleich."""
+    assert re.search(r"#models table\{min-width:840px\}", css)
+    # Der Sockel steht nicht in der 700-px-Regel, sondern in den Grundregeln:
+    # sonst gälte er nur noch auf dem Telefon.
+    block = re.search(r"@media \(max-width:700px\)\{(.*?)\n  \}", css, re.S)
+    assert block
+    assert "840px" not in block[1]
+    cols = re.findall(r'<col style="width:(\d+)px">', js)
+    assert cols == ["108", "108", "104", "96", "100", "122", "102"], cols
+    assert '<col style="width:auto">' in js
+
+
+# ---------------------------------------------------------------------------
+# 7.1 asks for the node's own key (issue #161)
+# ---------------------------------------------------------------------------
+def test_the_add_form_asks_for_the_nodes_own_key(page):
+    """A node inherits nothing from `defaults`, so the key has to be *asked for*.
+
+    The field sits in the shell next to the address — same rule as the three
+    address fields of #71: `apply()` replaces nodes, and a field in the patch
+    would lose what is typed into it. Empty stays valid and means a read-only
+    node, which is why the two hints under the form name that state and the
+    second, separate admin key that belongs in `config.yaml` (#161, option 5 on
+    the page).
+    """
+    assert 'id="nodeApiKey"' in page
+    assert 'id="nodeApiKey" type="password"' in page
+    assert 'data-i18n="nodes.api_key"' in page
+    # both states are named, not left to the operator's imagination
+    assert 'data-i18n="nodes.api_key_hint"' in page
+    assert 'data-i18n-html="nodes.repl_key_note"' in page
+    # the address form still is what it was
+    assert 'id="nodeAddress"' in page
+
+
+def test_the_preview_and_the_add_send_the_key_the_field_holds(js):
+    """Both calls carry `api_key` — the preview so it reports the real model
+    count, the add so the node keeps it across a restart.
+
+    A preview without the key would read "0 models" for a node that has 23 and
+    the operator would see the number only after the write (#161).
+    """
+    preview = js[js.index("async function nodePreview("):js.index("function nodeCancel(")]
+    add = js[js.index("async function nodeAdd("):js.index("async function nodeScan(")]
+    for block in (preview, add):
+        assert "nodeValue('nodeApiKey')" in block
+        assert "body.api_key = key" in block
+    assert "'/admin/nodes?dry_run=true'" in preview
+    assert "body" in preview and "body" in add
+
+
+def test_a_preview_without_a_key_says_read_only_instead_of_empty(rendered):
+    """`models_error` plus `keyed: false` is a state, not a gap: the card names
+    it, so "0 models" is not read as "the machine carries nothing" (#161)."""
+    partial = _nodes(rendered)["preview_partial"]
+    assert _en()["nodes.readonly"] in partial
+    assert _en()["nodes.models_unreadable"] in partial
+
+
+def test_a_node_with_a_key_does_not_carry_the_read_only_line(rendered):
+    """The other half of the pair: with a key and a readable list the line must
+    not appear, or the page would call every node read-only."""
+    preview = _nodes(rendered)["preview"]
+    assert _en()["nodes.readonly"] not in preview
+
+
+def test_the_read_only_answer_is_a_sentence_not_a_zero(en):
+    """The add's answer distinguishes "0 models because nothing could be read"
+    from "the node carries nothing" (#161)."""
+    assert "{name}" in en["nodes.added_readonly"]
+    assert "{detail}" in en["nodes.added_readonly"]
+    assert en["nodes.added_readonly"] != en["nodes.added"]
+    # option 5 on the page: the admin key is a second, separate value
+    assert "hosts[].replication.api_key" in en["nodes.repl_key_note"]
+    assert "config.yaml" in en["nodes.repl_key_note"]
+
+
+# ---------------------------------------------------------------------------
+# A refused admin key is its own sentence, not the generic one (issue #156)
+# ---------------------------------------------------------------------------
+# What `_require_admin` answers now: the same message, plus the marker. The page
+# reads `step` and picks the sentence — without it the operator saw "Failed: admin
+# key required" and no hint that the tab held the *previous* key.
+ADMIN_REFUSAL_HARNESS = r"""
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const jsPath = process.argv[2];
+const i18nDir = process.argv[3];
+const payload = JSON.parse(process.argv[4]);
+
+function makeEl(tag) {
+  const el = {tag: tag || 'div', value: '', childNodes: [], attributes: [],
+              textContent: '', innerHTML: ''};
+  if (tag === 'template') el.content = {childNodes: []};
+  el.appendChild = () => {}; el.removeChild = () => {}; el.replaceChild = () => {};
+  el.setAttribute = (k, v) => { el.attributes[k] = String(v); };
+  el.getAttribute = k => (k in el.attributes ? el.attributes[k] : null);
+  el.removeAttribute = k => { delete el.attributes[k]; };
+  el.addEventListener = () => {};
+  el.classList = {add() {}, remove() {}};
+  return el;
+}
+
+const elements = new Map();
+const document = {
+  documentElement: makeEl('html'),
+  body: makeEl('body'),
+  getElementById(id) {
+    if (!elements.has(id)) elements.set(id, makeEl('div'));
+    return elements.get(id);
+  },
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+  createElement(tag) { return makeEl(tag); },
+  importNode(node) { return node; },
+};
+
+function fetchStub(url) {
+  if (!String(url).startsWith('/static/i18n/')) {
+    return Promise.reject(new Error('unexpected fetch: ' + url));
+  }
+  const file = path.join(i18nDir, String(url).replace(/^\/static\/i18n\//, ''));
+  const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+  return Promise.resolve({ok: true, status: 200, json: async () => body,
+                          text: async () => JSON.stringify(body)});
+}
+
+const store = new Map();
+const sandbox = {
+  Date,
+  document,
+  localStorage: {getItem: k => (store.has(k) ? store.get(k) : null),
+                  setItem: (k, v) => store.set(k, String(v)),
+                  removeItem: k => store.delete(k)},
+  navigator: {languages: ['en-GB'], language: 'en-GB'},
+  window: {confirm: () => false, addEventListener() {}, removeEventListener() {}},
+  sessionStorage: {getItem: () => null, setItem() {}, removeItem() {}},
+  fetch: fetchStub,
+  setInterval: () => 0,
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  console: {log() {}, warn() {}, error() {}},
+};
+sandbox.globalThis = sandbox;
+
+(async () => {
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(jsPath, 'utf8'), sandbox, {filename: jsPath});
+  const api = sandbox.RIPPLE;
+  await api.ready;
+  const out = {};
+  for (const lang of ['en', 'de']) {
+    api.chooseLang(lang);
+    out[lang] = {};
+    for (const name of Object.keys(payload)) {
+      out[lang][name] = api.nodeError(payload[name]);
+    }
+  }
+  process.stdout.write(JSON.stringify(out));
+})().catch(err => {
+  process.stderr.write(String(err && err.stack ? err.stack : err) + '\n');
+  process.exit(1);
+});
+"""
+
+# The refusal as the server sends it now, and the same body from an older build
+# (no `step`): the second must keep falling back to `nodes.err.other`.
+REFUSALS = {
+    "refused": {"status": 401,
+                "data": {"error": {"message": "admin key required",
+                                   "type": "invalid_request_error",
+                                   "code": "admin_key_refused",
+                                   "step": "admin"}}},
+    "unmarked": {"status": 401,
+                 "data": {"error": {"message": "admin key required",
+                                    "type": "invalid_request_error"}}},
+}
+
+
+@pytest.fixture(scope="module")
+def refusals_run(tmp_path_factory) -> dict:
+    """`nodeError()` against the marked and the unmarked refusal, in both languages."""
+    if NODE is None:
+        pytest.skip("node is not installed — the catalog measurement needs it")
+    work = tmp_path_factory.mktemp("admin-refusal")
+    harness = work / "refusal.js"
+    harness.write_text(ADMIN_REFUSAL_HARNESS, encoding="utf-8")
+    proc = subprocess.run([str(NODE), str(harness), str(STATIC / "dashboard.js"),
+                           str(STATIC / "i18n"), json.dumps(REFUSALS)],
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_a_refused_admin_key_is_named_in_the_pages_language(refusals_run):
+    """The marker turns into the sentence that says *which* key and *where* it is.
+
+    `step: "admin"` is the whole contract: the server keeps its message, the page
+    adds the cause (the tab holds the previous one) and the place (config.yaml).
+    """
+    for lang in ("en", "de"):
+        cat = _catalog(lang)
+        answer = refusals_run[lang]["refused"]
+        assert answer["text"] == cat["nodes.err.admin"], lang
+        assert answer["text"] != cat["nodes.err.other"].replace(
+            "{msg}", "admin key required"), lang
+        # the server's own sentence stays the tooltip, as for every other step
+        assert answer["tip"] == "admin key required", lang
+
+
+def test_a_refusal_without_the_marker_keeps_the_generic_sentence(refusals_run):
+    """The fallback is not removed: a body without `step` still reads as before."""
+    for lang in ("en", "de"):
+        cat = _catalog(lang)
+        answer = refusals_run[lang]["unmarked"]
+        assert answer["text"] == cat["nodes.err.other"].replace(
+            "{msg}", "admin key required"), lang

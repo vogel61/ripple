@@ -36,7 +36,7 @@ $ curl -s http://127.0.0.1:8000/v1/models
 {"error":{"message":"API key required","type":"authentication_error","param":null,"code":null}}
 ```
 
-Ohne Schlüssel ist ein Knoten für RIPPLE nicht lesbar: Es kennt keine Modelle und kann nichts routen. Die Installation funktioniert trotzdem — der Proxy startet, das Dashboard zeigt den Knoten, `ripple doctor` meldet die Einschränkung als Warnung statt als Fehler —, aber es fließt kein Verkehr. Der Schlüssel eines Knotens liegt meist in `~/.omlx/api_key.txt`; `ripple init` schaut dort nach und akzeptiert auch `$OMLX_API_KEY`.
+Ohne Schlüssel ist ein Knoten für RIPPLE nicht lesbar: Es kennt keine Modelle und kann nichts routen. Die Installation funktioniert trotzdem — der Proxy startet, das Dashboard zeigt den Knoten, `ripple doctor` meldet die Einschränkung als Warnung statt als Fehler —, aber es fließt kein Verkehr. Der Schlüssel steht in oMLX selbst: Admin-Panel dieser Instanz (`http://<host>:8000/admin`) → **Settings** → **API key**. Abgelegt ist er in `~/.omlx/settings.json` unter `auth.api_key`. oMLX schreibt **keine** Textkopie davon — liegt auf einer Maschine eine `~/.omlx/api_key.txt`, hat sie jemand angelegt, damit andere Werkzeuge sie lesen können; `ripple init` bietet sie an, wenn sie da ist, und akzeptiert auch `$OMLX_API_KEY`. `ripple init` schreibt den Schlüssel nicht in die `config.yaml`, sondern in `~/.ripple/secrets.yaml` (Modus 0600) und hinterlässt dort nur einen Verweis (`api_key_file: ~/.ripple/secrets.yaml#omlx.fleet`) — die Konfiguration ist die Datei, die man in ein Forum kopiert. `ripple doctor` meldet `OK secrets`, wenn eine Datei keinen Schlüssel enthält. Bei mehr als einem Knoten wird der Schlüssel pro Knoten gefragt: die erste Antwort gilt für die übrigen als Vorgabe, und ein Knoten, der den Schlüssel ablehnt, wird einmal nach seinem eigenen gefragt — der Unterschied landet als `hosts.<name>.api_key` in der Datei, weil jede Maschine ihren eigenen Schlüssel hat.
 
 ---
 
@@ -45,13 +45,29 @@ Ohne Schlüssel ist ein Knoten für RIPPLE nicht lesbar: Es kennt keine Modelle 
 ```bash
 git clone <repo-url>
 cd ripple
+./install.sh
+```
 
+`install.sh` sucht Python, legt `.venv` an, installiert RIPPLE und bietet am Ende `ripple init` an. Im Finder geht auch Doppelklick auf `Install.command` — macOS öffnet sie im Terminal. Dieselben Schritte von Hand, wenn dir das lieber ist:
+
+```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install .
 
 ./.venv/bin/ripple --version
-# RIPPLE 0.1.0
+# RIPPLE 0.2.3
 ```
+
+### Kein `python3`? Das ist das Einzige, was die Installation nicht selbst kann
+
+macOS liefert seit 12.3 kein Python mehr mit. RIPPLEs eigene Abhängigkeiten (fastapi, uvicorn, httpx, PyYAML) holt pip; Python nicht. `./install.sh` sagt das und druckt die zwei Zeilen, die es lösen — eine davon in Terminal kopieren:
+
+```bash
+xcode-select --install      # Apples Command Line Tools, bringen python3 mit
+brew install python@3.13    # oder Homebrew, falls vorhanden
+```
+
+Sonst fehlt nichts: kein Compiler, kein `uv`, kein `pipx`.
 
 Das Distributionspaket heißt `ripple-proxy` (der PyPI-Name `ripple` gehört zu fremden Projekten); das Import-Paket und das Konsolenskript heißen beide `ripple`. Das Dashboard, sein Stylesheet und alle 16 Sprachkataloge reisen im Wheel mit.
 
@@ -86,7 +102,7 @@ uv pip install --python .venv/bin/python .
 ./.venv/bin/ripple init
 ```
 
-`init` fragt fünf Dinge und schreibt zwei Dateien. Ein Lauf gegen einen einzelnen lokalen Knoten sieht so aus; alles in Klammern ist der Standard, und eine Zeile ohne Antwort hat ihn übernommen. (Die Konfigurationsprüfung am Ende ist hier auf ihren Knoten-Block gekürzt.)
+`init` fragt sechs Dinge und schreibt zwei Dateien. Ein Lauf gegen einen einzelnen lokalen Knoten sieht so aus; alles in Klammern ist der Standard, und eine Zeile ohne Antwort hat ihn übernommen. (Die Konfigurationsprüfung am Ende ist hier auf ihren Knoten-Block gekürzt.)
 
 ```
 RIPPLE init — first-run configuration
@@ -100,17 +116,21 @@ discovered 1 node(s):
 Use these nodes? [Y/n]:
 node 1/1 (http://127.0.0.1:8000) name [local]: alpha
 node 1/1 (http://127.0.0.1:8000) weight [1]:
-node 1/1 (http://127.0.0.1:8000) models (comma separated, empty = all offered):
+node 1/1 (http://127.0.0.1:8000) models (comma separated; empty = the chat-capable ones, `all` = every model the node offers):
 Site name (room, building or city; empty = local) [local]:
 Site networks (CIDR, comma separated) [192.0.2.0/24]:
 site local: local — 192.0.2.0/24
   loopback: alpha — this machine, no site: written (loopback is in no site's networks; `ripple doctor` reports SKIP)
 Use the oMLX key from $OMLX_API_KEY? [Y/n]:
 oMLX key: read from $OMLX_API_KEY
-node alpha: 23 model(s) offered — allow-list stays empty, which means all of them (restrict with `models:` in the config)
-RIPPLE admin key: generated (32 hex) — it is in config.yaml at auth.admin_key and is not shown here
+node alpha: allow-list = 21 chat-capable model(s); left out 2 that are not chat models: MarkItDown (markitdown), Qwen3-Embedding-4B-4bit-DWQ (embedding) — name them (or answer `all`) to route them
+RIPPLE admin key (empty = generate a 32-hex one):
 
 wrote /Users/you/ripple/config.yaml (mode 0600)
+RIPPLE admin key — shown once, store it now:
+  4f1c8a2b7d3e90516caf42b8de710593
+  (also in config.yaml at auth.admin_key; it opens /keys and /admin/*)
+
 wrote /Users/you/.ripple/keys.yaml (mode 0600)
 
 client key "first-client" — shown once, store it now:
@@ -130,7 +150,7 @@ client key "first-client" — shown once, store it now:
 — one real request through the new configuration —
 test request: 200 — model qwen3-coder-30b — {"id":"chatcmpl-9f3c1a2b","object":"chat.completion",…}
 
-RIPPLE is configured. Start it with:  ripple --config /Users/you/ripple/config.yaml
+RIPPLE is configured. Start it with:  ripple --config ~/.ripple/config.yaml
 ```
 
 ### Was die Fragen bedeuten
@@ -154,9 +174,17 @@ Nimm den Vorschlag an, oder antworte `n` und gib einen Port ein. So oder so geht
 
 `discover` gibt eine Zeile pro Knoten aus, mit Adresse, `node_id`, Modellanzahl, Latenz und ob Admin-Rechte bestehen; `--json` liefert dasselbe als Daten, `--address` prüft einen bestimmten Knoten statt zu scannen. Die Identität kommt aus `GET /api/cluster/node_id`, nie aus der Adresse — ein Knoten, der umgezogen ist, wird wieder gefunden. Eine Adresse, die nichts beantwortet, wird trotzdem ein Knoten in der Konfiguration: Ein Knoten, der gerade aus ist, ist genau der, den du heute konfiguriert haben willst, also wird er aufgenommen, wenn er zurückkommt.
 
-**Name, Gewicht, Modelle.** Der Name ist der stabile Schlüssel für Thread-Slots, Affinität und jede Logzeile; wähle etwas, das du in einem Log wiedererkennst. Das Gewicht ist der Zielanteil neuer Threads — `3` und `2` bedeuten 60 % / 40 %. Lass `models` leer, außer du willst den Knoten einschränken: leer bedeutet *alles, was dieser Knoten anbietet*, und eine eingetragene Liste ist eine Allow-List, die die heutige Flotte einfriert. Ein Modell, das du nächsten Monat in oMLX hinzufügst, bliebe in RIPPLE unsichtbar, ohne dass irgendetwas sagt, warum. Dieser stille Fehler ist der Grund, warum die leere Antwort der Standard ist.
+**Name, Gewicht, Modelle.** Der Name ist der stabile Schlüssel für Thread-Slots, Affinität und jede Logzeile; wähle etwas, das du in einem Log wiedererkennst. Das Gewicht ist der Zielanteil neuer Threads — `3` und `2` bedeuten 60 % / 40 %. Die Modell-Antwort ist eine Allow-List: leer nimmt den Standard, und der sind die **chat-fähigen** Modelle des Knotens — alles, dessen `model_type` ein Chat-Typ ist (`llm`, `vlm`, …). oMLX bietet daneben Utility-Engines an (`markitdown` wandelt Dokumente um, `embedding` ist ein Embedding-Modell); sie sind legitim, aber sie sind keine Threads, die man balanciert — sie bleiben draußen, solange du sie nicht nennst. `init` sagt in einer Zeile, was es erlaubt hat und welche Modelle es mit ihrem Typ ausgelassen hat: die leere Antwort ist eine Entscheidung, die man lesen kann, kein Standardwert. Antworte `all`, um `models` bewusst leer zu lassen: dann ist jedes Modell des Knotens routbar, auch die Utility-Engines, und `init` sagt, wie viele es sind. Eine selbst getippte Liste wird genau so geschrieben, wie sie getippt wurde — und sie friert die heutige Flotte ein: ein Modell, das du nächsten Monat in oMLX hinzufügst, bliebe in RIPPLE unsichtbar, ohne dass irgendetwas sagt, warum. Deshalb gibt es den chat-fähigen Standard statt der vollen Liste von heute. Der Typ ist die Erklärung des Knotens selbst, und sie ist nicht immer das, was ein Betreiber ein Chat-Modell nennen würde: ein Draft-Modell für spekulatives Dekodieren (`…-drafter`) wird als `llm` gemeldet und wäre wie jedes andere routbar. Trägt dein Knoten eines, nimm es aus der Liste oder verberge es mit der Modell-Policy (Handbuch §6.2).
 
 **Der Standort.** Nach den Knoten fragt `init`, wo diese Maschine steht: einen Namen — den Raum, das Gebäude, die Stadt — und die Netze, die dazugehören, als CIDR. Die Reihenfolge ist nicht kosmetisch: Diese Netze werden gegen die Knotenadressen geprüft, also müssen die Knoten vorher bekannt sein. Der Vorschlag für die Netze wird aus der Schnittstelle abgeleitet, die die Default-Route trägt (`ifconfig` auf macOS, `ip -o -4 addr` auf Linux); Loopback (`127.0.0.0/8`) und Link-Local (`169.254.0.0/16`) werden verworfen, denn eine Schnittstelle, die nur eine selbst vergebene Adresse trägt, ist kein Standort. Lässt sich nichts ableiten, fragt `init`, statt `192.168.0.0/24` zu erfinden.
+
+**Die Netze sind kein Suchbereich** — `init` prüft nur die Adressen, die es bekommen hat, und die Netze sind ein Etikett dafür, wo diese Maschine steht. Wer `192.0.2.0/24` einträgt, liest das als „schau dort nach", deshalb bietet `init` direkt nach den Netzen den Durchlauf an:
+
+```
+Scan 192.0.2.0/24 for further oMLX nodes? (a sweep: one request per address, port 8000) [y/N]:
+```
+
+Der Standard ist **nein**: ein Sweep ist Verkehr in einem fremden Netz — genau deshalb hält auch `ripple discover` ihn hinter einem ausdrücklichen `--scan`. Wer `y` antwortet, bekommt für jeden gefundenen Knoten dieselben drei Fragen wie für den Knoten auf Loopback — Name, Gewicht, Modelle —, und danach wird er genauso behandelt (Key-Frage pro Knoten, Allow-List, `doctor`). Einen Knoten, den die Flotte schon hat, überspringt der Durchlauf über die `node_id`: dasselbe oMLX antwortet auf jeder Adresse, auf der es lauscht, auch auf der LAN-Adresse dieser Maschine.
 
 Enter nimmt den Standard `local` und das abgeleitete Netz. Der Standort wird als ein Block geschrieben — die `id` kommt aus dem Namen, klein geschrieben, mit Bindestrichen —, und `site: <id>` steht **nur** an einem Knoten, dessen Adresse wirklich in einem der Netze liegt. Ein Knoten in einem anderen Netz bleibt ohne Standort, statt eine Behauptung zu erben, die `doctor` dann widerlegen müsste: Ein einzelner lokaler Knoten über Loopback behält also `site=-`, während der Block existiert — und `init` sagt das in einer Zeile, statt es dich merken zu lassen. Das ist die ehrliche Antwort und keine Lücke: `127.0.0.1` heißt *diese Maschine*, ein Standort benennt *Netze*, und Loopback ist in keinem davon — es gibt also nichts zu vergleichen, und `ripple doctor` meldet `SKIP` mit Loopback als Begründung (siehe §4). Sobald eine zweite Maschine konfiguriert ist, liegt deren Adresse in einem Netz, und ihr `site:` ist eine Behauptung, die tatsächlich geprüft wird.
 
@@ -190,7 +218,7 @@ hosts:
 
 Ein Standort ohne `networks` wird angenommen statt abgelehnt: Er ist ein Name, den niemand prüfen kann, und `ripple doctor` sagt genau das, statt es vorzutäuschen. Zwei Standorte mit überlappenden Netzen sind ebenfalls eine Warnung — der erste Standort in der Datei gewinnt.
 
-**Der oMLX-Schlüssel.** `init` nimmt ihn aus `$OMLX_API_KEY`, aus `~/.omlx/api_key.txt` oder aus deiner Eingabe (ohne Echo). Eine leere Antwort ist gültig und bedeutet Nur-Lesen: Die Konfiguration wird ohne Schlüssel geschrieben, und der Knoten antwortet auf seine Modellliste mit `401`. Der Schlüssel wird nie ausgegeben und nie geloggt.
+**Der oMLX-Schlüssel.** `init` fragt ihn pro Knoten, nimmt ihn aus `$OMLX_API_KEY`, aus `~/.omlx/api_key.txt` oder aus deiner Eingabe (ohne Echo); ab dem zweiten Knoten lautet die Frage `same oMLX key as node 1?`, und ein abgelehnter Schlüssel wird einmal pro Knoten nachgefragt. Eine leere Antwort ist gültig und bedeutet Nur-Lesen: Die Konfiguration wird ohne Schlüssel geschrieben, und der Knoten antwortet auf seine Modellliste mit `401`. Der Schlüssel wird nie ausgegeben und nie geloggt.
 
 **Die Prefill-Rate (`pp_tps`).** `init` schreibt sie nicht, und zum Starten braucht sie niemand: `hosts[].pp_tps` ist die gemessene Kalt-Prefill-Rate eines Knotens in Token pro Sekunde, und sie hat genau eine Aufgabe — einen Umzug zu bepreisen. Wenn RIPPLE einen gebundenen Thread auf einen anderen Knoten umzieht, muss dessen ganzer Prompt dort neu geprefillt werden, was `prompt_tokens / pp_tps` Sekunden kostet; `placement.rebind` wiegt diese Kosten gegen den Decode-Gewinn ab, bevor es etwas umzieht, und ein Knoten ohne Rate hat kein Kostenmodell und ist nie ein Ziel. `placement.rebind.default_pp_tps: 0` heißt *nicht gemessen*, nicht *unendlich schnell*: 0 bepreist nichts, damit wird jeder Knoten ohne eigenes `pp_tps` übersprungen, und Rebinding ist an, kann aber nie feuern — genau davor warnt `ripple doctor` (siehe §4). Nimm die Zahl aus deiner eigenen Messung (`docs/measurements.md` hat das Verfahren und die Referenzwerte) und schreib sie in den Host-Eintrag.
 
@@ -198,10 +226,22 @@ Ein Standort ohne `networks` wird angenommen statt abgelehnt: Er ist ein Name, d
 
 | Datei | Inhalt |
 |---|---|
-| `config.yaml` (aktuelles Verzeichnis oder `--config`) | die Konfiguration, Modus `0600`; enthält den Admin-Schlüssel |
+| `~/.ripple/config.yaml` (oder `--config PATH`) | die Konfiguration, Modus `0600`; sie nennt die Schlüssel, sie enthält sie nicht |
 | `~/.ripple/keys.yaml` (oder `<home-dir>/.ripple/keys.yaml`) | Client-Schlüssel, Modus `0600` |
 
-Der Admin-Schlüssel hat 32 Hex-Zeichen, wird generiert, nach `auth.admin_key` geschrieben und nie ausgegeben. Der Client-Schlüssel wird genau einmal ausgegeben — kopiere ihn jetzt; danach wird nur die maskierte Form gezeigt. Zum Schluss lädt `init` die gerade geschriebene Konfiguration, gibt die Routing-Tabelle aus und schickt eine echte Completion durch den Proxy, denn eine Konfiguration, die validiert, ist nicht dasselbe wie eine, die antwortet. Eine vorhandene `config.yaml` oder ein vorhandener Schlüsselspeicher wird nie überschrieben: `init` verweigert, nennt den Pfad und verweist auf `--force`.
+Der Admin-Schlüssel wird abgefragt: entweder einen eintippen (er wird genau so verwendet und nie zurückgezeigt — nur seine Länge wird gemeldet, denn ein kurzer Schlüssel ist eine legitime Wahl) oder Enter drücken, dann generiert `init` 32 Hex-Zeichen und gibt sie einmal aus, in derselben Form wie den Client-Schlüssel. So oder so landet der Schlüssel in `auth.admin_key`, und der Betreiber beendet die Installation mit ihm in der Hand. Der Client-Schlüssel wird genau einmal ausgegeben — kopiere ihn jetzt; danach wird nur die maskierte Form gezeigt. Keiner der beiden Schlüssel erreicht je das Logfile oder die Routing-Tabelle. Zum Schluss lädt `init` die gerade geschriebene Konfiguration, gibt die Routing-Tabelle aus und schickt eine echte Completion durch den Proxy, denn eine Konfiguration, die validiert, ist nicht dasselbe wie eine, die antwortet. Eine vorhandene `config.yaml` oder ein vorhandener Schlüsselspeicher wird nie überschrieben: `init` verweigert, nennt den Pfad und verweist auf `--force`.
+
+Der oMLX-Schlüssel wird bewusst unter **beiden** Namen geschrieben — eine Frage, zwei Felder:
+
+```yaml
+defaults:
+  api_key: …            # RIPPLE → oMLX: der Client-Schlüssel, der durchgereicht wird
+replication:
+  admin_key: …          # derselbe oMLX-Schlüssel: Admin-Aufrufe und die Zustands-Messung
+  # `enabled` bleibt false — der Schlüssel allein schaltet die Replikation nicht ein
+```
+
+`defaults.api_key` ist das, was RIPPLE für Completions an die Knoten schickt. `replication.admin_key` ist derselbe Schlüssel unter dem Namen, den die Zustands-Messung pro Host (`GET /admin/api/activity`, die Kurven auf der Fleet-Karte) und die Admin-Aufrufe der Replikation lesen. Eine Konfiguration mit nur dem ersten Feld ist der Grund, warum eine frische Installation früher gleichzeitig ein grünes `ripple doctor` und eine leere Fleet-Karten-Historie zeigte; `init` schreibt beide, damit die beiden Aussagen übereinstimmen. Eine von Hand gebaute Konfiguration braucht ebenfalls beide Zeilen — `replication.enabled` bleibt auf seinem Standard (`false`), bis du die Replikation bewusst einschaltest.
 
 Flags (`ripple init --help`):
 
@@ -212,7 +252,7 @@ Flags (`ripple init --help`):
 | `--port N` | Listen-Port (Standard 8010; ein belegter Port rückt auf den nächsten freien) |
 | `--host URL` | oMLX-Adresse, wiederholbar |
 | `--name NAME` | Knotenname; nur bei genau einem Knoten |
-| `--config PATH` | wohin `config.yaml` geschrieben wird (Standard `./config.yaml`) |
+| `--config PATH` | wohin `config.yaml` geschrieben wird (Standard `~/.ripple/config.yaml`) |
 | `--home-dir PATH` | Home-Verzeichnis statt `$HOME`; der Schlüsselspeicher geht nach `<path>/.ripple/keys.yaml` |
 | `--omlx-key KEY` | der oMLX-Schlüssel auf der Kommandozeile statt aus der Umgebung |
 | `--no-check` | die abschließende Konfigurationsprüfung und die Testanfrage überspringen |
@@ -227,7 +267,7 @@ Exit-Codes: `0` konfiguriert und geprüft, `1` verweigert oder abgebrochen (nich
 ./.venv/bin/ripple doctor --config config.yaml
 ```
 
-Standardwerte: `config.yaml` im aktuellen Verzeichnis, `--url http://127.0.0.1:8010`, `--timeout 10` Sekunden pro Netzwerkprüfung. Bevor der Proxy läuft, werden `dashboard` und `completion` übersprungen — und `site` ebenfalls, weil der einzige Knoten dieser Installation über Loopback erreicht wird und es keine Netzadresse gibt, die man gegen die Netze des Standorts halten könnte:
+Standardwerte: `~/.ripple/config.yaml` (oder `./config.yaml`, wenn nur das existiert), `--url http://127.0.0.1:8010`, `--timeout 10` Sekunden pro Netzwerkprüfung. Bevor der Proxy läuft, werden `dashboard` und `completion` übersprungen — und `site` ebenfalls, weil der einzige Knoten dieser Installation über Loopback erreicht wird und es keine Netzadresse gibt, die man gegen die Netze des Standorts halten könnte:
 
 ```
 RIPPLE 0.1.0 — doctor
@@ -373,7 +413,7 @@ Weiter unten: **Modelle** (eine Zeile pro Modell und Knoten, nicht geladene Mode
 
 | Schlüssel | Wo | Was er öffnet |
 |---|---|---|
-| Admin-Schlüssel | `config.yaml` → `auth.admin_key` (von `init` generiert, 32 Hex) | `/admin/*` und `/keys`: Wartung, Modellrichtlinie, Kalibrierung, Replikation, Schlüsselverwaltung |
+| Admin-Schlüssel | `config.yaml` → `auth.admin_key` (bei `init` eingetippt oder dort generiert — 32 Hex) | `/admin/*` und `/keys`: Wartung, Modellrichtlinie, Kalibrierung, Replikation, Schlüsselverwaltung |
 | Client-Schlüssel | `~/.ripple/keys.yaml`, Modus `0600` | `Authorization: Bearer …` auf `/v1/*` |
 | oMLX-Schlüssel | `defaults.api_key` oder `hosts[].api_key` pro Knoten; `${VAR}` wird expandiert | RIPPLE → oMLX |
 

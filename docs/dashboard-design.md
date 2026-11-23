@@ -118,6 +118,18 @@ ist die einzige Stelle, an der ein neuer Leser die Bedeutung lernt; deshalb
 steht sie oben und nicht in einem Handbuch. Im Abzug sind beide Knoten
 `healthy` — die anderen fünf Zustände sind nur in der Legende zu sehen.
 
+**Sie ist zugeklappt, bis jemand sie öffnet** (seit #181). Der Inhalt bleibt
+derselbe, aber die Legende ist über den Knotenkarten der teuerste Platz auf dem
+Schirm: sieben Zustände, zwei Zeilen, und wer sie einmal gelesen hat, liest sie
+nie wieder — während die Karten bei 1440 × 900 dafür um rund 100 px nach unten
+rutschen. Deshalb steht über der Flotte eine Pille `▸ Legende anzeigen`
+(`aria-expanded`, `aria-controls="legendBody"`), der Inhalt darunter ist
+`hidden`, und die Wahl liegt in `localStorage['ripple_legend_open']` — einmal
+geöffnet bleibt sie offen, auch nach einem Neuladen. Im privaten Fenster wirft
+der Zugriff eine Ausnahme, die abgefangen wird: dann ist sie zugeklappt, statt
+dass die Seite stehen bleibt. Verschieben wäre die Alternative gewesen, tauscht
+den Overhead aber nur zwischen „Flotte" und „Verteilung".
+
 **Wo Farbe *nicht* Zustand bedeutet** — das ist die eigentliche Disziplin:
 
 - **Der Speicherbalken ist keine Ampel.** Die Füllung ist eine Menge, kein
@@ -150,6 +162,17 @@ steht sie oben und nicht in einem Handbuch. Im Abzug sind beide Knoten
   als **stehende hellere Tinte** (`--warn-bright`/`--ok-bright`) lesbar — sonst
   wäre die Information für genau die Leute weg, die sie am wenigsten schnell
   nachlesen können.
+- **Die Ladephase hat Vorrang vor dem Prefill (#149).** Solange ein Knoten die
+  Gewichte eines Modells lädt, blinkt der Punkt **blau** (`--load`, 1 Hz,
+  hellere Hälfte `--load-bright`) und nicht orange: `pp` ist dort nur ein
+  Symptom — die Anfrage wartet, weil die Gewichte fehlen, nicht weil ein
+  residentes Modell vorgeladen wird. Die Quelle ist ein eigener Fakt
+  (`models[].hosts[].loading`), keiner, den die Seite aus `loaded` und `phase`
+  rät; ein 453-GB-Laden dauert Minuten, in denen der Knoten sonst wie ein
+  gewöhnlicher Prefill aussähe. Blau ist der Ton der Ladephase, der schon
+  `--sum-loading` und der Ledger-Balken tragen — keine neue Bedeutung, dieselbe
+  Familie. Bei `prefers-reduced-motion: reduce` steht auch hier die hellere
+  Tinte still.
 - **Das Schloss ist Bedienerzustand, nicht Störung (#23, #118).** Über dem
   Modellnamen steht ein Vorhängeschloss: offen in `--fg-2`, geschlossen in
   `--down` und der Modellname in `--load`, sobald gesperrt. Offen ist bewusst

@@ -10,16 +10,32 @@ Everything in this module serves that one sentence:
   the cold-start test (`tools/coldstart.sh`, `--yes`) tests something other than
   what a human gets — and the two would drift apart silently.
 * **A busy port is not a dead end.** The port is probed, the holder is named
-  (PID and process name from `lsof`), and the next free port is offered.
+  (PID and process name from `lsof`), and the next free port is offered. A port
+  that a closed listener left in `TIME_WAIT` is free, not "held by an
+  unidentified process" (issue #151), and a port that does move is said again at
+  the end of the run.
 * **No oMLX key is a valid answer.** The node is then read-limited (its model
   list answers 401) and `ripple doctor` says so; `init` writes a configuration
   without an `api_key` and does not pretend otherwise.
 * **Nothing is overwritten without `--force`**, and the refusal names the exact
-  path. Both files are `0600` and their parents are created — one of them is a
-  list of secrets.
+  path. With `--force` the files that are about to be replaced are copied aside
+  first — `<config>.bak-<YYYYmmdd-HHMMSS>`, `<keys>.bak-<YYYYmmdd-HHMMSS>`, mode
+  `0600`, byte for byte — and both paths are printed (issue #154): `--force` is
+  the flag an operator reaches for exactly when the machine is already in
+  trouble, so the destructive path runs at the worst possible moment. Both files
+  are `0600` and their parents are created — one of them is a list of secrets.
 * **The client key is shown exactly once.** After that only
-  `ClientKey.masked_key()` is ever printed (FA-15). The generated admin key is
-  never printed at all: it lives in `config.yaml` at `auth.admin_key`.
+  `ClientKey.masked_key()` is ever printed (FA-15).
+* **The admin key is asked for, and printed exactly once when generated**
+  (issue #158). A fresh install used to end with the operator holding no admin
+  key: `init` generated one, wrote it to `config.yaml` and said "not shown
+  here", so the first thing a new operator did was open a mode-0600 file to copy
+  a secret out of it. The question takes a typed key (used as given, never
+  echoed, only its length reported — the running installation uses a 4-digit key
+  on purpose) or an empty answer, which generates 32 hex characters and prints
+  them once, in the same shape as the client key. `--yes` generates too, and
+  prints it: a scripted run must not end without one either. No key material
+  reaches the log, the `--json` output or the routing table.
 
 Discovery (issue #61) is imported lazily inside the functions that need it, so
 this module imports and runs on a tree where `ripple/discover.py` is not merged
@@ -41,6 +57,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -172,8 +189,16 @@ class PortState:
     process: str = ""
 
     def holder(self) -> str:
+        """Who holds the port, as far as this user is allowed to see (issue #151).
+
+        `lsof` names only the sockets this user may look at, so "no pid" is not
+        "no process": it is a listener this user cannot name, or a socket that
+        is still closing. Saying "an unidentified process" turned that into a
+        claim about a port that was in fact free.
+        """
         if self.pid is None:
-            return "an unidentified process"
+            return ("no process this user can see — another user's listener, "
+                    "or a socket that is still closing")
         if self.process:
             return f"PID {self.pid} ({self.process})"
         return f"PID {self.pid}"
@@ -207,14 +232,32 @@ def _lsof_holder(port: int) -> tuple[int | None, str]:
     return pid, name
 
 
-def _can_bind(port: int) -> bool:
-    """True when a listener could take `port` on all interfaces right now."""
+def _bind_ok(address: str, port: int) -> bool:
+    """Can a listener bind `address:port` right now, `SO_REUSEADDR` set?"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            sock.bind(("", port))
+            sock.bind((address, port))
         except OSError:
             return False
     return True
+
+
+def _can_bind(port: int) -> bool:
+    """True when a listener could take `port` now — a socket in `TIME_WAIT` is
+    not a holder (issue #151).
+
+    `SO_REUSEADDR` is what makes the verdict match what uvicorn does when RIPPLE
+    starts: without it, a listener that accepted a connection leaves the port
+    unbindable for the `TIME_WAIT` window (30-45 s measured here) while `lsof`
+    names nobody — which is how `init` came to report "an unidentified process"
+    about a port that was already free.
+
+    Two probes, because `SO_REUSEADDR` on macOS lets a wildcard bind succeed
+    beside a listener that sits on one specific address, and the other way
+    round. A port is free only when both the wildcard and the loopback bind are.
+    """
+    return _bind_ok("", port) and _bind_ok("127.0.0.1", port)
 
 
 def probe_port(port: int) -> PortState:
@@ -223,6 +266,9 @@ def probe_port(port: int) -> PortState:
     Two sources on purpose: `lsof` can *name* the holder, the bind is the
     verdict — lsof sees only what this user is allowed to see, and a bind on
     `0.0.0.0` conflicts with any specific-address listener on the same port.
+    `_can_bind` therefore probes both the wildcard and the loopback: with
+    `SO_REUSEADDR` set, either one can pass beside a listener on the other
+    (issue #151).
     """
     pid, name = _lsof_holder(port)
     bindable = _can_bind(port)
@@ -242,7 +288,51 @@ def _parse_port(raw: str) -> int | None:
         port = int(str(raw).strip())
     except (TypeError, ValueError):
         return None
-    return port if 1 <= port <= 65535 else None
+    return port if PORT_MIN <= port <= PORT_MAX else None
+
+
+# The port this proxy can actually use (issue #166). Below 1024 needs root, and
+# RIPPLE runs as a normal user — accepting `80` here only moves the failure to
+# start-up, minutes after the question. The documented range is 8010-8099; a
+# port outside it stays possible (8080 and 9000 are legitimate on a machine that
+# already runs something) and is said once instead of being refused.
+PORT_MIN = 1024
+PORT_MAX = 65535
+PORT_RANGE = (8010, 8099)
+
+
+def _port_complaint(raw: str) -> str:
+    """Why an answer is unusable — four causes, four sentences, one range."""
+    text = str(raw).strip()
+    try:
+        port = int(text)
+    except (TypeError, ValueError):
+        return (f"'{text}' is not a number — give a port between {PORT_MIN} and "
+                f"{PORT_MAX}; this project uses {PORT_RANGE[0]}-{PORT_RANGE[1]}")
+    if port == 0:
+        # Not a privileged port: `0` asks the kernel for any free port, and this
+        # port has to be written down and reachable by clients.
+        return ("0 means 'any free port' to the kernel, and the port has to be "
+                f"known before it is written — use {PORT_RANGE[0]}-{PORT_RANGE[1]}")
+    if port < PORT_MIN:
+        return (f"port {port} needs root, and RIPPLE does not run as root — "
+                f"use {PORT_RANGE[0]}-{PORT_RANGE[1]}")
+    return (f"{PORT_MAX} is the highest port — give a number between {PORT_MIN} "
+            f"and {PORT_MAX}; this project uses {PORT_RANGE[0]}-{PORT_RANGE[1]}")
+
+
+def _outside_documented_range(port: int) -> str | None:
+    """One neutral line for a port that works but is not the documented range.
+
+    The range is documented, not enforced — but the line says what the deviation
+    means instead of shrugging (issue #172): the dashboard, `ripple doctor` and
+    `ripple start` all follow this number, so a typo here is not cosmetic.
+    """
+    if PORT_RANGE[0] <= port <= PORT_RANGE[1]:
+        return None
+    return (f"port {port} is outside {PORT_RANGE[0]}-{PORT_RANGE[1]}, the range "
+            f"this project documents — the dashboard, `ripple doctor` and "
+            f"`ripple start` follow this number")
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +347,19 @@ class Node:
     node_id: str | None = None
     models: list[str] = field(default_factory=list)
     weight: float = 1.0
+    #: This node's own oMLX key (issue #171). Empty means "the fleet default",
+    #: which is `Answers.api_key` — the first node's answer.
+    api_key: str = ""
+    #: `(id, model_type)` from the node's own `/v1/models`, when it could be
+    #: read. `models:` is decided from this, never from the ids alone: oMLX
+    #: serves utility engines beside the chat models and only the type says
+    #: which is which (issue #157).
+    offered: list[tuple[str, str]] = field(default_factory=list)
+    #: The operator answered the models question with the offered default (an
+    #: empty line). The allow-list is then the chat-capable models — decided as
+    #: soon as the list is readable, which needs the oMLX key, and said out loud
+    #: when it is decided (`_resolve_models`).
+    models_by_default: bool = False
 
 
 def _discover(addresses: Sequence[str], api_key: str) -> list[Any] | None:
@@ -337,6 +440,124 @@ def _split_list(raw: str) -> list[str]:
         if text and text not in out:
             out.append(text)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Which of a node's models can hold a thread (issue #157)
+# ---------------------------------------------------------------------------
+#: `model_type` values oMLX reports for something a chat thread can be sent to.
+#: Anything else it *names* (measured: `embedding`, `markitdown`) is a utility
+#: engine: legitimate — MarkItDown converts documents — but not a thread to
+#: balance, so it needs an explicit opt-in.
+CHAT_MODEL_TYPES = frozenset({"llm", "chat", "vlm", "vision", "text", "completion"})
+
+#: The one answer that keeps an allow-list empty on purpose: "really all of
+#: them". Without it an operator who wants a new model routed without editing
+#: `config.yaml` would have no way to say so.
+ALL_MODELS = "all"
+
+
+def _is_chat_model(model_type: str) -> bool:
+    """Is this `model_type` a chat type? An absent type is not evidence against.
+
+    oMLX reports `model_type` for what it knows; a node that omits the field is
+    not saying "utility engine", and reading the absence as one would hide a
+    chat model. Only a *named* type outside `CHAT_MODEL_TYPES` is a utility.
+    """
+    kind = str(model_type or "").strip().lower()
+    return not kind or kind in CHAT_MODEL_TYPES
+
+
+def _offered_models(address: str, api_key: str,
+                    timeout: float = 3.0) -> list[tuple[str, str]] | None:
+    """`(id, model_type)` from the node's own `/v1/models`, or `None`.
+
+    `ripple.discover` answers ids only, and the id does not say what the engine
+    is — `MarkItDown` looks like a chat model right up to the first request. The
+    type is on this endpoint, which needs the oMLX key; `None` is "not read",
+    never "nothing offered".
+    """
+    try:
+        import httpx                                    # noqa: WPS433 — lazy
+    except ImportError:                                 # pragma: no cover
+        return None
+    headers = {"accept": "application/json"}
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(address.rstrip("/") + "/v1/models",
+                                  headers=headers)
+        if response.status_code != 200:
+            return None
+        body = response.json()
+    except Exception:                                   # noqa: BLE001 — best effort
+        return None
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list):
+        return None
+    out: list[tuple[str, str]] = []
+    for entry in data:
+        if isinstance(entry, dict) and entry.get("id"):
+            out.append((str(entry["id"]), str(entry.get("model_type") or "")))
+    return out
+
+
+def _read_offered(node: Node, api_key: str) -> None:
+    """Fill `node.offered` from the first of its addresses that answers.
+
+    Attempted even without a key: a node that does not protect its model list
+    answers anyway, and one that does answers 401 — which is "not read", the
+    same as before.
+    """
+    if node.offered:
+        return
+    for address in node.addresses:
+        offered = _offered_models(address, api_key)
+        if offered is not None:
+            node.offered = offered
+            return
+
+
+def _named_utility(offered: Sequence[tuple[str, str]]) -> str:
+    """`MarkItDown (markitdown), Qwen3-Embedding-4B (embedding)` — id and type."""
+    return ", ".join(f"{mid} ({kind})" for mid, kind in offered)
+
+
+def _resolve_models(node: Node, out: Callable[[str], None]) -> bool:
+    """Decide `node.models` from the typed list and say what it became.
+
+    One line per node, and only where the answer was the default or "all": a
+    list the operator typed is written exactly as typed and needs no comment.
+    Returns True when this call decided the allow-list.
+    """
+    if not node.offered:
+        return False
+    chat = [mid for mid, kind in node.offered if _is_chat_model(kind)]
+    utility = [(mid, kind) for mid, kind in node.offered if not _is_chat_model(kind)]
+
+    if node.models_by_default:
+        node.models_by_default = False
+        if chat:
+            node.models = chat
+            if utility:
+                out(f"node {node.name}: allow-list = {len(chat)} chat-capable "
+                    f"model(s); left out {len(utility)} that are not chat "
+                    f"models: {_named_utility(utility)} — name them (or answer "
+                    f"`{ALL_MODELS}`) to route them")
+            else:
+                out(f"node {node.name}: allow-list = all {len(chat)} offered "
+                    f"model(s), every one of them chat-capable")
+            return True
+        # Nothing chat-capable was offered: the empty answer cannot be narrowed,
+        # so it stays empty — and that is exactly the case that has to be said.
+    if not node.models:
+        detail = (f", including {len(utility)} that are not chat models: "
+                  f"{_named_utility(utility)}" if utility else "")
+        out(f"node {node.name}: allow-list empty — all {len(node.offered)} "
+            f"offered model(s) are routable{detail}")
+        return True
+    return False
 
 
 def _normalise_address(raw: str) -> str:
@@ -477,22 +698,57 @@ class Options:
 # ---------------------------------------------------------------------------
 # Steps
 # ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class PortChoice:
+    """The port `init` is about to write, and the one that was asked for.
+
+    `requested` is kept so the end of the run can say that the port moved
+    (issue #151): under `--yes` the question that moves it is answered with its
+    default, so the move has to be said again outside the question.
+    """
+
+    port: int
+    requested: int
+
+
 def _step_port(options: Options, prompter: Prompter,
-               out: Callable[[str], None]) -> int | None:
+               out: Callable[[str], None]) -> PortChoice | None:
     """Step 1 — the listen port. A busy port is named and moved past, not fatal."""
     if options.port is not None:
-        port = options.port
+        requested = port = options.port
+        note = _outside_documented_range(port)
+        if note:
+            out(note)
     else:
-        port = _parse_port(prompter.text("Port", str(DEFAULT_PORT)))
-        if port is None:
-            print("that is not a port number (1-65535)", file=sys.stderr)
-            return None
+        port = None
+        while port is None:
+            # A typo must not end the install: ask again, with the reason the
+            # last answer was unusable (#166). EOF/Ctrl-C still cancels.
+            raw = prompter.text("Port", str(DEFAULT_PORT))
+            port = _parse_port(raw)
+            if port is None:
+                print(_port_complaint(raw), file=sys.stderr)
+                continue
+            # A port outside the documented range is a decision, not a shrug
+            # (issue #172): one question, default No, and the consequence named.
+            note = _outside_documented_range(port)
+            if note:
+                out(note)
+                if not isinstance(prompter, AutoPrompter) and \
+                        not prompter.yes_no(f"Use port {port} anyway?", False):
+                    port = None
+        requested = port
 
     while True:
         state = probe_port(port)
         if state.free:
-            return port
-        out(f"port {port} is already in use by {state.holder()}")
+            return PortChoice(port=port, requested=requested)
+        if state.pid is not None:
+            out(f"port {port} is already in use by {state.holder()}")
+        else:
+            # A failed bind with nobody to name is not a claim that a process
+            # holds the port (issue #151): say what was measured, not more.
+            out(f"port {port} cannot be bound and {state.holder()}")
         candidate = next_free_port(port)
         if candidate is None:
             print(f"no free port in the 64 above {port} — pick another one",
@@ -501,10 +757,12 @@ def _step_port(options: Options, prompter: Prompter,
         if prompter.yes_no(f"Use port {candidate} instead?", True):
             port = candidate
             continue
-        port = _parse_port(prompter.text("Port", str(candidate)))
-        if port is None:
-            print("that is not a port number (1-65535)", file=sys.stderr)
-            return None
+        port = None
+        while port is None:
+            raw = prompter.text("Port", str(candidate))
+            port = _parse_port(raw)
+            if port is None:
+                print(_port_complaint(raw), file=sys.stderr)
 
 
 def _ask_addresses(prompter: Prompter) -> list[Node]:
@@ -519,12 +777,143 @@ def _ask_addresses(prompter: Prompter) -> list[Node]:
     return [Node(name="", addresses=[a]) for a in addresses]
 
 
+def _http_answers(address: str, timeout: float = 2.0) -> bool:
+    """Is *anything* listening at `address`? Any HTTP status counts (issue #167)."""
+    try:
+        import httpx
+
+        httpx.get(address.rstrip("/") + "/", timeout=timeout, follow_redirects=False)
+        return True
+    except Exception:                              # noqa: BLE001 — the answer is no
+        return False
+
+
+def _classify_typed_addresses(addresses: Sequence[str],
+                              api_key: str) -> dict[str, tuple[str, Any]]:
+    """Probe what the operator typed, with the probe the automatic path uses.
+
+    Four outcomes, because they mean four different things (issue #167):
+
+    * `omlx` — the node answered `/api/cluster/node_id` with a `node_id`. That
+      endpoint needs no key, so an oMLX is recognised without one.
+    * `unconfirmed` — discovery accepted the address on the weaker evidence of a
+      key-protected `/v1/models` (401), which every OpenAI-compatible server with
+      auth also produces. Measured on this machine: the gateway on :8642 answers
+      `401` on `/v1/models` and `404` on the identity path, and was taken for an
+      oMLX. It is a question, not a verdict.
+    * `not-omlx` — something answered, but neither signal is there.
+    * `silent` — nothing answered at all.
+    """
+    verdicts: dict[str, tuple[str, Any]] = {}
+    for address in addresses:
+        found = _discover([address], api_key)
+        if found and found[0].node_id:
+            verdicts[address] = ("omlx", found[0])
+        elif found:
+            verdicts[address] = ("unconfirmed", found[0])
+        elif _http_answers(address):
+            verdicts[address] = ("not-omlx", None)
+        else:
+            verdicts[address] = ("silent", None)
+    return verdicts
+
+
+def _offer_line(node: Node, has_key: bool) -> str:
+    """What the node offers, or the honest statement that it was not read (#168).
+
+    oMLX answers 401 on `/v1/models` without a key, and `init` asks for the key
+    *after* the nodes — so "0 model(s)" here names a fact nobody measured. At
+    this point the only measurement is that the node answered at all, and that is
+    what the line says.
+    """
+    if node.models:
+        return f"{len(node.models)} model(s)"
+    if has_key:
+        return "0 model(s) offered"
+    return "oMLX answered — model list not read (the key comes later)"
+
+
+def _ask_checked_addresses(options: Options, prompter: Prompter,
+                           out: Callable[[str], None]) -> list[Node]:
+    """Ask for addresses, probe them, and say what was found (issue #167).
+
+    An address that answers nothing is still a legitimate answer — a node that
+    is switched off today is the one you configure today — so it is asked about
+    once instead of being refused. Under `--yes` there is nobody to ask, and the
+    addresses are taken with a note.
+    """
+    while True:
+        nodes = _ask_addresses(prompter)
+        addresses = [a for node in nodes for a in node.addresses]
+        verdicts = _classify_typed_addresses(addresses, options.omlx_key)
+        for address in addresses:
+            kind, found = verdicts[address]
+            if kind == "omlx":
+                identity = (f"node_id {found.node_id}" if found.node_id
+                            else "no node_id")
+                # Not `_offer_line`: that one starts with "oMLX answered", which
+                # this line has already said.
+                if found.models:
+                    offer = f"{len(found.models)} model(s)"
+                elif options.omlx_key:
+                    offer = "0 model(s) offered"
+                else:
+                    offer = "model list not read (the key comes later)"
+                out(f"{address}: oMLX answered — {identity}, {offer}")
+            elif kind == "unconfirmed":
+                out(f"{address}: answered, but it reports no "
+                    f"/api/cluster/node_id — oMLX answers that without a key, so "
+                    f"this may be another OpenAI-compatible server")
+            elif kind == "not-omlx":
+                out(f"{address}: something answered, but not as oMLX — no "
+                    f"/api/cluster/node_id and no model list")
+            else:
+                out(f"{address}: no answer (oMLX running?, port correct?)")
+        # A name the operator can keep (issue #173). A typed address had none, so
+        # an empty answer to the name question wrote `name: ''` — a configuration
+        # that does not load. `discover.suggest_name` is the suggestion the
+        # automatic path already gets (`local`, a DNS name, a `node-…` stub).
+        try:
+            from ripple.discover import suggest_name
+        except ImportError:                          # pragma: no cover — #61 absent
+            suggest_name = None                      # type: ignore[assignment]
+        for position, node in enumerate(nodes, 1):
+            if node.name or not node.addresses:
+                continue
+            found = verdicts.get(node.addresses[0], ("silent", None))[1]
+            if suggest_name is not None:
+                node.name = suggest_name(node.addresses[0],
+                                         getattr(found, "node_id", None))
+            else:
+                node.name = _default_name(position)
+
+        broken = [a for a in addresses if verdicts[a][0] != "omlx"]
+        if not broken:
+            return nodes
+        question = (f"keep {len(broken)} address(es) that did not answer as oMLX?"
+                    if len(broken) > 1 else
+                    "keep it anyway?")
+        if isinstance(prompter, AutoPrompter):
+            out("keeping the addresses as given (--yes)")
+            return nodes
+        if prompter.yes_no(question, False):
+            return nodes
+        # Asked again: the usual cause is a typo, not a machine that is off.
+
+
 def _step_nodes(options: Options, prompter: Prompter,
-                out: Callable[[str], None]) -> list[Node] | None:
-    """Step 2 — where the nodes are, then name, weight and allow-list per node."""
+                out: Callable[[str], None],
+                api_key: str = "") -> list[Node] | None:
+    """Step 2 — where the nodes are, then name, weight and allow-list per node.
+
+    `api_key` is the key already answered in step 1 (issue #180): with it the
+    discovery line carries the real model count, instead of saying that the list
+    will be read later — and then reading it a step later without a word.
+    """
     requested = [_normalise_address(h) for h in options.hosts if str(h).strip()]
     probe = requested or [DEFAULT_ADDRESS]
-    found = _discover(probe, options.omlx_key)
+    key = api_key or options.omlx_key
+    found = _discover(probe, key)
     nodes = _nodes_from_found(found or [], probe)
 
     if requested:
@@ -540,16 +929,16 @@ def _step_nodes(options: Options, prompter: Prompter,
         out(f"discovered {len(nodes)} node(s):")
         for node in nodes:
             out(f"  {node.name}  {', '.join(node.addresses)}  "
-                f"{len(node.models)} model(s)")
+                f"{_offer_line(node, bool(key))}")
         if not prompter.yes_no("Use these nodes?", True):
-            nodes = _ask_addresses(prompter)
+            nodes = _ask_checked_addresses(options, prompter, out)
     else:
         if found is None:
             out("no node discovery available (ripple/discover.py) — enter the "
                 "address(es) by hand")
         else:
             out(f"no oMLX answered on {DEFAULT_ADDRESS}")
-        nodes = _ask_addresses(prompter)
+        nodes = _ask_checked_addresses(options, prompter, out)
 
     if not nodes:
         print("no node configured — nothing to balance without a host",
@@ -564,29 +953,101 @@ def _step_nodes(options: Options, prompter: Prompter,
         nodes[0].name = options.name
 
     for index, node in enumerate(nodes, 1):
-        label = f"node {index}/{len(nodes)} ({', '.join(node.addresses)})"
-        node.name = prompter.text(f"{label} name", node.name) or node.name
-        node.weight = _ask_weight(prompter, f"{label} weight", node.weight)
-        # The default is the empty answer, not the offered list: an empty
-        # allow-list means "everything this node offers" and stays correct when
-        # the operator adds a model later. Writing tonight's list into the file
-        # would hide every model added afterwards — silently, which is the one
-        # failure mode this whole issue is about.
-        if node.models:
-            out(f"{label}: {len(node.models)} model(s) offered")
-        raw = prompter.text(f"{label} models (comma separated, empty = all "
-                            f"offered)", "")
-        node.models = _split_list(raw)
+        _ask_node_detail(index, len(nodes), node, options, prompter, out)
     return nodes
 
 
-def _ask_weight(prompter: Prompter, label: str, default: float) -> float:
-    raw = prompter.text(label, f"{default:g}")
+def _ask_node_detail(index: int, total: int, node: Node, options: Options,
+                     prompter: Prompter, out: Callable[[str], None]) -> None:
+    """One node, one round of questions: name, weight, allow-list.
+
+    Extracted so that a node found by the network sweep (#187) is asked exactly
+    the same three questions as one that answered on loopback — two prompts for
+    the same decision would drift apart.
+    """
+    label = f"node {index}/{total} ({', '.join(node.addresses)})"
+    node.name = prompter.text(f"{label} name", node.name) or node.name
+    node.weight = _ask_weight(prompter, f"{label} weight", node.weight)
+    # The default is the chat-capable models, not the empty list (issue
+    # #157): an empty allow-list is the widest possible statement — every
+    # model the node offers becomes routable, including oMLX's utility
+    # engines (`markitdown`, `embedding`), which are not threads to balance.
+    # The list itself needs the oMLX key to be read, so the answer is
+    # settled in `_fill_models` once the key is known; `models_by_default`
+    # carries "the operator took the default" that far.
+    # `all` is the documented way to keep the list empty on purpose.
+    if node.models:
+        out(f"{label}: {len(node.models)} model(s) offered")
+    # A key already in hand (`--omlx-key`) lets the question show the real
+    # list as its default; without one the node answers 401 here and the
+    # default is settled later, which is the same decision, said later.
+    if options.omlx_key:
+        _read_offered(node, options.omlx_key)
+    default_models = ", ".join(mid for mid, kind in node.offered
+                               if _is_chat_model(kind))
+    raw = prompter.text(f"{label} models (comma separated; empty = the "
+                        f"chat-capable ones, `{ALL_MODELS}` = every model "
+                        f"the node offers)", default_models)
+    typed = _split_list(raw)
+    if len(typed) == 1 and typed[0].lower() == ALL_MODELS:
+        node.models, node.models_by_default = [], False
+    elif not typed or typed == _split_list(default_models):
+        node.models, node.models_by_default = [], True
+    else:
+        node.models, node.models_by_default = typed, False
+
+
+#: The weight range the question offers. The configuration accepts any positive
+#: float, so a hand-edited `1.5` stays valid — the range is what the question
+#: asks for, not what the file allows (issue #169).
+WEIGHT_MIN = 1
+WEIGHT_MAX = 20
+
+
+def _weight_complaint(raw: str) -> Optional[str]:
+    """Why *raw* is not a weight, in one sentence — None when it is one.
+
+    The weight is relative: it says how much of the new traffic this node gets
+    compared with the others, so only the ratio means anything. A number that is
+    silently replaced by the default teaches the operator nothing (issue #169).
+    """
+    text = (raw or "").strip()
     try:
-        weight = float(raw)
+        value = float(text)
     except (TypeError, ValueError):
-        return default
-    return weight if weight >= 0 else default
+        return (f"'{text}' is not a number — give a whole number between "
+                f"{WEIGHT_MIN} and {WEIGHT_MAX}")
+    if value != int(value):
+        return (f"{text} is not a whole number — give {WEIGHT_MIN} to "
+                f"{WEIGHT_MAX}; the weight is a share, so 1.5 and 2 would ask "
+                f"for nearly the same thing")
+    if value < WEIGHT_MIN:
+        return (f"a weight of {int(value)} would take the node out of the "
+                f"rotation — `enabled: false` is how a node is switched off; "
+                f"give {WEIGHT_MIN} to {WEIGHT_MAX}")
+    if value > WEIGHT_MAX:
+        return (f"{int(value)} is above {WEIGHT_MAX} — the weight is relative, "
+                f"so {WEIGHT_MAX} already means {WEIGHT_MAX} times the traffic "
+                f"of a node at 1")
+    return None
+
+
+def _ask_weight(prompter: Prompter, label: str, default: float) -> float:
+    """The node's share of new threads — asked until the answer is a weight.
+
+    The prompt says what the number does, because "weight" alone is a word from
+    the configuration file, not from the operator's day (issue #169).
+    """
+    question = (f"{label} (relative: higher takes more new threads, "
+                f"{WEIGHT_MIN}-{WEIGHT_MAX})")
+    while True:
+        raw = prompter.text(question, f"{default:g}")
+        if not (raw or "").strip():
+            return default
+        complaint = _weight_complaint(raw)
+        if complaint is None:
+            return float(raw)
+        print(complaint, file=sys.stderr)
 
 
 def _step_site(options: Options, nodes: list[Node], prompter: Prompter,
@@ -691,7 +1152,8 @@ def _step_omlx_key(options: Options, home: Path, prompter: Prompter,
     # the operator's live key — the leak this repository has been bitten by twice.
     hint = home / ".omlx" / "api_key.txt"
     if hint.is_file():
-        if prompter.yes_no(f"Use the oMLX key from {hint}?", True):
+        if prompter.yes_no(f"Use the oMLX key in {hint} (a copy, not oMLX's "
+                           f"own store)?", True):
             try:
                 key = hint.read_text(encoding="utf-8").strip()
             except OSError as exc:
@@ -701,8 +1163,8 @@ def _step_omlx_key(options: Options, home: Path, prompter: Prompter,
                 out(f"oMLX key: read from {hint}")
                 return key
 
-    key = prompter.secret("oMLX API key (usually in ~/.omlx/api_key.txt; "
-                          "empty = read-only)")
+    key = prompter.secret("oMLX API key (in oMLX: admin panel → Settings → API "
+                          "key; empty = read-only)")
     if key:
         out("oMLX key: entered")
     else:
@@ -711,41 +1173,215 @@ def _step_omlx_key(options: Options, home: Path, prompter: Prompter,
     return key
 
 
+def _model_list_status(address: str, api_key: str) -> Optional[int]:
+    """What `/v1/models` answers for this key — None when nothing answered."""
+    try:
+        import httpx
+
+        headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
+        response = httpx.get(address.rstrip("/") + "/v1/models",
+                             headers=headers, timeout=4.0)
+        return response.status_code
+    except Exception:                              # noqa: BLE001 — no answer
+        return None
+
+
+def _retry_refused_key(node: Node, prompter: Prompter,
+                       out: Callable[[str], None]) -> None:
+    """Ask again for a node whose key it refuses (issue #171).
+
+    A fleet of machines each with its own oMLX key is as normal as a fleet of
+    clones. With one key for all of them the second node answered 401
+    and was written read-only — no model list, no residency signal, and FA-18 off
+    for the whole fleet. Measured on a two-node fleet on 23.11.
+    """
+    if not node.addresses or not node.api_key:
+        # No key was given on purpose: "empty = read-only" is an answer, and a
+        # 401 is then the expected reply, not a refusal to ask about again.
+        return
+    for _attempt in (1, 2):
+        if _model_list_status(node.addresses[0], node.api_key) != 401:
+            return
+        out(f"node {node.name}: the oMLX key was refused — 401 on /v1/models")
+        if isinstance(prompter, AutoPrompter):
+            out(f"node {node.name}: read-only, no model list")
+            return
+        key = prompter.secret(f"node {node.name} oMLX API key (empty = leave it "
+                              f"read-only)").strip()
+        if not key:
+            out(f"node {node.name}: read-only, no model list")
+            return
+        node.api_key = key
+        out(f"node {node.name}: oMLX key: entered")
+
+
+def _step_scan(options: Options, nodes: list[Node], site: Any, api_key: str,
+               prompter: Prompter, out: Callable[[str], None]) -> None:
+    """Step 3b — sweep the site's networks for nodes, then ask about each (#187).
+
+    `init` probes the addresses it was given and nothing else; the site's
+    networks are a *label* for where this machine stands, not a search area. An
+    operator who types `192.0.2.0/24` reads that as "look there" — so the sweep
+    is offered, and only runs when it is answered yes: a sweep is traffic on
+    someone else's network, which is why `ripple discover` keeps it behind an
+    explicit `--scan` too.
+
+    A node the sweep finds is asked the same three questions as one that
+    answered on loopback (`_ask_node_detail`), and it is skipped when the fleet
+    already has it — matched by `node_id` first, because the same oMLX answers
+    on every address it listens on, including this machine's LAN address.
+    """
+    networks = [str(n) for n in (getattr(site, "networks", ()) or ()) if str(n)]
+    if not networks:
+        return
+    # One question for both front ends (the `--yes` run answers its default,
+    # `False`): a sweep nobody confirmed is traffic on someone else's network.
+    if not prompter.yes_no(
+            f"Scan {', '.join(networks)} for further oMLX nodes? "
+            f"(a sweep: one request per address, port 8000)", False):
+        out("not swept — `ripple discover --scan <CIDR>` looks for more")
+        return
+    try:
+        from ripple.discover import scan_network_detailed   # noqa: WPS433
+    except ImportError:
+        out("no network scan available (ripple/discover.py) — skipped")
+        return
+
+    known_ids = {node.node_id for node in nodes if node.node_id}
+    known_addresses = {a for node in nodes for a in node.addresses}
+    added = 0
+    for cidr in networks:
+        out(f"scanning {cidr} …")
+        try:
+            key = api_key or None
+            probes = asyncio.run(scan_network_detailed(cidr, api_key=key))
+        except Exception as exc:                        # noqa: BLE001
+            out(f"  {cidr}: scan failed ({exc}) — skipped")
+            continue
+        found = [p.found for p in probes if getattr(p, "found", None)]
+        fresh = []
+        for entry in found:
+            if entry.node_id and entry.node_id in known_ids:
+                continue
+            if entry.address in known_addresses:
+                continue
+            fresh.append(entry)
+        if not fresh:
+            out(f"  {cidr}: {len(found)} answered, none new")
+            continue
+        for node in _nodes_from_found(fresh, [entry.address for entry in fresh]):
+            out(f"  found {', '.join(node.addresses)}  "
+                f"{_offer_line(node, bool(api_key))}")
+            _ask_node_detail(len(nodes) + added + 1, len(nodes) + len(fresh),
+                             node, options, prompter, out)
+            nodes.append(node)
+            added += 1
+            if node.node_id:
+                known_ids.add(node.node_id)
+            known_addresses.update(node.addresses)
+    if added:
+        out(f"added {added} node(s) from the network sweep")
+
+
+def _step_node_keys(options: Options, home: Path, nodes: list[Node],
+                    prompter: Prompter, out: Callable[[str], None],
+                    fleet_key: str = "") -> str:
+    """Step 4 — the oMLX key, asked per node (issue #171).
+
+    The first node's key is the fleet default, because the nodes are usually
+    clones and one answer is then enough. Every further node is asked whether it
+    takes the same key, and a node that refuses it is asked once more with its
+    own — `config_document` writes `hosts.<name>.api_key` for the ones that
+    differ, so the difference survives into the file.
+    """
+    fleet_key = ""
+    for index, node in enumerate(nodes, 1):
+        label = f"node {index}/{len(nodes)} ({', '.join(node.addresses)})"
+        if index == 1:
+            # Asked before the nodes since #180 — this is only the fallback for
+            # a caller that has no answer yet.
+            node.api_key = fleet_key or _step_omlx_key(options, home, prompter,
+                                                       out)
+        elif fleet_key and prompter.yes_no(
+                f"{label}: same oMLX key as node 1?", True):
+            node.api_key = fleet_key
+            out(f"{label}: oMLX key: the first node's")
+        else:
+            node.api_key = prompter.secret(
+                f"{label} oMLX API key (that node's admin panel → Settings → "
+                f"API key; empty = read-only)").strip()
+            out(f"{label}: oMLX key: "
+                f"{'entered' if node.api_key else 'none — read-only'}")
+        _retry_refused_key(node, prompter, out)
+        if index == 1:
+            # After the retry, so a key that had to be corrected is the one the
+            # other nodes are offered as "the same".
+            fleet_key = node.api_key
+    return fleet_key
+
+
+def _step_admin_key(prompter: Prompter,
+                    out: Callable[[str], None]) -> tuple[str, bool]:
+    """Step 5 — the RIPPLE admin key (issue #158). Returns `(key, generated)`.
+
+    Empty means "generate a 32-hex one"; anything typed is used **as given** and
+    never echoed — the operator already knows it. Its length is reported and
+    nothing is judged: the running installation uses a 4-digit admin key on
+    purpose, so a short key gets one neutral note, never a refusal.
+
+    The generated key is not printed here: `run()` prints it once the
+    configuration it belongs to is actually on disk, so a key is never handed
+    out for a file that failed to be written.
+    """
+    typed = prompter.secret("RIPPLE admin key (empty = generate a 32-hex one)")
+    if typed:
+        out(f"RIPPLE admin key: {len(typed)} character(s), used as given — "
+            f"not shown here")
+        if len(typed) < 16:
+            out("  note: shorter than the 32 hex `init` would generate; it is "
+                "used as given, not replaced")
+        return typed, False
+    return secrets.token_hex(16), True          # 32 hex characters
+
+
 def _fill_models(nodes: list[Node], api_key: str,
                  out: Callable[[str], None]) -> None:
-    """Read the model list now that a key is known — and leave the allow-list empty.
+    """Settle `models:` now that a key is known — and say what was settled.
 
-    The conversation asks for the key after the nodes (the issue's order), so the
-    first discovery may have seen a 401. What this does is report what the node
-    offers and fill in a `node_id` that discovery could not read without a key.
+    The conversation asks for the key after the nodes (the issue's order), so
+    the first discovery may have seen a 401: what this does is fill in a
+    `node_id` discovery could not read without a key, read each node's typed
+    model list, and decide the allow-list where the operator took the default
+    (issue #157).
 
-    It deliberately does **not** write the offered models into `models:`. An empty
-    allow-list means "everything this node offers" (`config.example.yaml`), and a
-    concrete list would freeze tonight's fleet into the file: the operator adds a
-    model to oMLX, RIPPLE keeps hiding it, and nothing says why. Measured on the
-    reference machine — 23 models were offered and all 23 would have been written.
+    The default is the chat-capable models, not the whole list. An empty
+    allow-list is the widest possible statement — every model the node offers
+    becomes routable, utility engines included — so it is no longer what an
+    empty answer means; `all` is. A list the operator typed is left exactly as
+    typed, and a node whose allow-list is empty on purpose keeps the list open
+    for models added later.
     """
-    wanted = [node for node in nodes if not node.models]
-    if not wanted:
-        return
-    addresses = [a for node in wanted for a in node.addresses]
-    found = _discover(addresses, api_key)
-    if not found:
-        return
-    by_address = {str(getattr(entry, "address", "")): entry for entry in found}
-    for node in wanted:
-        for address in node.addresses:
-            entry = by_address.get(address)
-            if entry is None:
-                continue
-            models = [str(m) for m in (getattr(entry, "models", ()) or ())]
-            if not node.node_id:
-                node.node_id = getattr(entry, "node_id", None)
-            if models:
-                out(f"node {node.name}: {len(models)} model(s) offered — "
-                    f"allow-list stays empty, which means all of them "
-                    f"(restrict with `models:` in the config)")
-            break
+    for node in nodes:
+        key = node.api_key or api_key
+        if not node.node_id and key:
+            found = _discover(node.addresses, key)
+            for entry in found or []:
+                if getattr(entry, "node_id", None):
+                    node.node_id = str(entry.node_id)
+                    break
+
+    for node in nodes:
+        if not (node.models_by_default or not node.models):
+            continue                      # a typed list: nothing to decide
+        key = node.api_key or api_key
+        _read_offered(node, key)
+        if _resolve_models(node, out):
+            continue
+        # Still empty and undecidable — the empty answer is stated, not assumed.
+        reason = "no oMLX key" if not key else "the node did not answer"
+        out(f"node {node.name}: allow-list empty — every model the node "
+            f"offers is routable, and its model list could not be read "
+            f"({reason}); name the models in `config.yaml` to restrict it")
 
 
 # ---------------------------------------------------------------------------
@@ -783,10 +1419,14 @@ def config_document(*, port: int, nodes: Sequence[Node], api_key: str,
         "hard_threshold": 0.95,
         "prefer_resident": True,
     }
+    secrets_ref = _state_path(home, "secrets.yaml")
     if api_key:
         # One oMLX key for the whole fleet is the normal case (the nodes are
-        # clones); a host that differs overrides `api_key` in its own block.
-        defaults["api_key"] = api_key
+        # clones); a host that differs names its own entry. The key itself is
+        # *not* written here (issue #179): this file is the one an operator
+        # pastes into a forum, so it carries a reference into the 0600 secret
+        # file that `init` writes next to the key store.
+        defaults["api_key_file"] = f"{secrets_ref}#omlx.fleet"
 
     hosts: list[dict[str, Any]] = []
     for node in nodes:
@@ -803,6 +1443,10 @@ def config_document(*, port: int, nodes: Sequence[Node], api_key: str,
         # why it cannot check one — see `_step_site`.
         if site is not None and any(site.contains(ip_of(a)) for a in node.addresses):
             entry["site"] = site.id
+        if node.api_key and node.api_key != api_key:
+            # This node's key differs from the fleet default (issue #171) — and
+            # it lives in the secret file under the node's own name (#179).
+            entry["api_key_file"] = f"{secrets_ref}#omlx.nodes.{node.name}"
         if node.node_id:
             entry["node_id"] = node.node_id
         if node.models:
@@ -818,12 +1462,20 @@ def config_document(*, port: int, nodes: Sequence[Node], api_key: str,
     }
     if site is not None:
         document["sites"] = [site.as_dict()]
+    if api_key:
+        # The same oMLX key again, under the second name the runtime reads it
+        # (issue #159). `replication.admin_key` is what the per-host state
+        # sampling (`GET /admin/api/activity`) and the replication admin calls
+        # use; `defaults.api_key` is only the client key RIPPLE passes through.
+        # Writing the key alone must not switch replication on, so `enabled`
+        # keeps its default (`false`) and the section carries nothing else.
+        document["replication"] = {"admin_key_file": f"{secrets_ref}#omlx.fleet"}
     document["hosts"] = hosts
     document.update({
         "auth": {
             "enabled": True,
             "keys_file": _state_path(home, "keys.yaml"),
-            "admin_key": admin_key,
+            "admin_key_file": f"{secrets_ref}#admin",
             "allow_loopback": False,
             "hide_foreign_models": True,
         },
@@ -878,6 +1530,103 @@ def write_private(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
         raise
     path.chmod(FILE_MODE)
+
+
+# ---------------------------------------------------------------------------
+# Keeping what is about to be replaced (issue #154)
+# ---------------------------------------------------------------------------
+BACKUP_SUFFIX = ".bak-"
+BACKUP_STAMP = "%Y%m%d-%H%M%S"
+
+
+def backup_path(path: Path, *, now: datetime | None = None) -> Path:
+    """`config.yaml` → `config.yaml.bak-20261123-141500`, never an existing file.
+
+    The stamp is the moment of the replacement, and the name matches the
+    `config.yaml.bak*` pattern `.gitignore` already carries. A second `--force`
+    inside the same second would otherwise copy onto the first backup and leave
+    one copy for two overwrites, so a name that is already taken gets a `-2`,
+    `-3`, … — which still matches that pattern.
+    """
+    stamp = (now or datetime.now()).strftime(BACKUP_STAMP)
+    candidate = path.with_name(f"{path.name}{BACKUP_SUFFIX}{stamp}")
+    counter = 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}{BACKUP_SUFFIX}{stamp}-{counter}")
+        counter += 1
+    return candidate
+
+
+def copy_private(src: Path, dest: Path) -> None:
+    """Copy `src` to `dest` byte for byte, mode `0600`, atomically.
+
+    `copyfile`, not a re-render: the backup is evidence of what was on disk, so
+    it must not pass through YAML — a comment, a key order or an anchor would
+    not survive that, and a 9 KB configuration is not reproducible from memory.
+    The temp-file dance is the one `write_private` uses: a half-written backup
+    is worse than none, because it looks like a backup.
+    """
+    parent = dest.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(parent), prefix=f".{dest.name}.",
+                                    suffix=".tmp")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        shutil.copyfile(src, tmp)
+        tmp.chmod(FILE_MODE)
+        tmp.replace(dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def secrets_document(api_key: str, nodes: list[Node], admin_key: str) -> str:
+    """The 0600 secret file the configuration points into (issue #179).
+
+    One place for the credentials, so `config.yaml` can be pasted anywhere
+    without a key coming along. The names are the ones `config_document`
+    references: `omlx.fleet`, `omlx.nodes.<name>`, `admin`.
+    """
+    body: dict[str, Any] = {}
+    omlx: dict[str, Any] = {}
+    if api_key:
+        omlx["fleet"] = api_key
+    differing = {n.name: n.api_key for n in nodes
+                 if n.api_key and n.api_key != api_key}
+    if differing:
+        omlx["nodes"] = differing
+    if omlx:
+        body["omlx"] = omlx
+    if admin_key:
+        body["admin"] = admin_key
+    header = (
+        "# RIPPLE — credentials, written by `ripple init` (mode 0600).\n"
+        "#\n"
+        "# The configuration does not contain these values; it names them:\n"
+        "#   defaults.api_key_file: ~/.ripple/secrets.yaml#omlx.fleet\n"
+        "#   hosts[].api_key_file:  ~/.ripple/secrets.yaml#omlx.nodes.<name>\n"
+        "#   auth.admin_key_file:   ~/.ripple/secrets.yaml#admin\n"
+        "#\n"
+        "# Keep this file out of every backup you share, and out of git.\n")
+    return header + yaml.safe_dump(body, sort_keys=True, allow_unicode=True)
+
+
+def backup_existing(path: Path, label: str,
+                    out: Callable[[str], None]) -> Path | None:
+    """Copy `path` aside before it is replaced; `None` when there was nothing there.
+
+    A first run on a fresh machine must not leave a `.bak` of a file that never
+    existed: that is litter an operator would later read as "there was a
+    configuration here". The path is printed because a backup nobody can find is
+    not a backup — the whole point is what the operator does next.
+    """
+    if not path.exists():
+        return None
+    dest = backup_path(path)
+    copy_private(path, dest)
+    out(f"backup: {dest}  (the previous {label}, copied byte for byte)")
+    return dest
 
 
 # ---------------------------------------------------------------------------
@@ -952,17 +1701,27 @@ class Answers:
     nodes: list[Node]
     api_key: str
     site: SiteConfig | None = None
+    #: The port that was asked for, when `init` had to move to another one.
+    moved_from: int | None = None
 
 
 def _ask_all(options: Options, home: Path, prompter: Prompter,
              out: Callable[[str], None]) -> Answers | None:
-    """Steps 1-4: port, nodes, location, oMLX key. `None` = unusable answer."""
-    port = _step_port(options, prompter, out)
-    if port is None:
+    """Steps 1-4: port, oMLX key, nodes, location. `None` = unusable answer.
+
+    The key comes before the discovery since #180: with it the node list carries
+    the model count it actually read, and a key that does not fit is visible in
+    that same line instead of one step later.
+    """
+    choice = _step_port(options, prompter, out)
+    if choice is None:
         return None
+    port = choice.port
     out(f"port: {port}")
 
-    nodes = _step_nodes(options, prompter, out)
+    api_key = _step_omlx_key(options, home, prompter, out)
+
+    nodes = _step_nodes(options, prompter, out, api_key=api_key)
     if nodes is None:
         return None
 
@@ -970,10 +1729,26 @@ def _ask_all(options: Options, home: Path, prompter: Prompter,
     # question this whole block is for (issue #67).
     site = _step_site(options, nodes, prompter, out)
 
-    api_key = _step_omlx_key(options, home, prompter, out)
-    if api_key:
-        _fill_models(nodes, api_key, out)
-    return Answers(port=port, nodes=nodes, api_key=api_key, site=site)
+    # The networks are named now, so the sweep can be offered with them (#187).
+    _step_scan(options, nodes, site, api_key, prompter, out)
+
+    api_key = _step_node_keys(options, home, nodes, prompter, out,
+                              fleet_key=api_key)
+    _fill_models(nodes, api_key, out)
+    return Answers(port=port, nodes=nodes, api_key=api_key, site=site,
+                   moved_from=choice.requested if choice.requested != port else None)
+
+
+def _say_port_move(answers: Answers, out: Callable[[str], None]) -> None:
+    """One line at the end when the port moved (issue #151).
+
+    The question that moves it is answered with its default under `--yes`, so a
+    scripted run would otherwise read as "configured on 8010" while the file,
+    launchd and every client still point at the other number.
+    """
+    if answers.moved_from is not None:
+        out(f"listening on {answers.port}, not {answers.moved_from} — "
+            f"{answers.moved_from} was not free")
 
 
 def run(options: Options, prompter: Prompter,
@@ -987,7 +1762,11 @@ def run(options: Options, prompter: Prompter,
     from .config import ConfigError, load_config
 
     home = (options.home_dir or Path.home()).expanduser().resolve()
-    config_path = (options.config_path or (Path.cwd() / "config.yaml"))
+    # The configuration belongs to the machine, not to the directory the install
+    # happened to run in (issue #183): `./install.sh` runs inside the checkout, so
+    # `Path.cwd()` put a stranger's config.yaml into the clone — invisible to a
+    # `ripple` started anywhere else, and gone after the next re-clone.
+    config_path = (options.config_path or (home / ".ripple" / "config.yaml"))
     config_path = Path(config_path).expanduser().resolve()
     keys_path = home / ".ripple" / "keys.yaml"
 
@@ -1001,6 +1780,7 @@ def run(options: Options, prompter: Prompter,
     out("RIPPLE init — first-run configuration")
     out(f"config:   {config_path}")
     out(f"key store: {keys_path}")
+    out(f"secrets:   {home / '.ripple' / 'secrets.yaml'}")
     out("")
 
     # -- 1.-3. port, nodes, oMLX key ----------------------------------------
@@ -1015,14 +1795,45 @@ def run(options: Options, prompter: Prompter,
         return 1
     port, nodes, api_key = answers.port, answers.nodes, answers.api_key
 
-    # -- 4. RIPPLE admin key (generated, never asked for, never printed) ----
-    admin_key = secrets.token_hex(16)          # 32 hex characters
-    out("RIPPLE admin key: generated (32 hex) — it is in config.yaml at "
-        "auth.admin_key and is not shown here")
+    # -- 4. RIPPLE admin key (asked; empty = generated, then printed once) ---
+    try:
+        admin_key, admin_generated = _step_admin_key(prompter, out)
+    except (Cancelled, KeyboardInterrupt):
+        print("\ncancelled — nothing was written", file=sys.stderr)
+        return 1
 
-    # -- 5./6. write, then show the client key exactly once -----------------
+    # -- 5. keep what is about to be replaced (issue #154) ------------------
+    # `--force` is the flag an operator reaches for exactly when the machine is
+    # already in trouble, so the destructive path runs at the worst moment: a
+    # 9 KB configuration with two hosts, sites and placement tuning was replaced
+    # with the 1.3 KB first-run document and nothing was left to go back to.
+    # Both files are copied before either is written, and a failed copy aborts
+    # the run with both still in place — overwriting without a backup is the one
+    # thing this step exists to prevent.
+    if options.force:
+        try:
+            backup_existing(config_path, "config", out)
+            backup_existing(keys_path, "key store", out)
+            backup_existing(home / ".ripple" / "secrets.yaml", "secrets", out)
+        except OSError as exc:
+            print(f"cannot back up before overwriting: {exc} — nothing was "
+                  f"written", file=sys.stderr)
+            return 1
+        out("")
+
+    # -- 6./7. write, then show the client key exactly once -----------------
     document = config_document(port=port, nodes=nodes, api_key=api_key,
                                admin_key=admin_key, home=home, site=answers.site)
+    secrets_path = home / ".ripple" / "secrets.yaml"
+    if api_key or admin_key:
+        try:
+            write_private(secrets_path, secrets_document(api_key, nodes,
+                                                         admin_key))
+        except OSError as exc:
+            print(f"cannot write the secret file {secrets_path}: {exc} — "
+                  f"nothing was written", file=sys.stderr)
+            return 1
+        out(f"wrote {secrets_path} (mode 0600)")
     try:
         write_private(config_path,
                       render_config(document, port=port, path=str(config_path)))
@@ -1031,6 +1842,19 @@ def run(options: Options, prompter: Prompter,
         return 1
     out("")
     out(f"wrote {config_path} (mode 0600)")
+    if admin_generated:
+        # Printed here, not when it was generated: a key for a file that failed
+        # to be written is a key that does not open anything. Same shape as the
+        # client key below, so a fresh install ends with both secrets in hand
+        # and nobody has to open the 0600 file to copy one out of it (issue #158).
+        out("RIPPLE admin key — shown once, store it now:")
+        out(f"  {admin_key}")
+        # Since #179 the key is not in config.yaml — the file names it. The line
+        # said "also in config.yaml at auth.admin_key" for one release, which
+        # sent the operator to a file that no longer carries it.
+        out(f"  (also in {home / '.ripple' / 'secrets.yaml'} at admin; it opens "
+            "/keys and /admin/*)")
+        out("")
 
     from .keys import KeyStore, KeyStoreError
 
@@ -1066,7 +1890,7 @@ def run(options: Options, prompter: Prompter,
     out("  later only the masked form is shown; rotate it on the /keys page "
         "with the admin key.")
 
-    # -- 7. the existing --check path, then one real request ----------------
+    # -- 8. the existing --check path, then one real request ----------------
     try:
         cfg = load_config(config_path)
     except ConfigError as exc:
@@ -1076,6 +1900,7 @@ def run(options: Options, prompter: Prompter,
     if not options.check:
         out("")
         out("--no-check: configuration check and test request skipped")
+        _say_port_move(answers, out)
         return 0
 
     from .__main__ import run_check
@@ -1096,6 +1921,7 @@ def run(options: Options, prompter: Prompter,
 
     ok = check_code == 0 and status in (0, 200)
     out("")
+    _say_port_move(answers, out)
     if ok:
         out("RIPPLE is configured. Start it with:  ripple --config "
             f"{config_path}")
@@ -1116,9 +1942,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--yes", action="store_true",
                         help="take every default instead of asking")
     parser.add_argument("--force", action="store_true",
-                        help="overwrite an existing config.yaml / key store")
+                   help="replace an existing config.yaml / key store; both are "
+                        "copied aside first as <file>.bak-<YYYYmmdd-HHMMSS>")
     parser.add_argument("--port", type=int, default=None,
-                        help=f"listen port (default {DEFAULT_PORT}; a busy port "
+                        help=f"listen port (default {DEFAULT_PORT}; "
+                             f"{PORT_MIN}-{PORT_MAX}, this project uses "
+                             f"{PORT_RANGE[0]}-{PORT_RANGE[1]}; a busy port "
                              f"moves to the next free one)")
     parser.add_argument("--host", action="append", default=[], metavar="URL",
                         help="oMLX address, repeatable (e.g. http://10.0.0.5:8000)")
@@ -1144,6 +1973,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.port is not None and _parse_port(str(args.port)) is None:
+        # The flag gets the same three sentences as the question (#166) — a
+        # configuration that cannot bind is worse than a refused flag.
+        print(_port_complaint(str(args.port)), file=sys.stderr)
+        return 2
     options = Options(
         yes=args.yes,
         force=args.force,

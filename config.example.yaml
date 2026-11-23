@@ -16,7 +16,11 @@ log_file: ~/Library/Logs/ripple.log     # rotating, 10 MB x 5 (NFA-8)
 # Defaults for every host. A host may override any of them.
 defaults:
   backend: omlx                # omlx | openai_compatible
-  api_key: ${OMLX_API_KEY}     # export OMLX_API_KEY=$(cat ~/.omlx/api_key.txt)
+  # A credential may be a reference into a 0600 file (issue #179), which keeps
+  # this file safe to paste into a forum. `ripple init` writes exactly this:
+  api_key_file: ~/.ripple/secrets.yaml#omlx.fleet
+  # A literal still works — ${OMLX_API_KEY} comes from the environment:
+  # api_key: ${OMLX_API_KEY}
   max_inflight: 8              # hard limit of concurrent requests (FA-5)
   max_threads: 20              # thread slots on this host (FA-19)
   spill_threshold: 3           # "full" for new threads from here on (FA-5)

@@ -43,7 +43,7 @@ def en() -> dict:
 # -- calibrate button -------------------------------------------------------
 def test_page_has_a_calibrate_button(page, de):
     assert "t('fleet.calibrate')" in page
-    assert de["fleet.calibrate"] == "Calibrate"
+    assert de["fleet.calibrate"] == "Kalibrieren"
 
 
 def test_calibrate_calls_the_calibration_endpoints(page):
@@ -62,7 +62,7 @@ def test_calibrate_asks_before_loading_anything(page, de):
     # window.confirm, and the dialog names the node and the consequence.
     assert "window.confirm(" in page
     assert "t('calib.confirm', {node: name" in page
-    assert de["calib.confirm"].startswith("Calibrate {node}?")
+    assert de["calib.confirm"].startswith("„Kalibrieren“ für {node}?")
     assert "may evict" in de["calib.confirm"].replace("kann andere verdrängen", "may evict")
 
 
@@ -218,3 +218,28 @@ def test_existing_functions_keep_their_names(page):
     for fn in ('function render(', 'function renderParams(', 'async function tick('):
         assert fn in page
     assert "setInterval(tick, 2000)" in page
+
+def test_the_legend_is_collapsed_until_someone_opens_it(tmp_path, en, de):
+    js = (STATIC / "dashboard.js").read_text(encoding="utf-8")
+    """Issue #181: the first screen shows the fleet, not the explanation of it.
+
+    The legend keeps its place above the cards — collapsing it is what makes the
+    cards the first thing an operator sees, without losing the legend for the one
+    who wants it. The choice is remembered, or every reload undoes it.
+    """
+    assert "LEGEND_OPEN_KEY" in js and "localStorage" in js
+    assert "ripple_legend_open" in js, "the choice needs a stable key"
+    # collapsed is the default: the body carries `hidden` unless the store says 1
+    assert "localStorage.getItem(LEGEND_OPEN_KEY) === '1'" in js
+    assert "'</button><div class=\"legend-body\" id=\"legendBody\"' +" in js
+    assert "(open ? '' : ' hidden')" in js
+    # the button says what it does, in both directions, in the operator's language
+    assert en["legend.show"] and en["legend.hide"]
+    assert de["legend.show"] and de["legend.hide"]
+    assert en["legend.show"] != en["legend.hide"]
+    # …and the note stays inside the collapsible part, not beside it: it is the
+    # promise about shapes that #70 broke once, so it must travel with the rest.
+    start = js.index("function renderLegend()")
+    body = js[start:js.index("\n}", start)]
+    assert "legend-body" in body and "legend-note" in body, body
+    assert body.index("legend-note") > body.index("legend-body"), body

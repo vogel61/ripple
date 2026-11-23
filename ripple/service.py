@@ -60,7 +60,7 @@ from typing import Any, Callable
 
 from . import __version__
 from .build import REPO
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, default_config_path, load_config
 
 #: Production defaults. Each is read exactly once, through the accessor below;
 #: nothing else in the repository spells them out.
@@ -145,8 +145,12 @@ def plist_path(lab: str | None = None) -> Path:
 
 
 def config_path() -> Path:
-    """The configuration the commands reason about: ``RIPPLE_CONFIG``, else config.yaml."""
-    return Path(os.environ.get("RIPPLE_CONFIG") or "config.yaml").expanduser()
+    """The configuration the commands reason about.
+
+    ``RIPPLE_CONFIG``, else what ``init`` wrote and a bare ``ripple`` reads:
+    ``~/.ripple/config.yaml``, with ``./config.yaml`` as the fallback (issue #183).
+    """
+    return Path(os.environ.get("RIPPLE_CONFIG") or default_config_path()).expanduser()
 
 
 def job_config_path() -> Path:
@@ -161,7 +165,7 @@ def job_config_path() -> Path:
     raw = os.environ.get("RIPPLE_CONFIG")
     if raw:
         return Path(raw).expanduser().resolve()
-    return Path(REPO) / "config.yaml"
+    return Path(default_config_path()).expanduser().resolve()
 
 
 def wait_seconds() -> float:
@@ -314,9 +318,25 @@ def job_python(repo: Path | None = None) -> str:
     return sys.executable
 
 
+def needs_env_key(cfg_path: Path) -> bool:
+    """Does the configuration itself ask for ``$OMLX_API_KEY``?
+
+    Only then does the plist have to carry the key: since #179 a configuration
+    written by `init` names it as ``api_key_file`` (``~/.ripple/secrets.yaml``),
+    which the process reads on its own — a copy in the plist would be a second
+    copy in every backup of ``~/Library`` (issue #185).
+    """
+    try:
+        return "${OMLX_API_KEY}" in Path(cfg_path).read_text(encoding="utf-8")
+    except OSError:
+        # An unreadable config is not this function's failure to report: the
+        # caller has loaded it already, and the job would fail there.
+        return True
+
+
 def render_plist(*, repo: Path | None = None, lab: str | None = None,
                  cfg_path: Path | None = None, python: str | None = None,
-                 home: Path | None = None) -> str:
+                 home: Path | None = None, include_key: bool = True) -> str:
     """The plist for THIS checkout, rendered from ``deploy/ai.ripple.plist``.
 
     Pure: no file is written and no command is run, so a test can hold the
@@ -326,6 +346,10 @@ def render_plist(*, repo: Path | None = None, lab: str | None = None,
     filled from `repo`, `cfg_path` and `python` by value; a template that no
     longer carries those two lines is refused instead of rendered into a plist
     that starts the wrong thing.
+
+    `include_key=False` drops the ``OMLX_API_KEY`` block between the template's
+    markers: the configuration names its key itself (issue #185), so the job
+    needs no copy of it.
     """
     repo = Path(repo or REPO)
     lab = lab or label()
@@ -353,6 +377,16 @@ def render_plist(*, repo: Path | None = None, lab: str | None = None,
     text = (text.replace("__REPO__", str(repo))
                 .replace("__HOME__", str(home or Path.home()))
                 .replace("__LABEL__", lab))
+    if not include_key:
+        begin, end = "<!-- __KEY_BEGIN__ -->", "<!-- __KEY_END__ -->"
+        if begin not in text or end not in text:
+            raise ServiceError(
+                f"{template} has no {begin}/{end} — cannot drop the oMLX key from "
+                f"the job.\n  next: restore deploy/ai.ripple.plist from the repository",
+                EXIT_REFUSED)
+        head, _, rest = text.partition(begin)
+        _, _, tail = rest.partition(end)
+        text = head + tail.lstrip("\n")
     leftover = [name for name in ("__REPO__", "__HOME__", "__LABEL__") if name in text]
     if leftover:
         raise ServiceError(
@@ -376,13 +410,17 @@ def plist_points_at(path: Path, *, repo: Path, lab: str, cfg_path: Path) -> bool
                for value in (lab, str(repo), str(cfg_path)))
 
 
-def install_plist(*, lab: str, text: str, key: str) -> Path:
+def install_plist(*, lab: str, text: str, key: str | None) -> Path:
     """Write the plist (0600), put the oMLX key in it with plutil, read it back.
 
     The key is written after the file exists because that is what plutil edits,
     and it is read back because "plutil returned 0" is a claim, not a
     measurement. A plist that ends up without its key is removed again: a job
     that cannot start is worse than no job, because it looks installed.
+
+    `key=None` is the normal case since #185: the configuration names its key
+    itself (`api_key_file`), the rendered text has no key block at all, and
+    nothing has to be edited with plutil.
     """
     path = plist_path(lab)
     tmp = path.with_name(path.name + ".tmp")
@@ -396,6 +434,17 @@ def install_plist(*, lab: str, text: str, key: str) -> Path:
             f"could not write {path}: {exc.strerror or exc}\n"
             f"  next: check that {path.parent} exists and is writable",
             EXIT_REFUSED)
+    if key is None:
+        lint = _plutil("-lint", str(path))
+        if lint is None or lint.returncode != 0:
+            detail = (lint.stderr or lint.stdout).strip() if lint is not None else "plutil is not available"
+            path.unlink(missing_ok=True)
+            raise ServiceError(
+                f"{path} is not a valid plist ({detail})\n"
+                f"  next: the job is NOT installed — run `ripple -perm` again",
+                EXIT_REFUSED)
+        return path
+
     out = _plutil("-replace", "EnvironmentVariables.OMLX_API_KEY", "-string", key, str(path))
     if out is None or out.returncode != 0:
         detail = (out.stderr or out.stdout).strip() if out is not None else "plutil is not available"
@@ -603,10 +652,12 @@ def human_uptime(seconds: float) -> str:
 # --- starting --------------------------------------------------------------
 
 def api_key_path() -> Path:
-    """Where the oMLX key comes from: ``~/.omlx/api_key.txt``.
+    """Where RIPPLE looks for the oMLX key: ``~/.omlx/api_key.txt``.
 
-    One path, named in one place, because the plist and a spawned instance must
-    read the same key — and because the error message has to name the file.
+    That file is *ours*, not oMLX's: oMLX keeps the key in ``settings.json``
+    under ``auth.api_key`` (admin panel → Settings → API key) and writes no text
+    copy. One path, named in one place, because the plist and a spawned instance
+    must read the same key — and because the error message has to name the file.
     """
     return Path.home() / ".omlx" / "api_key.txt"
 
@@ -633,7 +684,9 @@ def api_key_or_error() -> str:
         raise ServiceError(
             f"no oMLX key at {path} — the launchd job cannot start without it "
             f"(launchd reads no files; the key has to be inside the plist).\n"
-            f"  next: write the key there and chmod 600 {path}, then run "
+            f"  the key is in oMLX: admin panel → Settings → API key "
+            f"(or ~/.omlx/settings.json, auth.api_key).\n"
+            f"  next: write it to {path} and chmod 600 {path}, then run "
             f"`ripple -perm` again",
             EXIT_CONFIG)
     return key
@@ -965,7 +1018,10 @@ def cmd_autostart(argv: list[str]) -> int:
     cfg_path = job_config_path()
     cfg = _load(cfg_path)
     port = resolve_port(cfg)
-    key = api_key_or_error()
+    # Only a configuration that asks for `$OMLX_API_KEY` needs the key inside the
+    # plist (issue #185); everything `init` writes names it as `api_key_file`.
+    needs_key = needs_env_key(cfg_path)
+    key = api_key_or_error() if needs_key else None
 
     state = job_state(lab)
     if state["loaded"] is None:
@@ -991,7 +1047,10 @@ def cmd_autostart(argv: list[str]) -> int:
               f"nothing to change")
         return EXIT_OK
 
-    text = render_plist(repo=repo, lab=lab, cfg_path=cfg_path)
+    text = render_plist(repo=repo, lab=lab, cfg_path=cfg_path, include_key=needs_key)
+    if not needs_key:
+        print(f"the job carries no oMLX key — {cfg_path.name} names it itself "
+              f"(defaults.api_key_file); nothing to copy into the plist")
     if state["loaded"]:
         # Loaded, but not what this checkout would install: either it does not
         # answer, or it points somewhere else. Say which before touching it.
@@ -1263,8 +1322,8 @@ def _load(path: Path | None = None) -> Config:
     except ConfigError as exc:
         raise ServiceError(
             f"configuration error in {path}: {exc}\n"
-            f"  next: copy config.example.yaml to config.yaml and adapt it, "
-            f"or point RIPPLE_CONFIG at the right file",
+            f"  next: run `ripple init` (it writes ~/.ripple/config.yaml), or "
+            f"point RIPPLE_CONFIG at the file you mean",
             EXIT_CONFIG)
 
 

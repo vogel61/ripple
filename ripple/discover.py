@@ -18,7 +18,8 @@ Three facts about the live oMLX build shape the probe (measured 16.11.2026 on
 * `/api/cluster/node_id` answers **without** a key — so identity is free.
 * `/v1/models` answers **401** without one. That is not a failure of the probe:
   a node that says 401 is a node, and the operator then learns they still owe
-  a key. `Found.models` stays empty and the reason is reported by `main`.
+  a key. `Found.models` stays empty and the reason travels beside it — the CLI
+  prints it, `POST /admin/discover` carries it per candidate (issue #155).
 * `/admin/api/models` is the admin endpoint; 401/403/404 there means "no admin
   rights", not "not a node".
 
@@ -70,8 +71,9 @@ class Found:
 
     `models` is empty both when the node carries nothing and when it refused to
     tell us (no key yet — oMLX answers 401 on `/v1/models`). The two are not the
-    same statement, so `main` reports the reason; `discover()` keeps the pinned
-    shape and callers that need the distinction should pass a key.
+    same statement, so the probe keeps the reason beside the `Found`; callers
+    that need the distinction take `_Probe` (`scan_network_detailed`), callers
+    that only need the node take this.
     """
 
     address: str            # "http://127.0.0.1:8000" — normalised, no trailing slash
@@ -84,7 +86,12 @@ class Found:
 
 @dataclass(frozen=True)
 class _Probe:
-    """A `Found` plus why its model list is empty — CLI detail, not public API."""
+    """A `Found` plus why its model list is empty.
+
+    Not part of `Found` because the pinned shape is what `ripple init` consumes;
+    the CLI and `POST /admin/discover` both need the distinction, so both take
+    the probes rather than the bare `Found` (issue #155).
+    """
 
     found: Found
     reason: Optional[str]
@@ -191,7 +198,10 @@ async def _read_models(client: httpx.AsyncClient, address: str, timeout: float,
     except httpx.HTTPError as exc:
         return (), f"{type(exc).__name__} on {MODELS_PATH}", None
     if r.status_code in (401, 403):
-        return (), _status_reason(r, MODELS_PATH) + " — pass --omlx-key", r.status_code
+        # The remedy is the CLI's business, not the reason's: the same string is
+        # carried into the page's JSON (issue #155), where `--omlx-key` would be
+        # an instruction for a terminal the operator is not sitting at.
+        return (), _status_reason(r, MODELS_PATH), r.status_code
     if r.status_code != 200:
         return (), _status_reason(r, MODELS_PATH), r.status_code
     try:
@@ -363,6 +373,21 @@ async def scan_network(cidr: str, *, port: int = 8000, timeout: float = 0.5,
     default path: `main` reaches it only through the explicit flag, and a test
     points it at 127.0.0.1/32.
     """
+    probes = await scan_network_detailed(cidr, port=port, timeout=timeout,
+                                         concurrency=concurrency, api_key=api_key)
+    return [p.found for p in probes]
+
+
+async def scan_network_detailed(cidr: str, *, port: int = 8000, timeout: float = 0.5,
+                                concurrency: int = 64,
+                                api_key: Optional[str] = None) -> List[_Probe]:
+    """`scan_network`, with why a swept node's model list is empty.
+
+    A sweep that answers `models=0` for a key-protected node is indistinguishable
+    from one that found a node carrying nothing — issue #155: the page offered
+    those candidates as model-less. The reason travels with the row so the
+    caller can say which of the two it saw.
+    """
     addresses = _scan_addresses(cidr, port)
     probes = await _probe_all(addresses, timeout=timeout, api_key=api_key,
                               concurrency=concurrency)
@@ -370,15 +395,28 @@ async def scan_network(cidr: str, *, port: int = 8000, timeout: float = 0.5,
     # Numeric order, so two runs report the same list.
     probes.sort(key=lambda p: ipaddress.ip_address(
         urlparse(p.found.address).hostname or "0.0.0.0"))
-    return [p.found for p in probes]
+    return probes
 
 
 # -- CLI -------------------------------------------------------------------
+def _cli_reason(probe: _Probe) -> Optional[str]:
+    """The reason with the remedy a CLI user can act on.
+
+    The reason itself stays neutral because the page reads the same string;
+    only the terminal output says what to pass.
+    """
+    reason = probe.reason
+    if reason and ("401" in reason or "403" in reason):
+        return f"{reason} — pass --omlx-key"
+    return reason
+
+
 def _format_line(probe: _Probe) -> str:
     found = probe.found
     models = f"models={len(found.models)}"
-    if probe.reason:
-        models += f" ({probe.reason})"
+    reason = _cli_reason(probe)
+    if reason:
+        models += f" ({reason})"
     return (f"{found.address:<28} node_id={found.node_id or '-'}  {models}  "
             f"latency={found.latency_ms:.1f}ms  admin={'yes' if found.admin else 'no'}  "
             f"name={found.name}")
@@ -397,7 +435,7 @@ def _format_json(probes: Sequence[_Probe]) -> str:
             "admin": found.admin,
             # Not part of `Found`: why `models` is empty, when it is not because
             # the node carries nothing (a missing key answers 401).
-            "reason": probe.reason,
+            "reason": _cli_reason(probe),
         })
     return json.dumps(payload, indent=2)
 
@@ -450,17 +488,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not args.as_json:
                 print(f"scanning {cidr} on port {args.port}", file=sys.stderr)
             try:
-                found = await scan_network(cidr, port=args.port,
-                                           timeout=args.timeout,
-                                           concurrency=args.concurrency,
-                                           api_key=api_key)
+                swept = await scan_network_detailed(cidr, port=args.port,
+                                                    timeout=args.timeout,
+                                                    concurrency=args.concurrency,
+                                                    api_key=api_key)
             except ValueError as exc:
                 parser.error(str(exc))
-            for f in found:
-                if f.address in seen:
+            for probe in swept:
+                if probe.found.address in seen:
                     continue
-                seen.add(f.address)
-                probes.append(_Probe(found=f, reason=None))
+                seen.add(probe.found.address)
+                # The reason travels with the node (issue #155): a swept node
+                # whose model list answered 401 must not read as one that
+                # carries nothing.
+                probes.append(probe)
         # The same node can be reached as localhost and as 127.0.0.1; the
         # explicitly given addresses stay first.
         return _unique_by_identity(probes)

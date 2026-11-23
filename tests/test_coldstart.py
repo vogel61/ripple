@@ -73,7 +73,7 @@ def test_the_cold_start_runs_through_against_a_stub_node(
         assert mode == 0o600, f"{name} is {oct(mode)}"
 
     cfg = load_config(cold_home / "config.yaml")
-    assert cfg.hosts[0].models == []          # "everything the node offers"
+    assert cfg.hosts[0].models == ["m1"]        # the chat-capable default (#157), not "everything"
     assert cfg.hosts[0].node_id is None or isinstance(cfg.hosts[0].node_id, str)
 
     url = live_proxy_factory(cfg)

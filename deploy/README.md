@@ -110,6 +110,7 @@ cd ~/Projects/ripple
 deploy/stop-ripple.command
 mkdir -p ~/Library/LaunchAgents
 sed -e "s|__REPO__|$PWD|g" -e "s|__HOME__|$HOME|g" deploy/ai.ripple.plist > ~/Library/LaunchAgents/ai.ripple.plist
+# only when the configuration asks for it: api_key: ${OMLX_API_KEY}
 plutil -replace EnvironmentVariables.OMLX_API_KEY -string "$(cat ~/.omlx/api_key.txt)" ~/Library/LaunchAgents/ai.ripple.plist
 chmod 600 ~/Library/LaunchAgents/ai.ripple.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.ripple.plist
@@ -122,7 +123,13 @@ somebody else's directory.
 
 The key never goes into the repository — the plist carries a placeholder
 (`PUT_YOUR_OMLX_API_KEY_HERE`) that the `plutil -replace` line fills in locally.
-launchd does not read files, so that step is not optional.
+
+That step is **not** needed for a configuration `ripple init` wrote: it names its
+key as `defaults.api_key_file` (`~/.ripple/secrets.yaml`), which the process reads
+itself, and `ripple -perm` drops the whole `OMLX_API_KEY` block from the plist
+between the template's `__KEY_BEGIN__`/`__KEY_END__` markers (issue #185) — a key
+in a launchd plist is a key in every backup of `~/Library`. `ripple doctor` says
+`plist — no key inside`, and warns when the two disagree in either direction.
 
 `RunAtLoad` starts RIPPLE at login; `KeepAlive {SuccessfulExit: false}` restarts
 it after a crash but not after a clean exit. `ThrottleInterval 10` keeps a

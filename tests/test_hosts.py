@@ -426,3 +426,39 @@ async def test_the_reporting_state_has_one_order(stub_factory, ripple_factory):
     assert host.reporting_state() == "draining"
     assert host.status == "healthy"          # the probe verdict is never overwritten
     host.end_drain()
+
+
+# ---------------------------------------------------------------------------
+# 12. A capability note that does not change is not repeated (issue #170)
+# ---------------------------------------------------------------------------
+async def test_an_unchanged_capability_note_is_logged_once(
+        stub_factory, ripple_factory, caplog, monkeypatch):
+    """The same unreadable model list was logged on every refresh.
+
+    Measured in an `init` check on 23.11.: two identical pairs of
+    `capability host=… availability missing` / `residency missing` lines for one
+    node, because `_read_capabilities` logged its notes unconditionally while
+    `_note_model_list` had logged on the transition all along.
+    """
+    from ripple import hosts as hosts_module
+
+    a = stub_factory(models=[stub_model_loaded("m1")])
+    harness = await ripple_factory(_one_host(a))
+    host = harness.host("A")
+    notes = ["availability missing: /v1/models unreadable (HTTPStatusError)",
+             "residency missing: no loaded models with size readable"]
+
+    async def fake_probe(backend, *, health=None):
+        return frozenset(), list(notes), []
+
+    monkeypatch.setattr(hosts_module, "probe_capabilities", fake_probe)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="ripple.hosts"):
+        await host._read_capabilities()
+        await host._read_capabilities()
+        await host._read_capabilities()
+
+    lines = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith("capability host=")]
+    assert len(lines) == len(notes), lines
+    assert all(host.cfg.name in line for line in lines)

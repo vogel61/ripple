@@ -537,16 +537,18 @@ def test_perm_installs_the_job_and_waits_until_healthz_answers(perm, capsys):
     assert oct(plist.stat().st_mode & 0o777) == "0o600"
     text = plist.read_text(encoding="utf-8")
     assert "<string>ai.ripple</string>" in text               # the label
-    # The key is written by plutil (faked here) and read back before "on".
-    replace = [call for call in perm["plutil"] if call[0] == "-replace"]
-    assert replace and replace[0][-1] == str(plist) and "test-key-123" in replace[0]
-    assert any(call[0] == "-extract" for call in perm["plutil"])
+    # Issue #185: the configuration names its key itself (api_key_file), so the
+    # plist carries none — and plutil is never asked to write one.
+    assert "OMLX_API_KEY" not in text
+    assert "<key>PATH</key>" in text                          # the env block survives
+    assert not [call for call in perm["plutil"] if call[0] == "-replace"]
     assert perm["bootstrapped"] == 1
     assert ("bootstrap", service.domain(), str(plist)) in perm["launchctl"]
     out = capsys.readouterr().out
     assert f"autostart: on ({service.label()}, {service.REPO})" in out
     assert "verified: launchctl print" in out and "49841" in out
     assert "answered after 1.5 s" in out
+    assert "the job carries no oMLX key" in out
 
 
 def test_perm_twice_is_idempotent(perm, capsys):
@@ -596,7 +598,13 @@ def test_perm_without_a_config_installs_nothing(monkeypatch, tmp_path):
     assert not (tmp_path / "ai.ripple-test.plist").exists()
 
 
-def test_perm_without_the_key_file_installs_nothing(perm, monkeypatch):
+def test_perm_without_the_key_file_installs_nothing_when_the_config_asks_for_it(
+        perm, monkeypatch, tmp_path):
+    """A configuration that says `${OMLX_API_KEY}` needs the key in the plist,
+    and launchd cannot read files — so a missing file is a refusal (issue #153)."""
+    asking = tmp_path / "asking.yaml"
+    asking.write_text("defaults:\n  api_key: ${OMLX_API_KEY}\n", encoding="utf-8")
+    monkeypatch.setattr(service, "job_config_path", lambda: asking)
     monkeypatch.setattr(service, "api_key_from_file", lambda: None)
     with pytest.raises(service.ServiceError) as exc:
         service.cmd_autostart([])
@@ -604,6 +612,32 @@ def test_perm_without_the_key_file_installs_nothing(perm, monkeypatch):
     assert str(Path.home() / ".omlx" / "api_key.txt") in exc.value.message
     assert "next:" in exc.value.message
     assert not service.plist_path().exists()
+
+
+def test_perm_without_a_key_file_is_fine_when_the_config_names_its_own(
+        perm, monkeypatch, tmp_path, capsys):
+    """The normal case since #179: `api_key_file` in the configuration, no key
+    in the plist, no `~/.omlx/api_key.txt` needed (issue #185)."""
+    naming = tmp_path / "naming.yaml"
+    naming.write_text("defaults:\n  api_key_file: ~/.ripple/secrets.yaml#omlx.fleet\n",
+                      encoding="utf-8")
+    monkeypatch.setattr(service, "job_config_path", lambda: naming)
+    monkeypatch.setattr(service, "api_key_from_file", lambda: None)
+    assert service.cmd_autostart([]) == 0
+    text = service.plist_path().read_text(encoding="utf-8")
+    assert "OMLX_API_KEY" not in text
+    assert "the job carries no oMLX key" in capsys.readouterr().out
+
+
+def test_perm_writes_the_key_when_the_config_asks_for_the_variable(
+        perm, monkeypatch, tmp_path):
+    asking = tmp_path / "asking.yaml"
+    asking.write_text("defaults:\n  api_key: ${OMLX_API_KEY}\n", encoding="utf-8")
+    monkeypatch.setattr(service, "job_config_path", lambda: asking)
+    assert service.cmd_autostart([]) == 0
+    replace = [call for call in perm["plutil"] if call[0] == "-replace"]
+    assert replace and "test-key-123" in replace[0]
+    assert any(call[0] == "-extract" for call in perm["plutil"])
 
 
 def test_shutdown_perm_stops_the_job_and_removes_it(perm, capsys):
@@ -708,3 +742,30 @@ def test_the_installer_writes_a_working_wrapper(tmp_path):
                              capture_output=True, text=True, timeout=120)
     assert version.returncode == 0, version.stdout + version.stderr
     assert version.stdout.startswith("RIPPLE ")
+
+def test_the_service_commands_read_what_init_wrote(tmp_path, monkeypatch):
+    """Issue #186: after #183 the config lives in `~/.ripple`, but the service
+    commands still resolved `<repo>/config.yaml` — `ripple -perm` from the home
+    directory died on a file the install never wrote."""
+    from ripple import service
+
+    monkeypatch.delenv("RIPPLE_CONFIG", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".ripple").mkdir()
+    written = tmp_path / ".ripple" / "config.yaml"
+    written.write_text("listen_port: 8010\n", encoding="utf-8")
+
+    assert service.config_path() == written
+    # the plist needs an absolute path: a job has no working directory
+    assert service.job_config_path() == written
+    assert service.job_config_path().is_absolute()
+
+
+def test_ripple_config_still_wins(tmp_path, monkeypatch):
+    """The override is older than the default and keeps its meaning."""
+    from ripple import service
+
+    monkeypatch.setenv("RIPPLE_CONFIG", str(tmp_path / "somewhere.yaml"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert service.config_path() == tmp_path / "somewhere.yaml"
+    assert service.job_config_path() == tmp_path / "somewhere.yaml"

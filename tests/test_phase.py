@@ -412,3 +412,26 @@ async def test_healthz_carries_the_phase_beside_the_lock_keys(phase_stub,
     assert "lock" in cell and "lock_reason" in health["models"][0]
     assert health["locks"] == []
     assert (await harness.stats())["requests_model_locked"] == 0
+
+
+async def test_healthz_says_which_model_a_node_is_loading(phase_stub,
+                                                          ripple_factory):
+    """#149: `models[].hosts[].loading` names the (host, model) pair being loaded.
+
+    A separate fact from `phase`, not a second name for it: the request that
+    triggered the load does sit in `pp`, but the reason is the load and not a
+    prefill of resident weights. The page blinks the dot blue from this flag and
+    must not have to guess it out of `loaded` + `phase`.
+    """
+    a = phase_stub(models=[StubModel(id="m1", loaded=False, estimated_size=GB),
+                           StubModel(id="m2", loaded=True, estimated_size=GB)])
+    harness = await ripple_factory(make_config([
+        host_config("A", a.url, node_id=a.state.node_id)]))
+    host = harness.ripple.fleet.hosts[0]
+    host.begin_loading("m1", size_gb=1.0, eta_seconds=60.0, source="dispatch")
+
+    health = await harness.healthz()
+    assert _cell(health, "m1", "A")["loading"] is True
+    assert _cell(health, "m2", "A")["loading"] is False
+    # the node-level dict stays the same fact it was (docs/loading-state.md)
+    assert host_row(health, "A")["loading"]["model"] == "m1"

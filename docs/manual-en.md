@@ -53,7 +53,7 @@ during installation and come back here to run the thing.
 
 ## 3. First start
 
-### 3.1 `ripple init` — what the five questions mean
+### 3.1 `ripple init` — what the six questions mean
 
 `init` asks, writes two files, and finishes by sending one real request through
 the configuration it just wrote. Every question has a default in brackets;
@@ -61,11 +61,13 @@ pressing Enter takes it.
 
 | Question | What it decides | Default |
 |---|---|---|
-| **Port** | Where the proxy listens. If the port is taken, `init` names the process holding it and offers the next free one. | `8010` |
+| **Port** | Where the proxy listens. If the port is taken, `init` names the process holding it and offers the next free one. A port outside 8010–8099 is accepted but named with its consequence (the dashboard, `ripple doctor` and `ripple start` follow it) and confirmed once, default no — the range is documented, not enforced, and a typo like `8199` for `8099` should not pass as a decision. | `8010` |
 | **Use these nodes?** | Whether the discovered addresses become the fleet. Without `--host`, `init` probes exactly one address, `http://127.0.0.1:8000`; a network sweep is a separate command (`ripple discover --scan …`). | yes |
-| **Name, weight, models** (per node) | The name is the stable key for thread slots, affinity and every log line — pick something you will recognise. The weight is the target share of new threads: `3` and `2` mean 60 % / 40 %. An empty model list means *everything this node offers*; a written list is an allow-list that freezes today's fleet. | `local`, `1`, empty |
+| **Name, weight, models** (per node) | The name is the stable key for thread slots, affinity and every log line — pick something you will recognise. A node typed at the address question gets a suggestion (`local` for loopback, otherwise `node-…` from its `node_id`), and an empty answer keeps it. The weight is the target share of new threads: `3` and `2` mean 60 % / 40 %. The question takes whole numbers 1–20 and asks again on anything else — `abc`, `1.5`, `0` and `21` each get their own sentence instead of being silently replaced by the default; the configuration file itself accepts any positive float, so a hand-edited `1.5` stays valid. An empty answer takes the chat-capable models (`model_type` `llm`, `vlm`, …) and `init` names the utility engines it left out (`markitdown`, `embedding`); answer `all` to keep the list empty — *everything this node offers*, utility engines included — and a written list is an allow-list, written exactly as typed, that freezes today's fleet. The type is the node's own declaration and not always what an operator would call a chat model — a speculative-decoding draft model (`…-drafter`) is declared `llm`; name it out or hide it with the policy (§6.2). | `local`, `1`, empty |
 | **Site name and networks** | Where the machine stands — a room, a building, a city — and the networks (CIDR) that belong to it. The site is checked against the address a node is actually reached through, by `doctor` and on the fleet card. A blank name means *no site*, and nothing is checked. | `local`, derived from the default route |
-| **The oMLX key** | Taken from `$OMLX_API_KEY`, from `~/.omlx/api_key.txt`, or typed (not echoed). An empty answer is valid and means read-only: the node then answers `401` on its model list, and RIPPLE can route but not see what the node carries. | the key if found |
+| **Scan the networks?** | Offered right after the networks, default **no** (a sweep is traffic on someone else's network). `y` sweeps every CIDR for oMLX on port 8000 and asks each node it finds name, weight and models; a node already in the fleet is skipped by `node_id`. |
+| **The oMLX key** (per node) | Asked **before** the node list (issue #180), so the discovery line can carry the model count it actually read; taken from `$OMLX_API_KEY`, from `~/.omlx/api_key.txt` if it is there, or typed (not echoed). The first answer is the fleet default: every further node is asked `same oMLX key as node 1?`, because a fleet of clones is the normal case. A node that answers `401` with the key it was given is asked once more for its own — machines each with their own `~/.omlx/api_key.txt` are just as normal — and a key that differs is written as `hosts.<name>.api_key_file` — the value itself goes to `~/.ripple/secrets.yaml` (mode 0600), so the configuration can be shared without the keys in it (`ripple doctor` says `OK secrets` when that holds). An empty answer is valid and means read-only: the node then answers `401` on its model list, and RIPPLE can route but not see what the node carries. | the key if found |
+| **The RIPPLE admin key** | Empty generates a 32-hex key, which `init` prints once (the dashboard's operator panels ask for exactly that key, so it has to be in your hand at the end of the install). A key you type is used exactly as given and never echoed — only its length is reported, and a short one is a legitimate choice, not an error. | generated |
 
 What it writes: `config.yaml` (mode `0600`, containing the admin key) and
 `~/.ripple/keys.yaml` (the client keys, mode `0600`). Two keys come out of it and
@@ -74,8 +76,10 @@ they are not interchangeable:
 - the **client key** — printed exactly once, at the end. It is what Hermes,
   opencode or `curl` send as `Authorization: Bearer …`. Copy it now; afterwards
   only its masked form is ever shown.
-- the **admin key** — generated, written to `auth.admin_key`, and never printed.
-  It unlocks the write controls on the dashboard and the `/keys` page.
+- the **admin key** — asked for, or generated when you press Enter, and printed
+  exactly once when it is generated (a key you typed is never echoed back). It
+  unlocks the write controls on the dashboard and the `/keys` page, and it is
+  also in `auth.admin_key`.
 
 An existing `config.yaml` or key store is never overwritten: `init` refuses, names
 the path, and points at `--force`.
@@ -899,17 +903,30 @@ The tab has three blocks — `7.1` add by address, `7.2` find in the network,
 #### 5.6.1 Add by address
 
 **What it does.** Two steps, and the order is the point: *read, then write*.
-`Preview` sends `POST /admin/nodes?dry_run=true` with the address. The proxy
-resolves it, asks the machine for its identity and its model list, measures the
-round trip and derives the site the address falls into. **Nothing is written** —
-not the fleet, not `config.yaml`, not the overlay.
+`Preview` sends `POST /admin/nodes?dry_run=true` with the address **and the
+node's own oMLX key**, if you entered one. The proxy resolves the address, asks
+the machine for its identity and its model list, measures the round trip and
+derives the site the address falls into. **Nothing is written** — not the fleet,
+not `config.yaml`, not the overlay.
+
+**The key field belongs to the node, not to the fleet.** A node is a standalone
+machine and inherits nothing from `defaults`, so the key the page asks for here is
+the one *that* machine's oMLX accepts on `/v1/models` — the same key `ripple init`
+took for the first node, and the one that sits in `~/.omlx/api_key.txt` on the
+node. Without it the probe answers 401 and the node arrives with no models at
+all: no residency, no placement by name, and the whole fleet loses the model
+intersection (FA-18). Leaving the field empty stays a valid answer and means a
+**read-only node**: the preview says `no key — read-only node`, the confirmation
+repeats it, and the add answers *added read-only* with the reason instead of a
+bare "0 models". That is the right choice for a node you only want to see, not to
+route to.
 
 **What the preview shows.** Four measured facts and one derived one:
 
 | Field | What it is |
 |---|---|
 | `node_id` | The identity the machine reports about itself. It is what makes a node a node and not an address: the same machine reached through another address is recognised by it, and a second declaration of it is refused instead of becoming a second slot account. |
-| **Models** | What the node offers, the first twelve by name and the count. `model list unreadable` is not a refusal: the node answered, but its list could not be read (usually a missing oMLX admin key). The add still works — placement just cannot use the node by model name until the list is readable. |
+| **Models** | What the node offers, the first twelve by name and the count. `model list unreadable` is not a refusal: the node answered, but its list could not be read — usually because the key is missing or wrong for *this* node. The add still works; placement just cannot use the node by model name until the list is readable. |
 | **Memory** | `used / ceiling` in GB, as the machine reports it. |
 | **Round trip** | The measured latency of the probe, in milliseconds. |
 | **Site** | The location the address derives into, e.g. `Hub`. A location, not a routing rule: a node outside every declared site can still be added, and the preview says so instead of refusing. |
@@ -941,6 +958,10 @@ server's own sentence as a tooltip:
   account.
 - *The node answered; its model list could not be read* — the add is possible,
   but placement cannot use it by name yet (`step: models`).
+- *The admin key was refused* — the tab still holds the previous key, usually
+  because `ripple init --force` rotated `auth.admin_key` in the meantime
+  (`step: admin`, `code: admin_key_refused`). The sentence says where the current
+  key is: `config.yaml`, `auth.admin_key`.
 - A node that is already in the fleet is refused as a duplicate, whether it was
   matched by address or by `node_id`.
 
@@ -1152,8 +1173,8 @@ the page.
 ![The key page](images/manual-keys.png)
 
 `http://<host>:8010/keys`. The **admin key** (`config.yaml` → `auth.admin_key`) opens
-`/admin/*` and this page and is never shown; a **client key** is created here, opens
-`/v1/*`, and is shown exactly once.
+`/admin/*` and this page; `init` printed it once, and here it is only ever masked.
+A **client key** is created on this page, opens `/v1/*`, and is shown exactly once.
 
 **What it does.** One row per caller — name, masked secret, kind, model list,
 created, state — with `rotate`, `disable`/`enable`, `revoke` and a form for a new
@@ -1185,9 +1206,12 @@ the slot now, delete the thread (§5.3).
 
 **What can go wrong.** The admin key lives in the tab (`sessionStorage`), goes out
 as a bearer on every write and never in the URL; five wrong ones a minute per
-address earn a `429`. A corrupt `keys.yaml` stops the process at startup instead of
-starting with zero keys — which looks like every client losing access at once.
-And `/keys` itself is open: without the admin key it shows an empty table.
+address earn a `429`. A refused key is reported as a refused key — the notice
+names the key and where the current one is (`config.yaml` → `auth.admin_key`), and
+a key rotated by `ripple init --force` is the usual cause. A corrupt `keys.yaml`
+stops the process at startup instead of starting with zero keys — which looks like
+every client losing access at once. And `/keys` itself is open: without the admin
+key it shows an empty table.
 
 ## 7. Using RIPPLE as a client
 

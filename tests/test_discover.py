@@ -304,6 +304,40 @@ def test_scan_network_rejects_oversized_range() -> None:
         discover_mod._scan_addresses("10.0.0.0/8", 8000)
 
 
+async def test_scan_network_keeps_the_reason_of_a_keyed_node(node_factory) -> None:
+    """A swept node that wants a key says so — `models=0` alone reads as "empty".
+
+    Issue #155: the page reported every swept node as model-less because the
+    sweep sent no key; the reason is what tells an empty node from an unread one.
+    """
+    stub = node_factory(models=["Qwen3.5-9B-oQ4e-mtp"], key="secret")
+
+    probes = await discover_mod.scan_network_detailed(
+        "127.0.0.1/32", port=stub.port, timeout=1.0)
+
+    assert [p.found.address for p in probes] == [stub.url]
+    assert probes[0].found.models == ()
+    assert "401" in (probes[0].reason or "")
+
+    keyed = await discover_mod.scan_network_detailed(
+        "127.0.0.1/32", port=stub.port, timeout=1.0, api_key="secret")
+
+    assert keyed[0].found.models == ("Qwen3.5-9B-oQ4e-mtp",)
+    assert keyed[0].reason is None
+
+
+async def test_scan_network_still_finds_a_node_without_a_key(node_factory) -> None:
+    """Identity needs no key: no key means a reason per row, not an empty sweep."""
+    stub = node_factory(models=["a"], key="secret")
+
+    probes = await discover_mod.scan_network_detailed(
+        "127.0.0.1/32", port=stub.port, timeout=1.0)
+
+    assert len(probes) == 1
+    assert probes[0].found.node_id == "11111111-1111-4111-8111-111111111111"
+    assert probes[0].reason
+
+
 # -- main() ----------------------------------------------------------------
 def test_main_reports_a_node_as_json(node_factory, capsys) -> None:
     stub = node_factory(models=["Qwen3.5-9B-oQ4e-mtp"], key="secret")
@@ -365,7 +399,7 @@ def test_main_does_not_scan_without_the_flag(closed_port: int, monkeypatch,
         calls.append(cidr)
         return []
 
-    monkeypatch.setattr(discover_mod, "scan_network", fake_scan)
+    monkeypatch.setattr(discover_mod, "scan_network_detailed", fake_scan)
     rc = discover_mod.main(["--address", f"http://127.0.0.1:{closed_port}"])
 
     assert calls == []
@@ -377,12 +411,14 @@ def test_main_scans_only_with_the_flag(monkeypatch, capsys) -> None:
 
     async def fake_scan(cidr: str, **kwargs: Any) -> List[Any]:
         calls.append(cidr)
-        return [discover_mod.Found(address="http://198.51.100.139:8000",
-                                   node_id="22222222-2222-4222-8222-222222222222",
-                                   models=("m",), latency_ms=1.5,
-                                   name="node-22222222", admin=True)]
+        return [discover_mod._Probe(
+            found=discover_mod.Found(address="http://198.51.100.139:8000",
+                                     node_id="22222222-2222-4222-8222-222222222222",
+                                     models=("m",), latency_ms=1.5,
+                                     name="node-22222222", admin=True),
+            reason=None)]
 
-    monkeypatch.setattr(discover_mod, "scan_network", fake_scan)
+    monkeypatch.setattr(discover_mod, "scan_network_detailed", fake_scan)
     rc = discover_mod.main(["--address", "http://127.0.0.1:1", "--scan",
                             "198.51.100.139/32"])
 
@@ -391,6 +427,39 @@ def test_main_scans_only_with_the_flag(monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert "http://198.51.100.139:8000" in out
     assert "node-22222222" in out
+
+
+def test_main_scan_keeps_the_reason_of_a_scanned_node(node_factory, capsys) -> None:
+    """The sweep's own nodes carry their reason too (issue #155).
+
+    Before this, `main` rebuilt each swept `Found` with `reason=None`: the
+    localhost line explained its 401 and a scanned node said `models=0` with no
+    explanation at all.
+    """
+    stub = node_factory(models=["Qwen3.5-9B-oQ4e-mtp"], key="secret")
+
+    rc = discover_mod.main(["--address", "http://127.0.0.1:1",
+                            "--scan", "127.0.0.1/32", "--port", str(stub.port),
+                            "--json", "--timeout", "2"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [row["address"] for row in payload] == [stub.url]
+    assert payload[0]["models"] == []
+    assert "401" in payload[0]["reason"]
+
+
+def test_main_scan_line_names_the_401(node_factory, capsys) -> None:
+    stub = node_factory(models=["a"], key="secret")
+
+    rc = discover_mod.main(["--address", "http://127.0.0.1:1",
+                            "--scan", "127.0.0.1/32", "--port", str(stub.port),
+                            "--timeout", "2"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "models=0" in out
+    assert "401" in out and "--omlx-key" in out
 
 
 def test_module_is_runnable_standalone() -> None:

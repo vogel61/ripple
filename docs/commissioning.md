@@ -111,6 +111,7 @@ Without trailing comments, so a paste works:
 cd /Users/operator/Projects/ripple
 deploy/stop-ripple.command
 sed -e "s|__REPO__|$PWD|g" -e "s|__HOME__|$HOME|g" deploy/ai.ripple.plist > ~/Library/LaunchAgents/ai.ripple.plist
+# only when the configuration asks for it: api_key: ${OMLX_API_KEY}
 plutil -replace EnvironmentVariables.OMLX_API_KEY -string "$(cat ~/.omlx/api_key.txt)" ~/Library/LaunchAgents/ai.ripple.plist
 chmod 600 ~/Library/LaunchAgents/ai.ripple.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.ripple.plist

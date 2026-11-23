@@ -389,7 +389,9 @@ class HostStats:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            log.warning("host_stats: no ledger at %s — starting from zero", self.path)
+            # A missing ledger on the first start is the normal case, not a
+            # finding (issue #175): a fresh install should not open with a warning.
+            log.info("host_stats: no ledger at %s — starting from zero", self.path)
             return
         except (OSError, ValueError) as exc:
             log.warning("host_stats: ledger at %s unreadable (%s) — starting from zero",

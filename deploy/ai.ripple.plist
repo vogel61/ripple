@@ -35,6 +35,10 @@
 
 	<key>EnvironmentVariables</key>
 	<dict>
+		<!-- __KEY_BEGIN__ -->
+		<!-- Everything between the two markers is dropped when the configuration
+		     names its key itself (defaults.api_key_file, issue #185): a copy in a
+		     launchd plist is a copy in every backup of ~/Library. -->
 		<!-- launchd cannot read files: the key is not in the repository.
 		     After installing, replace the placeholder with the real key:
 		     plutil -replace EnvironmentVariables.OMLX_API_KEY -string \
@@ -42,6 +46,7 @@
 		     Then chmod 600 that file. See deploy/README.md. -->
 		<key>OMLX_API_KEY</key>
 		<string>PUT_YOUR_OMLX_API_KEY_HERE</string>
+		<!-- __KEY_END__ -->
 		<key>PATH</key>
 		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>

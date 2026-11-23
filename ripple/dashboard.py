@@ -91,6 +91,10 @@ called replication "the third and last" was true only when #13 was written:
   the node and writes nothing, the operator confirms weight, site and role, and
   only then does the real `POST` run; `DELETE /admin/nodes/{name}` is #70's
   drain, shown as a dialog that names what is in flight and how long it waits.
+  Since #161 the form also asks for the node's **own** oMLX key: a node is a
+  standalone machine and inherits nothing from `defaults`, so without that key
+  its `/v1/models` stays unread and the preview would show `0 models`. Empty is
+  a valid answer and means a read-only node — chosen, not assumed.
 
 The admin key follows the rule of `ripple/keys_page.py`: it lives in
 `sessionStorage` under `ripple_admin` for the duration of the tab, is sent as
@@ -439,9 +443,15 @@ SHELL = """<!DOCTYPE html>
             <input id="nodeAddress" type="text" autocomplete="off" spellcheck="false"
                    inputmode="url">
           </label>
+          <label class="node-field">
+            <span data-i18n="nodes.api_key"></span>
+            <input id="nodeApiKey" type="password" autocomplete="off" spellcheck="false">
+          </label>
           <button type="button" class="btn" id="nodePreviewBtn"
                   onclick="nodePreview()" data-i18n="nodes.preview"></button>
         </form>
+        <p class="hint" data-i18n="nodes.api_key_hint"></p>
+        <p class="hint" data-i18n-html="nodes.repl_key_note"></p>
         <div id="nodePreview" class="calib-panel" data-i18n="panel.nodes.idle"></div>
       </div>
 

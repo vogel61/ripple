@@ -40,23 +40,86 @@ REBIND_NO_PREFILL_RATE = ("rebind is on, but no destination has a prefill rate �
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def _expand(value: Any, missing: list[str]) -> Any:
-    """Expand ${VAR} recursively. Missing variables are collected, never
-    silently swallowed — an empty API key would otherwise be a silent failure."""
+def _expand(value: Any, empty: list[tuple[str, str]], where: str = "") -> Any:
+    """Expand ${VAR} recursively.
+
+    A `${VAR}` that expands to nothing is collected as `(field, name)` — the
+    field it stood in and the variable, never the value (issue #153). The
+    expansion has always produced the empty string for an unset variable, so
+    downstream nothing could tell "no key configured" from "the key that was
+    configured is empty": the operator saw a 401 from every node and read it as
+    RIPPLE having lost the key. `os.environ` alone cannot tell an unset
+    variable from one exported empty, and both are the same empty field here.
+    """
     if isinstance(value, str):
         def sub(m: re.Match[str]) -> str:
             name = m.group(1)
-            if name not in os.environ:
-                missing.append(name)
+            if not (os.environ.get(name) or "").strip():
+                empty.append((where or "<root>", name))
                 return ""
             return os.environ[name]
 
         return _ENV_RE.sub(sub, value)
     if isinstance(value, list):
-        return [_expand(v, missing) for v in value]
+        return [_expand(v, empty, f"{where}[{i}]") for i, v in enumerate(value)]
     if isinstance(value, dict):
-        return {k: _expand(v, missing) for k, v in value.items()}
+        return {k: _expand(v, empty, f"{where}.{k}" if where else str(k))
+                for k, v in value.items()}
     return value
+
+
+def empty_env_warning(where: str, name: str) -> str:
+    """The one sentence for a `${VAR}` that expanded to nothing (issue #153).
+
+    Written once here and quoted by `ripple doctor`, so the two places cannot
+    drift apart. It names the field and the variable and never the value: the
+    value is a credential far more often than not, and an empty one says
+    nothing anyway.
+    """
+    return (f"{where}: ${{{name}}} is empty — the variable is unset or exported "
+            f"as an empty string in this environment; the field loads empty and "
+            f"whatever needs it fails at the first request")
+
+
+def _secret_from(reference: str, where: str,
+                 warnings: list[str]) -> str:
+    """Resolve `path#a.b.c` to the string stored there (issue #179).
+
+    The configuration is the file an operator pastes into a forum when
+    `ripple --check` complains; a credential inside it travels with it. So a
+    secret may be a reference instead: the value stays in a 0600 file of its
+    own, and the configuration names the place — `~/.ripple/secrets.yaml#omlx.fleet`.
+    A reference that does not resolve is a warning and an empty credential, never
+    a crash: a read-limited node is a documented state.
+    """
+    path_text, _, pointer = reference.partition("#")
+    if not pointer:
+        warnings.append(
+            f"{where}: '{reference}' names no key — write it as "
+            f"'~/.ripple/secrets.yaml#omlx.fleet' (file#section.key); the "
+            f"credential stays empty")
+        return ""
+    path = Path(path_text).expanduser()
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except OSError as exc:
+        warnings.append(f"{where}: cannot read {path}: {exc} — the credential "
+                        f"stays empty")
+        return ""
+    except yaml.YAMLError as exc:
+        warnings.append(f"{where}: {path} is not YAML: {exc} — the credential "
+                        f"stays empty")
+        return ""
+    node: Any = document
+    for part in pointer.split("."):
+        if not isinstance(node, dict) or part not in node:
+            warnings.append(f"{where}: {path} has no '{pointer}' — the "
+                            f"credential stays empty")
+            return ""
+        node = node[part]
+    if node is None:
+        return ""
+    return str(node).strip()
 
 
 def _num(value: Any, name: str, *, minimum: float | None = None) -> float:
@@ -155,6 +218,10 @@ class HostConfig:
                                   # it; `doctor` checks it against the address.
     backend: str = "omlx"         # omlx | openai_compatible
     api_key: str = ""
+    #: Where the key lives when it is not written here (issue #179):
+    #: `~/.ripple/secrets.yaml#omlx.fleet`. A literal `api_key` wins, so older
+    #: files keep working — `ripple doctor` says when one still does.
+    api_key_file: str = ""
     max_inflight: int = 8         # hard upper bound (FA-5)
     max_threads: int = 20         # thread slots (FA-19)
     spill_threshold: int = 3      # considered full from here on (FA-5)
@@ -339,6 +406,8 @@ class ReplicationHostConfig:
     address: list[str] = field(default_factory=list)
     ssh_user: str = ""
     api_key: str = ""
+    #: Reference into the secret file (issue #179), same shape as the others.
+    api_key_file: str = ""
     model_roots: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -392,6 +461,7 @@ class ReplicationConfig:
     # per-host `replication.api_key` is used; without either, the admin calls
     # answer 401 and the job says so.
     admin_key: str = ""
+    admin_key_file: str = ""
     # Fallback model roots for hosts that do not name their own.
     model_roots: list[str] = field(default_factory=list)
     # The free-space headroom of issue #13 point 2 (>= actual_size × 1.05).
@@ -417,6 +487,7 @@ class AuthConfig:
     enabled: bool = False
     keys_file: str = "~/.ripple/keys.yaml"
     admin_key: str = ""
+    admin_key_file: str = ""
     # Requests from these addresses may pass without a key (loopback only by
     # default, so the operator's own tools keep working during the switch).
     allow_loopback: bool = False
@@ -701,6 +772,10 @@ class Config:
     log_level: str = "info"
     log_file: str | None = None
     hosts: list[HostConfig] = field(default_factory=list)
+    # The fleet key as `defaults` resolves it (issue #182): a node the operator
+    # adds at the page has no key field — the overlay is written by the API, not
+    # by `init` — so it uses this one.
+    fleet_api_key: str = ""
     # Named locations (issue #67). Empty is the old world: no host can claim a
     # site, and nothing is checked. A host names one by id in `hosts[].site`.
     sites: list[SiteConfig] = field(default_factory=list)
@@ -728,6 +803,11 @@ class Config:
     # whatever the value happened to be before the click.
     baseline: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # `${VAR}`s that expanded to nothing, as `(field, variable)` (issue #153).
+    # Kept beside `warnings` so `ripple doctor` can repeat each as a line of its
+    # own instead of leaving the 401 to be interpreted — the sentence is
+    # `empty_env_warning`, written once.
+    empty_env: list[tuple[str, str]] = field(default_factory=list)
     source: Path | None = None
 
     # --- derived views -----------------------------------------------------
@@ -795,6 +875,12 @@ class Config:
         start-up log have to say the same thing (and name the same field).
         """
         if not self.placement.rebind.enabled:
+            return None
+        # Rebind moves a thread from one node to another. With a single enabled
+        # node there is no destination, so an unpriced fleet is not a finding
+        # (issue #176) — a one-node install would otherwise start with a warning
+        # it cannot act on.
+        if len([h for h in self.hosts if h.enabled]) < 2:
             return None
         priced, unpriced = self.rebind_prefill_rates()
         if priced:
@@ -955,6 +1041,7 @@ def _parse_host(raw: dict[str, Any], defaults: dict[str, Any], idx: int) -> Host
         address=_address_list(rep_raw.get("address")),
         ssh_user=str(rep_raw.get("ssh_user") or ""),
         api_key=str(rep_raw.get("api_key") or ""),
+        api_key_file=str(rep_raw.get("api_key_file") or ""),
         model_roots=[str(r) for r in rep_roots],
     )
 
@@ -968,6 +1055,7 @@ def _parse_host(raw: dict[str, Any], defaults: dict[str, Any], idx: int) -> Host
         site=str(merged.get("site", "")),
         backend=backend,
         api_key=str(merged.get("api_key") or ""),
+        api_key_file=str(merged.get("api_key_file") or ""),
         max_inflight=_int(merged.get("max_inflight", 8), f"host {name}: max_inflight", minimum=1),
         max_threads=_int(merged.get("max_threads", 20), f"host {name}: max_threads", minimum=1),
         spill_threshold=_int(merged.get("spill_threshold", 3), f"host {name}: spill_threshold"),
@@ -1677,6 +1765,20 @@ def apply_policy(cfg: Config, overlay: FleetOverlay,
     return warnings
 
 
+def default_config_path() -> str:
+    """Where the configuration lives when nobody says (issue #183).
+
+    `~/.ripple/config.yaml` is what `ripple init` writes, so it is what a bare
+    `ripple` has to read — a command started in the home directory must find the
+    machine's configuration without a flag. `./config.yaml` stays the fallback
+    for a checkout that carries one by hand (and for every test that does).
+    """
+    home_cfg = Path.home() / ".ripple" / "config.yaml"
+    if home_cfg.exists():
+        return str(home_cfg)
+    return "config.yaml"
+
+
 def apply_overlay(cfg: Config, overlay: FleetOverlay) -> list[str]:
     """Merge the overlay over `cfg.hosts` and the policy — the one place the rule lives.
 
@@ -1718,6 +1820,18 @@ def apply_overlay(cfg: Config, overlay: FleetOverlay) -> list[str]:
                             f"left out of the fleet")
             continue
         host.source = "overlay"
+        # A node added at the page carries no key of its own: the page has no
+        # field for one, and the overlay is the wrong place for a credential
+        # (it is written by the API, not by `init`). It uses the fleet key, like
+        # a host that `config.yaml` declares without one — otherwise the node
+        # answers 401 the moment it is added (issue #182).
+        if not host.api_key:
+            host.api_key = cfg.fleet_api_key
+        if not host.api_key:
+            warnings.append(
+                f"fleet overlay: {name!r} has no key of its own and the config "
+                f"declares no fleet key (defaults.api_key_file) — the node will "
+                f"answer 401 until one of the two is set")
         cfg.hosts.append(host)
         # The block is this node's baseline: `hosts.nodes` is the file it lives
         # in, so a reset at the page returns to what that block says.
@@ -1913,8 +2027,10 @@ def load_config(path: str | Path) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError(f"{p}: root must be a mapping")
 
-    missing_env: list[str] = []
-    raw = _expand(raw, missing_env)
+    empty_env: list[tuple[str, str]] = []
+    raw = _expand(raw, empty_env)
+    # The same `${VAR}` twice in one field is one fact, said once (issue #153).
+    empty_env = list(dict.fromkeys(empty_env))
 
     defaults = raw.get("defaults") or {}
     if not isinstance(defaults, dict):
@@ -1941,6 +2057,7 @@ def load_config(path: str | Path) -> Config:
         enabled=bool(auth_raw.get("enabled", False)),
         keys_file=str(auth_raw.get("keys_file") or "~/.ripple/keys.yaml"),
         admin_key=str(auth_raw.get("admin_key") or ""),
+        admin_key_file=str(auth_raw.get("admin_key_file") or ""),
         allow_loopback=bool(auth_raw.get("allow_loopback", False)),
         hide_foreign_models=bool(auth_raw.get("hide_foreign_models", True)),
     )
@@ -2021,6 +2138,7 @@ def load_config(path: str | Path) -> Config:
         rsync_command=str(rep_section.get("rsync_command") or "rsync"),
         ssh_user=str(rep_section.get("ssh_user") or ""),
         admin_key=str(rep_section.get("admin_key") or ""),
+        admin_key_file=str(rep_section.get("admin_key_file") or ""),
         model_roots=[str(r) for r in rep_roots],
         free_space_factor=_num(rep_section.get("free_space_factor", 1.05),
                                "replication.free_space_factor", minimum=1.0),
@@ -2047,7 +2165,34 @@ def load_config(path: str | Path) -> Config:
         proxy=prx, auth=auth, replication=replication, stats=stats_cfg,
         update=update_cfg,
         fleet=fleet_cfg, source=p,
+        empty_env=empty_env,
     )
+    # Credentials that are a reference rather than a value (issue #179). A
+    # literal wins, so an older file loads exactly as before.
+    for host in cfg.hosts:
+        if not host.api_key and host.api_key_file:
+            host.api_key = _secret_from(host.api_key_file,
+                                        f"host {host.name}: api_key_file",
+                                        cfg.warnings)
+        if not host.replication.api_key and host.replication.api_key_file:
+            host.replication.api_key = _secret_from(
+                host.replication.api_key_file,
+                f"host {host.name}: replication.api_key_file", cfg.warnings)
+    if not cfg.auth.admin_key and cfg.auth.admin_key_file:
+        cfg.auth.admin_key = _secret_from(cfg.auth.admin_key_file,
+                                          "auth.admin_key_file", cfg.warnings)
+    if not cfg.replication.admin_key and cfg.replication.admin_key_file:
+        cfg.replication.admin_key = _secret_from(
+            cfg.replication.admin_key_file, "replication.admin_key_file",
+            cfg.warnings)
+    # The fleet key, for a node the operator adds at the page (issue #182). The
+    # hosts above already resolved the same file — the warnings for a file that
+    # cannot be read were written there, so this read keeps quiet.
+    cfg.fleet_api_key = str(defaults.get("api_key") or "")
+    if not cfg.fleet_api_key and defaults.get("api_key_file"):
+        cfg.fleet_api_key = _secret_from(str(defaults["api_key_file"]),
+                                         "defaults.api_key_file", [])
+
     if cfg.listen_port > 65535:
         raise ConfigError("listen_port must be <= 65535")
     if dis.unhealthy_after != 3:
@@ -2060,9 +2205,12 @@ def load_config(path: str | Path) -> Config:
             f"{plc.flap_guard_failures} decides when a host leaves the pool")
 
     # Visible warnings instead of silent degradation (FA-23, RB-9)
-    if missing_env:
-        cfg.warnings.append(
-            "unset environment variables: " + ", ".join(sorted(set(missing_env))))
+    # Issue #153: one line per field, naming the variable and the field — an
+    # empty `${OMLX_API_KEY}` used to surface only as `401 Unauthorized` from
+    # every node, which reads as "RIPPLE lost my key". Still a warning: a
+    # read-limited node is a documented state, so the proxy starts.
+    for where, name in empty_env:
+        cfg.warnings.append(empty_env_warning(where, name))
     # Replication roots are paths on two different machines (issue #20): `~` is
     # expanded as *this* home, which is right for a source on this machine and
     # wrong for a target. Say what will happen at start, not at the first plan.

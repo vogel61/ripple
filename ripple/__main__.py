@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, default_config_path, load_config
 
 #: `ripple <word>` — the first-run commands. Each module owns its own flags and
 #: returns an exit code; `main()` only decides which one runs.
@@ -177,7 +177,7 @@ def run_foreground(cfg: Config) -> int:
 
 
 _HELP_EPILOG = """\
-service commands (issue #121) — every one of them reads RIPPLE_LABEL (default
+service commands — every one of them reads RIPPLE_LABEL (default
 ai.ripple) and RIPPLE_PORT (default: listen_port from the config):
   ripple              start here, or report that it already runs (exit 0)
   ripple status       running/stopped, pid, port, version, uptime, log path
@@ -186,7 +186,7 @@ ai.ripple) and RIPPLE_PORT (default: listen_port from the config):
   ripple restart      stop, start, wait until the dashboard answers, report seconds
   ripple update       fetch, run the suite, restart — only if the suite is green
 
-autostart (issue #122) — the switch for "runs by itself after a login":
+autostart — the switch for "runs by itself after a login":
   ripple -perm        autostart ON: render the launchd job from THIS checkout,
                       install it and start it. It starts at login and is kept
                       running. A manual instance on the port keeps running;
@@ -200,6 +200,9 @@ autostart (issue #122) — the switch for "runs by itself after a login":
   update it is refused, because none of them changes autostart.
 
 first-run commands: ripple init, ripple discover, ripple doctor
+  `ripple init` refuses while a config.yaml exists; `ripple init --force`
+  replaces it, and copies the previous configuration and key store aside first
+  (config.yaml.bak-<YYYYmmdd-HHMMSS>, keys.yaml.bak-<YYYYmmdd-HHMMSS>).
 
 The flags above belong to the foreground run (`ripple` alone, and exactly what
 the launchd job calls). `ripple update` runs the suite named by
@@ -239,8 +242,9 @@ def main(argv: list[str] | None = None) -> int:
                                 "placement proxy in front of several oMLX instances",
                                 epilog=_HELP_EPILOG,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("-c", "--config", default="config.yaml",
-                   help="path to the YAML configuration (default: config.yaml)")
+    p.add_argument("-c", "--config", default=default_config_path(),
+                   help="path to the YAML configuration (default: "
+                        "~/.ripple/config.yaml, else ./config.yaml)")
     p.add_argument("--check", action="store_true",
                    help="validate configuration and upstreams, then exit")
     p.add_argument("--reinit", action="store_true",

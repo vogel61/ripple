@@ -883,10 +883,31 @@ const LEGEND = ['healthy', 'loading', 'degraded', 'maintenance',
                 /* The two operator states of issue #70: a node that is leaving
                    (draining) and one that is out for good (disabled). */
                 'draining', 'down', 'disabled'];
+/* Seit #181 ist die Legende zugeklappt, wenn sie niemand geöffnet hat: der
+   Operator soll beim Öffnen des Tabs den Zustand sehen, nicht die Erklärung
+   des Zustands. Die Wahl bleibt in `localStorage` — sonst stünde der Overhead
+   bei jedem Reload wieder da, und der Knopf wäre eine Sisyphusarbeit. */
+const LEGEND_OPEN_KEY = 'ripple_legend_open';
+function legendOpen() {
+  try { return localStorage.getItem(LEGEND_OPEN_KEY) === '1'; } catch (e) {
+    return false;                       /* privater Modus: zugeklappt, ohne Gedächtnis */
+  }
+}
+function legendToggle() {
+  const open = !legendOpen();
+  try { localStorage.setItem(LEGEND_OPEN_KEY, open ? '1' : '0'); } catch (e) { /* s. o. */ }
+  apply('legend', renderLegend());
+}
 function renderLegend() {
-  return LEGEND.map(s => '<div class="legend-item">' + chip(s) +
+  const open = legendOpen();
+  return '<button class="legend-toggle" type="button" aria-expanded="' +
+      (open ? 'true' : 'false') + '" aria-controls="legendBody" ' +
+      'onclick="legendToggle()">' + esc(t(open ? 'legend.hide' : 'legend.show')) +
+      '</button><div class="legend-body" id="legendBody"' +
+      (open ? '' : ' hidden') + '>' +
+    LEGEND.map(s => '<div class="legend-item">' + chip(s) +
       '<div class="legend-def">' + esc(t('state.' + s)) + '</div></div>').join('') +
-    '<div class="legend-note">' + esc(t('legend.note')) + '</div>';
+    '<div class="legend-note">' + esc(t('legend.note')) + '</div></div>';
 }
 
 /* ── Banner: was die Seite erklärt, bevor man sie liest ───────────────────── */
@@ -1667,13 +1688,18 @@ function renderFleet(h) {
         : t('fleet.series_total') + ' ÷ ' + t('fleet.inflight');
       const tip = lbl + ' = ' + formula + '  ' +
         t('common.source') + ': /healthz → hosts[].series[].' + which;
+      /* #150: hier stand `windowLabel(entry.window_s)` — „15 min" unter einem
+         Wert, der der **letzte** Bucket ist (`liveRates` nimmt den letzten
+         nicht-leeren Punkt). Das las sich als Viertelstundenmittel, das
+         nirgends gerechnet wird. Das Fenster gehört an die Linie, wo es steht
+         (`spark-win`); die Zelle sagt jetzt, was der Wert ist: der aktuelle. */
       return '<div class="metric tip cell flip rate rate-' + (which === 'total' ? 't' : 'p') +
         '" data-tip="' + esc(tip) + '">' +
         '<div class="metric-lbl">' + esc(lbl) + '</div>' +
         '<div class="metric-val num">' +
           (isNum(v) ? nf(v, 1) + '<span class="den"> tok/s</span>' : '—') + '</div>' +
         '<div class="metric-sub">' +
-          esc(live ? windowLabel(live.window) : t('fleet.series_empty')) + '</div>' +
+          esc(live ? t('fleet.rate_now') : t('fleet.series_empty')) + '</div>' +
         '</div>';
     };
     const metric = (keys, label, value, sub, flip, more, cls) =>
@@ -1865,7 +1891,8 @@ function modelRows(m, order, keyed) {
              '<span class="model-line"><span class="model-name">' + esc(m.id) + '</span>' +
              '</span></td>';
     }
-    out += '<td class="node-cell"><span class="node-name">' + esc(x.host) + '</span>' +
+    out += '<td class="node-cell" data-label="' + esc(t('models.th_node')) + '">' +
+           '<span class="node-name">' + esc(x.host) + '</span>' +
            /* Ein Modell, das ein Preload verdrängt hat (issue #119), bleibt im
               Modell sichtbar: `evicted_by` nennt den Vorgang, der es gekostet
               hat. Der Lock gewinnt die Eviction — verschwinden darf sie nicht. */
@@ -1880,12 +1907,21 @@ function modelRows(m, order, keyed) {
        beiden Punkten, auch am leeren: ein Modell, das gerade kalt geladen wird,
        ist noch nicht `loaded`, wartet aber schon auf seinen ersten Token — genau
        der Fall, für den die Seite da ist. Der `title` nennt Phase und Quelle,
-       damit die Farbe nie der einzige Träger ist. */
-    const ph = x.phase || null;
+       damit die Farbe nie der einzige Träger ist.
+
+       Seit #149 hat das Laden Vorrang vor dem Prefill: solange der Knoten
+       *dieses* Modell lädt, blinkt der Punkt blau (`load`). `pp` wäre dort nur
+       ein Symptom — die Anfrage wartet, weil die Gewichte noch nicht da sind,
+       und ein 453-GB-Laden dauert Minuten, in denen der Punkt sonst wie ein
+       gewöhnlicher Prefill aussähe. Beide Fakten kommen aus `/healthz`, keiner
+       wird hier hergeleitet. */
+    const ph = x.loading ? 'load' : (x.phase || null);
     const phaseAttr = ph ? ' data-phase="' + esc(ph) + '"' : '';
-    out += '<td class="num"><span class="dot ' + (x.loaded ? 'on' : 'off') + '"' + phaseAttr +
+    const where = x.loading ? 'models[].hosts[].loading' : 'models[].hosts[].phase';
+    out += '<td class="num" data-label="' + esc(t('models.th_loaded')) + '">' +
+           '<span class="dot ' + (x.loaded ? 'on' : 'off') + '"' + phaseAttr +
            ' title="' + esc((x.loaded ? t('models.dot_loaded') : t('models.dot_available')) +
-                            (ph ? ' · ' + phaseTip(ph, 'models[].hosts[].phase') : '')) +
+                            (ph ? ' · ' + phaseTip(ph, where) : '')) +
            '"></span></td>';
     /* tok/s steht seit dem 21.11.2026 direkt hinter LOADED und in Fettdruck:
        es ist die einzige Zahl der Zeile, die sich im Sekundentakt ändert, und
@@ -1916,18 +1952,27 @@ function modelRows(m, order, keyed) {
                    ': ' + SRC.tps_cap
                  : t('models.tps_cap_none') + '  ' + t('common.source') + ': ' + SRC.tps_cap,
     ].join('\n');
-    out += '<td class="num dtps"><span class="tip" data-tip="' + esc(tip) + '">' +
+    /* `data-label` an jeder Wertzeile (#135): unter 700 px steht die Zeile als
+       Block, die Kopfzeile fällt weg — jeder Wert nennt sich dann selbst. Die
+       Wörter sind die der Kopfzeile (dieselben Katalog-Ids, kein neues Wort);
+       „tok/s" steht dort als Literal, weil es in keiner Sprache übersetzt wird.
+       Die Modellzelle trägt keinen Bezeichner: sie **ist** der Blockkopf. */
+    out += '<td class="num dtps" data-label="tok/s"><span class="tip" data-tip="' + esc(tip) + '">' +
            (measured ? nf(x.tg_tps, 1) : '—') + '</span></td>';
-    out += '<td class="num">' + T('running', nf(x.inflight)) + '</td>';
-    out += '<td class="num">' + T('threads_m', nf(x.threads)) + '</td>';
+    out += '<td class="num" data-label="' + esc(t('models.th_req')) + '">' +
+           T('running', nf(x.inflight)) + '</td>';
+    out += '<td class="num" data-label="' + esc(t('models.th_threads')) + '">' +
+           T('threads_m', nf(x.threads)) + '</td>';
     /* Der Trenner zwischen geschätzter und gemessener Größe stand im dunkelsten
        Linienton und war auf dem Körper kaum zu sehen; er trägt jetzt die Farbe
        der Zahlen neben sich (#19). Nur im Körper — die Kopfzeile schreibt ihn
        als Text. */
-    out += '<td class="num">' + T('size_est', gb(x.estimated_size)) +
+    out += '<td class="num" data-label="' + esc(t('models.th_size')) + '">' +
+           T('size_est', gb(x.estimated_size)) +
            '<span style="color:var(--fg)"> / </span>' +
            (x.actual_size === null || x.actual_size === undefined ? '—' : T('size_act', gb(x.actual_size))) + '</td>';
-    out += '<td class="num">' + (x.context_len === null || x.context_len === undefined ? '—' : T('ctx', nf(x.context_len))) + '</td>';
+    out += '<td class="num" data-label="' + esc(t('models.th_ctx')) + '">' +
+           (x.context_len === null || x.context_len === undefined ? '—' : T('ctx', nf(x.context_len))) + '</td>';
     return out + '</tr>';
   }).join('');
 }
@@ -4385,8 +4430,13 @@ async function restartNow() {
    zurück, solange der Fokus in einem Eingabefeld dieses Kastens steht — ein
    ersetztes Feld verliert Text und Cursor, und beides ist teurer als ein Tick
    Verzögerung. */
+/* `admin` ist der abgewiesene Admin-Schlüssel (#156): der Server schickt ihn mit
+   `step: "admin"` statt einer blossen 401, und der Satz nennt dann die Ursache —
+   der Tab hält den vorherigen Schlüssel, der aktuelle steht in `config.yaml`.
+   Ohne diesen Eintrag läse sich eine rotierte Kennung wie ein kaputter Knoten. */
 const NODE_STEPS = {resolve: 'nodes.err.resolve', node_id: 'nodes.err.node_id',
-                    models: 'nodes.err.models', cidr: 'nodes.err.cidr'};
+                    models: 'nodes.err.models', cidr: 'nodes.err.cidr',
+                    admin: 'nodes.err.admin'};
 const NODE_ROLES = [['worker', 'nodes.role_worker'], ['entry', 'nodes.role_entry']];
 
 const nodeState = {
@@ -4480,7 +4530,14 @@ async function nodePreview(address) {
   nodeState.msg = null;
   paintNodes();
   try {
-    const p = await adminApi('POST', '/admin/nodes?dry_run=true', {address: addr});
+    /* Der Schlüssel des Knotens selbst (#161): ein Knoten erbt nichts von
+       `defaults`, also muss die Vorschau mit demselben Schlüssel lesen, mit dem
+       der echte POST ihn später aufnimmt — sonst steht hier „0 Modelle" und
+       nach dem Hinzufügen auch. Leer heißt: nur lesend, und das wird gesagt. */
+    const body = {address: addr};
+    const key = nodeValue('nodeApiKey');
+    if (key) body.api_key = key;
+    const p = await adminApi('POST', '/admin/nodes?dry_run=true', body);
     nodeState.preview = p;
     /* Die drei Entscheidungen mit ihren gemessenen Vorgaben: gleiches Gewicht,
        der aus der Adresse abgeleitete Standort, Rolle `worker`. */
@@ -4517,18 +4574,30 @@ async function nodeAdd() {
     role: d.role || 'worker',
   };
   if (d.site) body.site = d.site;
+  /* Derselbe Schlüssel wie in der Vorschau (#161): das Feld steht im Shell-
+     Formular, nicht in der Karte, also ist der gelesene Wert der getippte. */
+  const key = nodeValue('nodeApiKey');
+  if (key) body.api_key = key;
   const ok = window.confirm(t('nodes.confirm', {
     name: body.name, address: body.address, weight: nf(body.weight, 1),
     site: body.site || '—', role: body.role,
-  }));
+  }) + (key ? '' : '\n' + t('nodes.readonly')));
   if (!ok) return;
   nodeState.busy = true;
   paintNodes();
   try {
     const res = await adminApi('POST', '/admin/nodes', body);
     nodeState.preview = null;
-    nodeNotice(t('nodes.added', {name: body.name, models: nf(res.models || 0),
-                                 rtt: nf(p.rtt_ms, 1)}), 'ok');
+    /* Null Modelle sind ein Befund, keine Eigenschaft des Knotens (#161): ohne
+       Schlüssel ist die Modellliste nicht lesbar, und das sagt die Meldung —
+       statt „0 Modelle" als hätte die Maschine nichts. */
+    if (!res.models && res.models_error) {
+      nodeNotice(t('nodes.added_readonly', {name: body.name,
+                                            detail: res.models_error}), 'warn');
+    } else {
+      nodeNotice(t('nodes.added', {name: body.name, models: nf(res.models || 0),
+                                   rtt: nf(p.rtt_ms, 1)}), 'ok');
+    }
     await tick();
   } catch (e) {
     const why = nodeError(e);
@@ -4727,6 +4796,11 @@ function renderNodePreview(c) {
     '</div>');
 
   parts.push(nodeSiteLine(p));
+  /* Ohne Schlüssel liest niemand die Modellliste (#161) — das ist ein Zustand,
+     den der Betreiber gewählt hat, und er steht als Satz da, nicht als Lücke. */
+  if (p.keyed === false && !models.length) {
+    parts.push('<div class="calib-line">' + esc(t('nodes.readonly')) + '</div>');
+  }
   if (p.models_error) {
     parts.push('<div class="calib-line warn">' + esc(t('nodes.models_unreadable')) +
       ': ' + esc(p.models_error) + '</div>');

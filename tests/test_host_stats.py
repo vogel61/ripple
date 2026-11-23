@@ -222,15 +222,22 @@ def test_the_ledger_survives_a_restart(tmp_path):
     assert second.sampled_seconds == 10.0
 
 
-def test_a_missing_or_broken_file_means_zeros_and_one_warning(tmp_path, caplog):
+def test_a_missing_or_broken_file_means_zeros_and_one_note(tmp_path, caplog):
     """A first start has no file and a half-written one must not stop the
-    service — zeros and exactly one warning, per start, not per host."""
+    service — zeros, and one note per start, not per host.
+
+    A missing ledger is the normal first start and is not a warning (issue
+    #175): a fresh install should not open with one. A broken file still is.
+    """
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger="ripple"):
+    with caplog.at_level(logging.INFO, logger="ripple"):
         missing = _ledger(tmp_path)
         missing.load()
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1, [r.getMessage() for r in warnings]
+    assert warnings == [], [r.getMessage() for r in warnings]
+    notes = [r for r in caplog.records
+             if r.levelno == logging.INFO and "starting from zero" in r.getMessage()]
+    assert len(notes) == 1, [r.getMessage() for r in caplog.records]
     assert missing.snapshot()["hosts"][0]["requests"] == 0
 
     broken = tmp_path / "broken.json"

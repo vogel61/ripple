@@ -296,6 +296,28 @@ def test_a_measurement_age_has_one_id_per_unit():
             assert "{v}" in cat[i], (path.name, i)
 
 
+def test_a_refused_admin_key_has_its_own_sentence_in_every_catalog():
+    """#156: a rotated admin key must not read as the generic failure.
+
+    The server marks the refusal with `step: "admin"`; the page maps that step to
+    `nodes.err.admin`. The id has to exist in all 16 catalogs (the equal-key-set
+    test would fail anyway) and it has to say *where* the current key is: a
+    sentence that only repeats "refused" would leave the operator where the
+    generic one did. The backticked name is the contract — `auth.admin_key` is
+    the field, and every language carries it unchanged.
+    """
+    paths = sorted(I18N.glob("*.json"))
+    assert len(paths) == 16, [p.name for p in paths]
+    for path in paths:
+        cat = json.loads(path.read_text(encoding="utf-8"))
+        assert "nodes.err.admin" in cat, path.name
+        text = cat["nodes.err.admin"]
+        assert "`auth.admin_key`" in text, (path.name, text)
+        assert "`config.yaml`" in text, (path.name, text)
+        # not the generic sentence wearing a new id
+        assert text != cat["nodes.err.other"], path.name
+
+
 def test_no_catalog_entry_is_dead_weight(js, page, en):
     """Every id is reachable: a literal in the script, an attribute in the
     shell, or one of the four families the script builds at runtime."""
