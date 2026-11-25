@@ -90,9 +90,16 @@ async def test_a_spoofed_header_is_ignored_over_a_real_socket(stub_factory,
     with 401. The peer is therefore read with `proxy_headers=False`, and this
     test goes over a real socket rather than ASGITransport, which has no
     middleware at all.
+
+    The route needs a probed host, so the fixture waits for one. The request
+    raced the first probe once in a full-suite run and answered 503 there; in
+    isolation the window is zero (40 out of 40 immediate requests were 200), so
+    this was never reproducible on demand — the wait removes the class instead
+    of relying on the window. What this test asserts is the peer address, not
+    the start order.
     """
     caplog.set_level(logging.INFO)
-    url = live_proxy_factory(_one_host(stub_factory))
+    url = live_proxy_factory(_one_host(stub_factory), wait_healthy=True)
 
     async with httpx.AsyncClient(base_url=url, timeout=30.0) as client:
         resp = await client.post("/v1/chat/completions",
@@ -100,7 +107,9 @@ async def test_a_spoofed_header_is_ignored_over_a_real_socket(stub_factory,
                                  headers={"X-Forwarded-For": "1.2.3.4"})
     assert resp.status_code == 200, resp.text
 
-    assert "client=127.0.0.1" in request_lines(caplog)[-1]
+    lines = request_lines(caplog)
+    assert lines, "the request was served but nothing reached ripple.request"
+    assert "client=127.0.0.1" in lines[-1]
     assert "1.2.3.4" not in caplog.text
 
 

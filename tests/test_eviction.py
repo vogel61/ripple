@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import time
 
+from ripple.placement import (TIER_CONFLICT, TIER_EVICT_IDLE, choose,
+                              residency_tier)
+
 from tests.support import (CEILING, DEEPSEEK_SIZE, QWEN_SIZE, StubModel, bearer,
                            chat_body, host_config, host_row, keyed_config,
                            make_config, prompt_for, stub_model_loaded, wait_until)
@@ -381,3 +384,68 @@ async def test_an_evict_idle_load_is_supervised_like_a_cold_one(stub_factory,
     stats = await harness.stats()
     assert stats["loads_supervised"] == 1
     assert host.loading is None         # the request returning ended it
+
+
+# ---------------------------------------------------------------------------
+# Busy without a slot (issue #193, step 5)
+# ---------------------------------------------------------------------------
+async def test_a_model_serving_a_slotless_request_is_not_evictable(
+        stub_factory, ripple_factory):
+    """A model answering a request that holds no slot is still busy.
+
+    The forecast used to read `registry.slots()` alone, so a one-shot request
+    (`holds_slot=False`) was invisible: DeepSeek was `evict_idle` while its
+    stream ran, and the next request for Qwen would have unloaded it
+    mid-answer. The phase bookkeeping counts the request per (host, model) —
+    the same number `/healthz` shows — and that is what the guard must see.
+    """
+    a = stub_factory(models=[_deepseek(loaded=True, last_access=1.0), _qwen()])
+    harness = await ripple_factory(make_config([
+        host_config("A", a.url, node_id=a.state.node_id)]))
+    host = harness.host("A")
+    registry = harness.ripple.registry
+
+    # What a one-shot request leaves behind: the proxy acquired the node and
+    # marked the phase, and the registry never saw a slot for it.
+    assert host.acquire() is True
+    host.begin_phase(DEEPSEEK)
+    try:
+        assert registry.slots("A", DEEPSEEK) == 0
+        assert host.model_inflight(DEEPSEEK) == 1
+
+        cand = residency_tier(host, QWEN, harness.ripple.cfg, registry)
+        assert cand.tier == TIER_CONFLICT
+        assert cand.note == f"would evict active {DEEPSEEK}"
+
+        # And the acceptance the tier exists for: with no other host offering
+        # Qwen, the request is refused instead of displacing the stream.
+        decision = choose(harness.ripple.fleet, harness.ripple.cfg, registry, QWEN)
+        assert decision.host is None
+        assert decision.reason == "conflict"
+        assert f"would evict active {DEEPSEEK}" in (decision.error_message or "")
+    finally:
+        host.end_phase(DEEPSEEK, "pp")
+        host.release()
+
+
+async def test_a_model_with_no_request_and_no_slot_is_still_evictable(
+        stub_factory, ripple_factory):
+    """The other half of the fix: an idle model must stay evictable.
+
+    A guard that made every slotless model un-evictable would be the worse bug
+    — DeepSeek would keep its 422.5 GB forever and Qwen could never load. No
+    slot and no in-flight request is exactly `evict_idle`, and it still says so.
+    """
+    a = stub_factory(models=[_deepseek(loaded=True, last_access=1.0), _qwen()])
+    harness = await ripple_factory(make_config([
+        host_config("A", a.url, node_id=a.state.node_id)]))
+    host = harness.host("A")
+    registry = harness.ripple.registry
+
+    assert registry.slots("A", DEEPSEEK) == 0
+    assert host.model_inflight(DEEPSEEK) == 0
+
+    cand = residency_tier(host, QWEN, harness.ripple.cfg, registry)
+    assert cand.tier == TIER_EVICT_IDLE
+    assert cand.evicts == [DEEPSEEK]
+    assert cand.note is None

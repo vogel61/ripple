@@ -2557,6 +2557,108 @@ def test_the_requests_column_counts_per_node_inside_the_window(rendered):
     assert "/healthz → hosts[].requests_by_model" in m5
 
 
+# -- a model that never holds a slot (issue #193) ---------------------------
+# `BGE-M3` is an embedding model: oMLX reports `type: embedding`, RIPPLE never
+# gives it a thread, and both nodes served it in the window. The Threads column
+# and the distribution block have to say that instead of printing a 0 that can
+# never change.
+EMBED = "BGE-M3-embedding"
+
+
+def _utility_host(host: str, **over) -> dict:
+    """One (embedding model, node) row: resident, dispatchable, slotless."""
+    row = {"host": host, "available": True, "loaded": True,
+           "estimated_size": 2_200_000_000, "actual_size": 2_100_000_000,
+           "context_len": 8192, "vision": False, "threads": 0, "inflight": 0,
+           "tg_tps": None, "allowed": True, "policy": None, "dispatch": True,
+           "phase": None, "lock": False, "loading": False, "type": "embedding"}
+    row.update(over)
+    return row
+
+
+def _healthz_utility() -> dict:
+    """The delivered fleet plus one embedding model on both nodes.
+
+    30 and 10 requests in the window, no slot anywhere. The 3:1 weights make
+    the target 75/25, so a request-based actual share of 75/25 has a delta of
+    exactly 0 — the block's whole point: the weights say 3:1, the traffic runs
+    3:1, and the slot column could never show it.
+    """
+    h = json.loads(json.dumps(_healthz()))
+    h["hosts"][0]["weight"] = 3.0
+    h["hosts"][1]["weight"] = 1.0
+    h["hosts"][0]["requests_by_model"][EMBED] = 30
+    h["hosts"][1]["requests_by_model"][EMBED] = 10
+    h["threads"]["target"] = {"alpha": 0.75, "beta": 0.25}
+    h["threads"]["target_share"] = {"alpha": 0.75, "beta": 0.25}
+    h["threads"]["actual_share"] = {"alpha": 0.0, "beta": 0.0}
+    h["models"].append({
+        "id": EMBED, "type": "embedding", "lock": False, "lock_reason": None,
+        "hosts": [_utility_host("beta"), _utility_host("alpha")],
+    })
+    return h
+
+
+@pytest.fixture(scope="module")
+def utility_model(tmp_path_factory) -> dict:
+    """The page rendered with a chat model and a slotless embedding model."""
+    return _run_stub(tmp_path_factory.mktemp("dashboard-utility"),
+                     _stub_fixture(healthz=_healthz_utility()))
+
+
+def test_a_utility_model_shows_no_thread_count(utility_model):
+    """The chip names the type; the Threads cell says `—`, not `0`.
+
+    A chat model keeps its `0` where it has none: the zero is a measurement
+    there, and only a model that can never hold a slot gets the dash.
+    """
+    models = utility_model["parts"]["models"]
+    assert '<span class="chip model-type">embedding</span>' in models
+    table = _table(models)
+    row = next(r for r in table.body
+               if len(r) == 8 and EMBED in r[0]["text"])
+    assert row[5]["text"].strip() == "—"
+    chat = next(r for r in table.body
+                if len(r) == 8 and DEEPSEEK in r[0]["text"]
+                and "alpha" in r[1]["text"])
+    assert chat[5]["text"].strip() == "1"
+
+
+def test_a_utility_model_distributes_requests_not_slots(utility_model):
+    """30 and 10 requests, no slot: actual 75.0 % / 25.0 %, delta 0.0.
+
+    The bar is the request share, the actual column is the request share, and
+    the delta compares it with the weight's quotient (75/25) — the target
+    column stays the weight, which is what gives the delta its meaning.
+    """
+    dist = utility_model["parts"]["dist"]
+    block = _dist_blocks(dist)[EMBED]
+    assert "<b>Request share</b>" in block
+    assert _en()["dist.no_warm_thread"] not in block
+    assert "no actual share" not in block
+    rows = re.findall(r'<div class="dist-row">(.*?)</div>', block, re.S)
+    assert [_row_host(r) for r in rows] == ["alpha", "beta"]
+    m5, m3 = rows
+    assert "width:75.0%" in m5 and "width:25.0%" in m3
+    for row, share in ((m5, "75.0"), (m3, "25.0")):
+        # target and actual both carry the share (the `%` is the column's
+        # subtitle); the delta against the 3:1 weight target is 0.0
+        assert row.count(">" + share + "</span>") == 2, row
+        assert 'class="delta on"' in row
+        assert ">0.0</span>" in row
+
+
+def test_the_share_header_names_the_key(utility_model):
+    """One payload, two currencies: `Thread share` for the chat model,
+    `Request share` for the embedding model — each block names its own key."""
+    blocks = _dist_blocks(utility_model["parts"]["dist"])
+    assert _en()["dist.th_share"] == "Thread share"
+    assert _en()["dist.th_share_requests"] == "Request share"
+    assert "<b>Thread share</b>" in blocks[DEEPSEEK]
+    assert "<b>Request share</b>" in blocks[EMBED]
+    assert "<b>Thread share</b>" not in blocks[EMBED]
+
+
 # -- no full reload ---------------------------------------------------------
 def test_a_tick_with_unchanged_data_touches_nothing(rendered):
     """The 2 s poll patches; it does not rebuild. Nothing changed → no DOM work."""

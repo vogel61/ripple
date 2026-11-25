@@ -44,6 +44,9 @@ REASON_TOKENS = (
     "thread", "new_thread", "ephemeral", "one_shot", "rebind", "fallback",
     "slot_evict", "model_pinned", "degraded_host", "conflict", "no_healthy_host",
     "unknown_model", "model_list_unavailable", "no_candidate",
+    # A request that is not a conversation (issue #193): it reserved nothing, so
+    # how the node was picked says less than what the request is.
+    "utility",
 )
 
 # German words that must not appear in the code. Not a heuristic over every
@@ -168,7 +171,7 @@ def test_every_catalog_on_disk_is_wired_complete_and_not_a_copy(en, js, page):
 
 
 def test_the_english_parameter_help_is_the_schema_text_word_for_word(en):
-    """#144: `en.json` and `FIELD_HELP` are two copies of the same 29 sentences.
+    """#144: `en.json` and `FIELD_HELP` are two copies of the same 30 sentences.
 
     The page asks the catalog first and the text from `/config` second, so the two
     copies must not drift: an English edit that lands in only one of them would
@@ -179,7 +182,7 @@ def test_the_english_parameter_help_is_the_schema_text_word_for_word(en):
 
     ids = {k[len("params.help."):]: v for k, v in en.items() if k.startswith("params.help.")}
     assert ids == FIELD_HELP
-    assert len(FIELD_HELP) == 29
+    assert len(FIELD_HELP) == 30
 
 
 def test_every_catalog_names_all_seven_shapes_in_the_legend_note():
@@ -274,6 +277,43 @@ def test_every_reason_token_has_a_sentence(en, de):
     for token in REASON_TOKENS:
         assert "reason." + token in en, token
         assert "reason." + token in de, token
+
+
+# The ids step 8 of the utility-models plan names (#193). `reason.utility`
+# predates the step — it landed with the reason tuple — but it belongs to the
+# same contract, so the directory walk covers it too.
+UTILITY_IDS = ("models.type_embedding", "models.type_reranker",
+               "dist.th_share_requests", "dist.note_requests_key",
+               "reason.utility")
+
+
+def test_every_catalog_has_the_utility_ids():
+    """The four new ids of #193, plus the reason token that was already there.
+
+    Walked over the directory, not over a list: the next catalog that lands
+    without the type chip or the request-keyed header fails here instead of
+    rendering an id. Sixteen files is the contract (`test_a_measurement_age…`
+    asserts the same number for its own ids).
+    """
+    paths = sorted(I18N.glob("*.json"))
+    assert len(paths) == 16, [p.name for p in paths]
+    for path in paths:
+        cat = json.loads(path.read_text(encoding="utf-8"))
+        for key in UTILITY_IDS:
+            assert key in cat, (path.name, key)
+            assert cat[key].strip(), (path.name, key)
+
+
+def test_the_utility_type_words_are_translated(en, de):
+    """A chip that says `embedding` in German is not a translation.
+
+    The same rule as the rest of the catalogs (#17): the German word has to
+    differ from the English one. `Einbettung`/`Rerank` are the words the reason
+    sentence already uses, so the page speaks one language about the class.
+    """
+    for key in ("models.type_embedding", "models.type_reranker"):
+        assert de[key] != en[key], key
+        assert de[key].strip() and en[key].strip(), key
 
 
 def test_a_measurement_age_has_one_id_per_unit():
@@ -775,3 +815,28 @@ def test_the_page_fetches_nothing_but_its_own_static_files(js, css):
     assert "fetch('/static/i18n/' + l.code + '.json')" in js
     assert "http://" not in js and "https://" not in js
     assert "http://" not in css and "https://" not in css
+
+
+def test_every_catalog_has_the_utility_budget_help():
+    """Issue #193: the second admission cap needs its label and its sentence.
+
+    The id is the contract, not the wording: `params.help.hosts.*.max_inflight_utility`
+    is what `helpOf()` asks for, and the backticked `max_inflight` is the field
+    the sentence compares itself to in every language. German must actually say
+    it in German — a copied English sentence would pass every parity test.
+    """
+    paths = sorted(I18N.glob("*.json"))
+    assert len(paths) == 16, [p.name for p in paths]
+    for path in paths:
+        cat = json.loads(path.read_text(encoding="utf-8"))
+        assert "params.max_utility" in cat, path.name
+        assert "params.help.hosts.*.max_inflight_utility" in cat, path.name
+        text = cat["params.help.hosts.*.max_inflight_utility"]
+        assert "`max_inflight`" in text, (path.name, text)
+        assert text.endswith(".") or text.endswith("。"), (path.name, text)
+
+    en = json.loads((I18N / "en.json").read_text(encoding="utf-8"))
+    de = json.loads((I18N / "de.json").read_text(encoding="utf-8"))
+    assert de["params.help.hosts.*.max_inflight_utility"] != \
+        en["params.help.hosts.*.max_inflight_utility"]
+    assert de["params.max_utility"] != en["params.max_utility"]

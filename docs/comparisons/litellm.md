@@ -78,7 +78,7 @@ the request path.
 2. **Router** — `litellm.Router(model_list=[...], routing_strategy=...)`. Owns deployment selection,
    retries, fallbacks, cooldowns, pre-call checks.
 3. **Proxy** — a FastAPI/uvicorn app exposing `/v1/chat/completions`, `/v1/responses`,
-   `/v1/embeddings`, `/v1/messages`, `/v1/models`, `/health`, `/key/*`, `/model/*`, `/config/update`,
+   `/v1/embeddings`, `/v1/rerank`, `/v1/messages`, `/v1/models`, `/health`, `/key/*`, `/model/*`, `/config/update`,
    plus pass-through relay routes (`/vllm`, `/azure`, `/azure_ai`, `/nvidia_nim`) and a dashboard.
 
 **Request path** (composed from the pages cited in §3–§6): client → auth (master key or virtual key,
@@ -477,11 +477,16 @@ thing:
 | Residency preference (prefer the loaded model) | — | No backend-state introspection at all (§5.2) |
 | Eviction guard: 503 naming model/node/blocking model | — | No equivalent; the failure is invisible (HTTP 200 from the backend) |
 | Slot counting per model | `max_parallel_requests` per deployment (per worker process) | Per deployment, not per model |
+| Rerank (`POST /v1/rerank`, Cohere/Jina body: `query`, `documents`, `top_n`, `return_documents`) | Served: `/v1/rerank`, plus a `/rerank` alias for Cohere clients | **None — parity, not an advantage.** Both accept the same body and return the provider's `results`; LiteLLM's extra alias is convenience, not a routing capability |
 | Node identity via expected `/api/cluster/node_id` | `api_base` + `model_info.id` | URL is the identity; DHCP reuse unaddressed |
 | Streaming pass-through, no own timeout, retry only before first byte | Streaming supported; `timeout: 30` in the docs' own example; retries/fallbacks can move mid-thread | Different contract; a 60–70 s cold load needs explicit timeout surgery |
 | Health via cheap probe | Health = a real completion request, 16 tokens | Would itself trigger cold loads and possible evictions |
 | Key pass-through, no auth gateway | Virtual keys by default; master key | Deliberate philosophical difference — RIPPLE's non-goal is LiteLLM's core feature |
 | `X-Ripple-Host` / `X-Ripple-Reason` per response | `x-litellm-model-id` (+ `x-litellm-overhead-duration-ms`) | Which deployment, not why, and no eviction reasoning to report |
+
+Rerank is the one row where this comparison used to be silent rather than
+unfavourable: RIPPLE did not route `/v1/rerank` at all, so the gap was ours.
+Serving it closes that gap; it does not open an advantage.
 
 **What LiteLLM would genuinely contribute**, if the two were combined rather than compared:
 

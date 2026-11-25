@@ -223,6 +223,11 @@ class HostConfig:
     #: files keep working — `ripple doctor` says when one still does.
     api_key_file: str = ""
     max_inflight: int = 8         # hard upper bound (FA-5)
+    #: The same bound for utility traffic — embeddings and reranks (issue #193).
+    #: Its own budget, because a bulk ingest runs for hours and would otherwise
+    #: hold every slot a conversation needs. `None` follows `max_inflight`, so
+    #: an existing file keeps behaving exactly as it did.
+    max_inflight_utility: int | None = None
     max_threads: int = 20         # thread slots (FA-19)
     spill_threshold: int = 3      # considered full from here on (FA-5)
     hard_threshold: float = 0.95  # admission target for FA-18
@@ -245,6 +250,19 @@ class HostConfig:
     def model_allowed(self, model: str) -> bool:
         """An empty allow-list means: everything the host offers."""
         return not self.models or model in self.models
+
+    @property
+    def utility_budget(self) -> int:
+        """The cap utility traffic is admitted against, never `None`.
+
+        The field is optional so that an existing config follows `max_inflight`;
+        every reader — admission, the new-thread gate, `/config`, the page —
+        wants the number in effect, not the declaration, so the fallback lives
+        here once instead of at each call site.
+        """
+        if self.max_inflight_utility is None:
+            return self.max_inflight
+        return self.max_inflight_utility
 
 
 @dataclass
@@ -745,6 +763,11 @@ FIELD_HELP: dict[str, str] = {
     "hosts.*.max_inflight": "The hard cap on concurrent requests this host may "
                             "carry; at the cap it takes nothing more and the "
                             "request spills to another node or waits.",
+    "hosts.*.max_inflight_utility": "The hard cap for utility traffic alone "
+                                    "(embeddings, reranks), so a bulk ingest "
+                                    "cannot hold the slots a conversation needs; "
+                                    "empty follows `max_inflight`, and a value "
+                                    "above it is refused.",
     "hosts.*.spill_threshold": "From this many running requests the host counts as "
                                "full for new threads, even while it still has free "
                                "slots; it must not exceed `max_inflight`.",
@@ -816,6 +839,18 @@ class Config:
         return sum(h.weight for h in self.hosts if h.enabled) or 1.0
 
     def target_share(self, host: HostConfig) -> float:
+        """The host's share of new threads — `0.0` for a host that is switched off.
+
+        `total_weight` counts the enabled hosts only, so the plain quotient would
+        hand a disabled host a share it can never receive: the parameter table
+        prints `weight → share`, `/healthz` carries `target_share`, and both
+        would promise threads to a machine the dispatcher skips (`placement`
+        takes candidates from `enabled` hosts only). The weight stays what it
+        is — a wish for the day the node comes back — but the share is what the
+        fleet does, and a disabled node gets nothing.
+        """
+        if not host.enabled:
+            return 0.0
         return host.weight / self.total_weight
 
     def host(self, name: str) -> HostConfig | None:
@@ -928,6 +963,9 @@ class Config:
                 "addresses": list(h.addresses),
                 "node_id": h.node_id or "not configured",
                 "max_inflight": h.max_inflight,
+                # The number in effect, never null (issue #193): `null` means
+                # "follow max_inflight", which is what the operator reads here.
+                "max_inflight_utility": h.utility_budget,
                 "max_threads": h.max_threads,
                 "spill_threshold": h.spill_threshold,
                 "hard_threshold": h.hard_threshold,
@@ -1057,6 +1095,13 @@ def _parse_host(raw: dict[str, Any], defaults: dict[str, Any], idx: int) -> Host
         api_key=str(merged.get("api_key") or ""),
         api_key_file=str(merged.get("api_key_file") or ""),
         max_inflight=_int(merged.get("max_inflight", 8), f"host {name}: max_inflight", minimum=1),
+        # Absent or null means "follow max_inflight" (issue #193). The check
+        # below is what keeps a budget from being larger than the machine's
+        # whole admission limit — the same shape as `spill_threshold`.
+        max_inflight_utility=(
+            _int(merged["max_inflight_utility"], f"host {name}: max_inflight_utility",
+                 minimum=1)
+            if merged.get("max_inflight_utility") is not None else None),
         max_threads=_int(merged.get("max_threads", 20), f"host {name}: max_threads", minimum=1),
         spill_threshold=_int(merged.get("spill_threshold", 3), f"host {name}: spill_threshold"),
         hard_threshold=_num(merged.get("hard_threshold", 0.95),
@@ -1075,6 +1120,11 @@ def _parse_host(raw: dict[str, Any], defaults: dict[str, Any], idx: int) -> Host
     if host.spill_threshold > host.max_inflight:
         raise ConfigError(f"host {name}: spill_threshold ({host.spill_threshold}) "
                           f"must not exceed max_inflight ({host.max_inflight})")
+    if (host.max_inflight_utility is not None
+            and host.max_inflight_utility > host.max_inflight):
+        raise ConfigError(
+            f"host {name}: max_inflight_utility ({host.max_inflight_utility}) "
+            f"must not exceed max_inflight ({host.max_inflight})")
     if host.hard_threshold > 1.0:
         raise ConfigError(f"host {name}: hard_threshold must be <= 1.0")
     return host
@@ -1169,6 +1219,7 @@ _HOST_STARTUP_FIELDS: dict[str, str] = {
     "api_key": "the api_key is a credential, not a routing decision",
     "backend": "the backend decides how the host is spoken to",
     "max_inflight": "max_inflight is the hard admission limit (FA-5)",
+    "max_inflight_utility": "max_inflight_utility is part of the admission contract",
     "max_threads": "max_threads is the slot account of the machine",
     "models": "models is what the machine carries",
     "warmup": "warmup is a declaration about the machine",
@@ -1576,6 +1627,9 @@ def host_block(host: HostConfig) -> dict[str, Any]:
         "site": host.site,
         "backend": host.backend,
         "max_inflight": host.max_inflight,
+        # The declaration, not the effective number: the overlay must reload
+        # into the same host, and `None` is what "follow max_inflight" means.
+        "max_inflight_utility": host.max_inflight_utility,
         "max_threads": host.max_threads,
         "spill_threshold": host.spill_threshold,
         "hard_threshold": host.hard_threshold,

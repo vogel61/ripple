@@ -14,6 +14,10 @@ The rules these tests pin, one per test:
   and in the node's model view,
 * a model that does not fit is a recorded failure with a sentence, and it is not
   retried,
+* a preload never unloads a model that is serving a request — the lock may cost
+  an idle model its residency, never a request its stream,
+* a pinned model is preloaded like a locked one, and a pin that cannot fit is
+  one recorded failure per healthy transition,
 * the gates hold: no lock, no load; a builtin is never loaded; the allow-list and
   a maintenance window both say no.
 
@@ -237,6 +241,103 @@ async def test_a_preload_displaces_a_model_and_says_which(
 
 
 # ---------------------------------------------------------------------------
+# A preload does not displace a model that is serving (issue #193, step 6)
+# ---------------------------------------------------------------------------
+async def test_a_preload_does_not_displace_a_model_that_is_serving(
+        stub_factory, ripple_factory, tmp_path, caplog):
+    """The only evictable candidate is mid-request: the preload waits its turn.
+
+    A lock may take residency from an idle model; it may not take the stream a
+    client is reading. The refusal is a recorded state like the "does not fit"
+    one — one attempt, one answer, no retry loop — and the busy model keeps its
+    place on the node.
+    """
+    a = _one(stub_factory,
+             models=[StubModel(id=DEEPSEEK, loaded=True,
+                               estimated_size=DEEPSEEK_SIZE, last_access=1.0),
+                     StubModel(id=BIG, estimated_size=BIG_SIZE)],
+             load_simulates=True)
+    harness = await ripple_factory(_cfg(
+        tmp_path, [host_config("A", a.url, node_id=a.state.node_id)], flap_guard=1))
+    host = harness.host("A")
+
+    # A request for DeepSeek is in flight: the phase bookkeeping is what the
+    # forecast reads, and it is per (host, model), so the *node* being busy is
+    # not the same fact.
+    assert host.acquire() is True
+    host.begin_phase(DEEPSEEK)
+    assert host.model_inflight(DEEPSEEK) == 1
+    assert host.model_inflight(BIG) == 0
+
+    # The operator locks a cold model that only fits if DeepSeek goes.
+    harness.ripple.policy.set_lock(BIG)
+    a.state.health_status = "unhealthy"
+    await host.refresh()
+    a.state.health_status = "healthy"
+    with caplog.at_level(logging.WARNING, logger="ripple.hosts"):
+        await host.refresh()
+        await harness.ripple.fleet.await_preloads(timeout=10)
+
+    record = host.preloads[BIG]
+    assert record["state"] == "failed"
+    assert a.state.load_calls == []                  # no load was started
+    assert a.state.model(DEEPSEEK).loaded is True    # and nothing was unloaded
+    assert host.displaced == {}
+    assert "is serving a request" in record["reason"]
+
+    refused = [r.getMessage() for r in caplog.records
+               if r.getMessage().startswith("preload_refused")]
+    assert len(refused) == 1 and DEEPSEEK in refused[0], refused
+
+    # The same failure reaches `/healthz`, which is where the page reads it.
+    row = host_row(await harness.healthz(), "A")
+    failed = next(p for p in row["preloads"] if p["model"] == BIG)
+    assert failed["state"] == "failed" and failed["reason"] == record["reason"]
+
+    host.end_phase(DEEPSEEK, "pp")
+    host.release()
+
+
+async def test_the_refusal_says_the_model_is_busy(
+        stub_factory, ripple_factory, tmp_path):
+    """The sentence names the model and the reason, in the shape the other two
+    blockers already use: `<model> is serving a request`.
+
+    The operator reads one sentence per failure and has to be able to tell the
+    three apart — locked, pinned on the node, serving a request.
+    """
+    a = _one(stub_factory,
+             models=[StubModel(id=DEEPSEEK, loaded=True,
+                               estimated_size=DEEPSEEK_SIZE, last_access=1.0),
+                     StubModel(id=BIG, estimated_size=BIG_SIZE)],
+             load_simulates=True)
+    harness = await ripple_factory(_cfg(
+        tmp_path, [host_config("A", a.url, node_id=a.state.node_id)], flap_guard=1))
+    host = harness.host("A")
+    assert host.acquire() is True
+    host.begin_phase(DEEPSEEK)
+
+    harness.ripple.policy.set_lock(BIG)
+    a.state.health_status = "unhealthy"
+    await host.refresh()
+    a.state.health_status = "healthy"
+    await host.refresh()
+    await harness.ripple.fleet.await_preloads(timeout=10)
+
+    reason = host.preloads[BIG]["reason"]
+    # One sentence, one blocker, and the blocker is named by id.
+    assert reason.count("; ") == 1, reason
+    assert reason.endswith(f"{DEEPSEEK} is serving a request"), reason
+    assert reason.startswith("does not fit: 400.0 GB needed, ")
+    # Not the node-wide counter: the busy model is DeepSeek, and that is what
+    # the sentence has to say — `host.inflight` would have refused without a
+    # request for DeepSeek ever having run.
+    assert host.inflight == 1 and host.model_inflight(DEEPSEEK) == 1
+
+    host.end_phase(DEEPSEEK, "pp")
+
+
+# ---------------------------------------------------------------------------
 # What does not fit fails loudly, once
 # ---------------------------------------------------------------------------
 async def test_a_model_that_does_not_fit_is_a_recorded_failure(
@@ -365,6 +466,94 @@ async def test_a_node_that_is_already_loading_is_left_alone(
 
     assert a.state.load_calls == []
     assert host.loading["source"] == "omlx"          # the external load, untouched
+
+
+# ---------------------------------------------------------------------------
+# A pin is a promise too (D4, decided 2026-11-24)
+# ---------------------------------------------------------------------------
+async def test_a_pinned_model_is_preloaded_like_a_locked_one(
+        stub_factory, ripple_factory, tmp_path):
+    """`pin` in oMLX means "keep it resident"; RIPPLE delivers it like a lock.
+
+    Pinned in the node's own UI and not locked in RIPPLE: before D4 the model
+    stayed cold after a restart although the operator had said it should be
+    there. The next healthy transition loads it, and the preload record is the
+    same shape a locked one produces.
+    """
+    a = _one(stub_factory, models=[StubModel(id=QWEN, estimated_size=QWEN_SIZE)],
+             load_simulates=True)
+    harness = await ripple_factory(_cfg(
+        tmp_path, [host_config("A", a.url, node_id=a.state.node_id)], flap_guard=1))
+    host = harness.host("A")
+    assert a.state.load_calls == []                  # not pinned yet, nothing to do
+    assert harness.ripple.policy.locked(QWEN) is False
+
+    # The operator pins it in oMLX — no lock in RIPPLE's policy file.
+    a.state.model(QWEN).pinned = True
+    a.state.health_status = "unhealthy"
+    await host.refresh()
+    a.state.health_status = "healthy"
+    await host.refresh()
+    await harness.ripple.fleet.await_preloads(timeout=10)
+
+    assert a.state.load_calls == [QWEN]
+    assert host.preloads[QWEN]["state"] == "loaded"
+    assert a.state.model(QWEN).loaded is True
+
+    row = host_row(await harness.healthz(), "A")
+    preload = next(p for p in row["preloads"] if p["model"] == QWEN)
+    assert preload["state"] == "loaded"
+
+
+async def test_a_pin_that_cannot_fit_is_one_recorded_failure_not_a_loop(
+        stub_factory, ripple_factory, tmp_path, caplog):
+    """A pin that does not fit is the locked failure's shape, once per transition.
+
+    Two pinned 400 GB models on one 512 GB host: the second cannot be there.
+    Recording it is the answer; retrying on every probe tick would be a load
+    attempt every interval for ever. The next healthy transition is the next
+    attempt, and that is the only one.
+    """
+    a = _one(stub_factory,
+             models=[StubModel(id=DEEPSEEK, loaded=True, pinned=True,
+                               estimated_size=DEEPSEEK_SIZE, last_access=1.0),
+                     StubModel(id=BIG, pinned=True, estimated_size=BIG_SIZE)],
+             load_simulates=True)
+    harness = await ripple_factory(_cfg(
+        tmp_path, [host_config("A", a.url, node_id=a.state.node_id)], flap_guard=1))
+    host = harness.host("A")
+
+    with caplog.at_level(logging.WARNING, logger="ripple.hosts"):
+        await harness.ripple.fleet.await_preloads(timeout=10)
+
+        record = host.preloads[BIG]
+        assert record["state"] == "failed"
+        assert f"{DEEPSEEK} is pinned on the node" in record["reason"]
+        assert a.state.load_calls == []
+
+        def refusals() -> list[str]:
+            return [r.getMessage() for r in caplog.records
+                    if r.getMessage().startswith("preload_refused")]
+
+        assert len(refusals()) == 1                  # one attempt, one answer
+
+        # A node that stays healthy owes no new pass: no retry, no loop.
+        for _ in range(3):
+            await host.refresh()
+            await harness.ripple.fleet.await_preloads(timeout=10)
+        assert len(refusals()) == 1
+        assert a.state.load_calls == []
+        assert list(host.preloads) == [BIG]          # one entry, not one per tick
+
+        # The next healthy transition is the next (and only) attempt.
+        a.state.health_status = "unhealthy"
+        await host.refresh()
+        a.state.health_status = "healthy"
+        await host.refresh()
+        await harness.ripple.fleet.await_preloads(timeout=10)
+        assert len(refusals()) == 2
+        assert host.preloads[BIG]["state"] == "failed"
+        assert a.state.load_calls == []
 
 
 # ---------------------------------------------------------------------------

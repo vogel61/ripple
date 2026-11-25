@@ -23,18 +23,25 @@ own page will show your own numbers in the same places.
 
 RIPPLE is a window in front of your oMLX nodes, not a part of them. It accepts
 OpenAI-compatible requests, decides which machine should answer each one, forwards
-it there, and shows you what happened; it issues no load or unload command, never
-patches or configures a model, and it changes nothing in the oMLX installation. It
-can still *cause* a load: a request placed on a node that does not hold the model
-makes oMLX load it, and RIPPLE supervises that load — it just never starts one
-itself. What it does own is *routing state* — which conversation lives where, which
-(node, model) pair is switched off, which machine is in maintenance — and it keeps
-that state in its own files under `~/.ripple/`, never in oMLX's settings. If RIPPLE
-is stopped, the nodes keep serving on their own ports and a client can be pointed
-straight at one of them; that is the emergency path, and it is one line of
-configuration. The reason the distinction matters is that everything you can do
-from the dashboard is reversible by definition: no click on this page can leave a
-model missing, a setting changed, or a machine in a state you cannot undo.
+it there, and shows you what happened; it never patches or configures a model, and
+it changes nothing in the oMLX installation. Most loads it only *causes*: a request
+placed on a node that does not hold the model makes oMLX load it, and RIPPLE
+supervises that load without starting it. Two loads it does start itself, both of
+them because you asked for something and both of them named on the page: a
+**calibration** (§6.3) loads the models it measures and unloads what it had to move
+out of the way, and a **locked or pinned** model is preloaded as soon as its node
+is healthy (§5.2.2) — the lock is a promise of residency, so RIPPLE pays it
+without waiting for a request, displacing an idle unlocked model if that is what
+it takes, but never a model that is serving. Nothing else asks oMLX to load or
+unload anything. What it does own is *routing state* — which
+conversation lives where, which (node, model) pair is switched off, which machine
+is in maintenance — and it keeps that state in its own files under `~/.ripple/`,
+never in oMLX's settings. If RIPPLE is stopped, the nodes keep serving on their own
+ports and a client can be pointed straight at one of them; that is the emergency
+path, and it is one line of configuration. The reason the distinction matters is
+that everything you can do from the dashboard is reversible by definition: no click
+on this page can leave a model missing, a setting changed, or a machine in a state
+you cannot undo.
 
 ## 2. Installing in five lines
 
@@ -467,18 +474,27 @@ optimizer made (§4) — and uptime.
 
 **Distribution** answers the question the weights are for: per model, one block
 with one row per node, showing the target share, the actual share, and the
-difference. The note underneath gives each node's request count and its share of
-all requests.
+difference. The actual share is measured in one of two keys, and the column
+header says which one is in force. A model that holds conversation slots is
+measured in **thread share**. A model that holds none — an embedding or a
+reranker by design, or a chat model with no bound thread in the window — is
+measured in **request share**: its requests in the same 900 s window
+(`hosts[].requests_by_model`), because 0 of 0 slots is not a measurement.
+The target share stays the weight's quotient in both cases, so the difference
+still means what it says: the weights ask for 60/40, the traffic may run 75/25.
+The note underneath gives each node's request count and its share of all
+requests.
 
 **What earns a row.** A model is listed when it holds a thread, or served a
 request in the 900 s window, or is loaded and routable on at least one node —
 `loaded && dispatch` on that node's entry. The third case is why a resident
 model keeps its block while it is idle: 0 slots, 0 requests, `—` for the actual
-share and the difference, and `no warm thread` where the bar would be. Entries
-oMLX keeps for itself (`dispatch: false`) and models that are not loaded get no
-row at all. A node row inside a block follows the same rule from the other side:
-it appears when the node would dispatch the model, or held a thread or a
-request there.
+share and the difference, and `no warm thread` where the bar would be. A
+slotless model that did serve requests keeps its block on the request key
+instead, so its bar and its difference are real numbers. Entries oMLX keeps for
+itself (`dispatch: false`) and models that are not loaded get no row at all. A
+node row inside a block follows the same rule from the other side: it appears
+when the node would dispatch the model, or held a thread or a request there.
 
 **Load per host** is the ledger: five *exclusive* states per node — idle,
 loading, prefill, mixed, decode — drawn as one bar whose width is the sampled
@@ -501,7 +517,10 @@ The card shows **two** memory sizes, and they are never mixed:
 
 - the big number — `41.9 GB of 64.0 GB`, `65.5 % used`, `22.1 GB headroom` — is
   `used_bytes_measured`: the sum of what each resident model reports as its
-  `actual_size` after loading. It is the only number that was **measured**.
+  `actual_size` after loading. A profile of a model (`X:agent`, `X:think-1m`)
+  counts once, on its source model: oMLX repeats the source's size on the
+  profile's row, so adding the row would charge one engine several times. It is
+  the only number that was **measured**.
 - the line underneath — `estimated 46.8 GB` — is `used_bytes`: oMLX's own
   estimate for the resident weights (`engine_pool.current_model_memory`). It is
   what the eviction guard, admission and placement decide on, which is why it
@@ -572,9 +591,10 @@ are reversible.
   reaches zero.
 - **`disabled`** — the node is out of the fleet until someone puts it back. It
   keeps its name, its place on the page and its slot account, but nothing is
-  dispatched to it and its models do not count towards the fleet's capacity. A
-  disabled node is not a removed node: nothing was forgotten, and
-  `POST /admin/nodes/{name}/disable` is undone by enabling it again.
+  dispatched to it, its share of new threads is `0 %` (the weight stays as the
+  wish for the day it comes back), and its models do not count towards the
+  fleet's capacity. A disabled node is not a removed node: nothing was forgotten,
+  and `POST /admin/nodes/{name}/disable` is undone by enabling it again.
 
 Neither state changes anything on the machine. A node in maintenance, a node that
 is draining and a node that is disabled all keep running their oMLX exactly as
@@ -612,12 +632,12 @@ that offers it. The columns:
 
 | Column | Meaning |
 |---|---|
-| **Model** | The model id, spanning its rows. A padlock sits above it (§5.2.1); a struck-through route (`route-off`) appears when that node cannot serve the model **right now** — hovering or tapping it names the reason: either RIPPLE would not dispatch to it at all, or the model is listed but not loaded, so the first request would pay a cold load. |
+| **Model** | The model id, spanning its rows. A padlock sits above it (§5.2.1); a struck-through route (`route-off`) appears when that node cannot serve the model **right now** — hovering or tapping it names the reason: either RIPPLE would not dispatch to it at all, or the model is listed but not loaded, so the first request would pay a cold load. A **type chip** on the model row says what the model is — `llm`, `embedding`, `reranker` — in the node's own word. There is no chip when no node labelled it; the value is `""`, not a guess at `llm`. |
 | **Node** | The node, and the model policy field (`in service` / `disabled` / `hidden`). |
 | **Loaded** | A filled dot when the model is resident on that node. It blinks orange during prefill and green while tokens stream, so you can see what a node is doing *now* without reading the log. |
 | **tok/s** | The rate oMLX reports for *this model on this node*, smoothed by RIPPLE — and a dash until the first request has measured one. The calibrated capacity from `config.yaml` is a property of the *machine*, not of the model, so it lives in the tooltip (labelled as such) and never in the cell. A falling number under parallel load is normal; "not measured yet" and "measured zero" are different facts and look different. This is the one column that changes second by second, which is why it stands right after *Loaded* and is the only column set in bold. |
 | **Req** | Requests in flight for *this model on this node*, not for the node as a whole. |
-| **Threads** | Conversation slots this model holds on this node. |
+| **Threads** | Conversation slots this model holds on this node. A utility model (`embedding` or `reranker`) holds none, so the cell is `—`, not `0`: `0` would read as "no thread right now", `—` says the model has no conversation slot by design. |
 | **Size** | `estimated / measured` in GB, per node — the same two bases as the memory bar. |
 | **Context** | The model's context window in tokens. |
 
@@ -636,6 +656,8 @@ whether RIPPLE *routes* to it there (the policy field, §6.2), whether it may be
 The table shows each of them in its own column, and none of them implies another.
 The full matrix is in `docs/model-policy.md` (*The four statements about a
 model*); the two you operate from this tab are the padlock and the policy field.
+The type chip is not a fifth statement in that list: it says what kind of work
+the model does, not what may happen to it.
 
 #### 5.2.1 The padlock
 
@@ -678,27 +700,32 @@ always is, and the write answers `409 lock_builtin`.
 
 #### 5.2.2 `locked, not resident`, and the preload
 
-A lock promises residency, so RIPPLE delivers it: a locked model is loaded as soon
-as one of its nodes becomes healthy — at start-up, when a node comes back, and at
-the end of a maintenance window — on every node whose allow-list contains it
-(`ripple/hosts.py:2039`). You will see three things while this happens:
+A lock promises residency, so RIPPLE delivers it: a locked or pinned model is
+loaded as soon as one of its nodes becomes healthy — at start-up, when a node
+comes back, and at the end of a maintenance window — on every node whose
+allow-list contains it (the preload pass in `ripple/hosts.py`). You will see
+three things while this happens:
 
 * the node card shows the ordinary loading line with `source: preload` and a
   remaining time, as for a load a request caused;
-* if the load displaces an unlocked model, the Fleet tab says `preload of …
+* if the load displaces an idle unlocked model, the Fleet tab says `preload of …
   displaced …`, and the displaced model carries `▼ evicted by the preload of …`
-  in its node cell. That eviction is intended: the lock wins;
+  in its node cell. That eviction is intended: the lock wins. A model that is
+  **serving a request** is never displaced; the preload refuses with `… is
+  serving a request` and waits for the next healthy transition;
 * if the model does not fit at all, the Fleet tab says `preload of … failed: does
-  not fit: … GB needed, … GB free; … is locked and cannot be evicted`. It is not
-  retried — the next attempt is the next time the node becomes healthy
-  (`ripple/hosts.py:2060`).
+  not fit: … GB needed, … GB free; … is locked and cannot be evicted` — or names
+  a pinned model, or one that is serving. It is not retried — the next attempt is
+  the next time the node becomes healthy.
 
 That third bullet's forecast is the same one the padlock quotes (§5.2.1): if the
 preload would fail, the padlock says so before you click, with the same numbers.
 
 Locking a cold model does **not** load it on the spot. That is deliberate: the
 click must not start a 400 GB load in the middle of the afternoon. The promise is
-paid at the next healthy transition or at the next restart.
+paid at the next healthy transition or at the next restart. A model pinned in
+oMLX is preloaded by the same pass, without a lock: the pin is oMLX's own "keep
+it resident", and RIPPLE reads it from the node's model list.
 
 #### 5.2.3 Two intents, two places
 
@@ -838,7 +865,12 @@ last two show the configuration in force and the one action that needs it:
   threshold and residency preference, the thread lifetimes and the match
   threshold, the rebind bounds, the balance hysteresis. Those values live in
   `~/.ripple/fleet.yaml`, an overlay over `config.yaml`, and they survive a
-  restart — `config.yaml` is never rewritten. A weight change asks first: it
+  restart — `config.yaml` is never rewritten. The same block carries each host's
+  utility budget: `hosts[].max_inflight_utility` is the hard cap for embeddings
+  and reranks alone, separate from `max_inflight`, so a bulk ingest fills its
+  own budget instead of the one a conversation waits on. Empty follows
+  `max_inflight`; a value above it is refused when the file is loaded, and the
+  row shows the number in effect, never `null`. A weight change asks first: it
   applies to new threads only, and the question names how many running threads
   keep their host until they end, because a weight that shifts under a running
   thread pulls the conversation away from its prefix cache. **Identity,
@@ -865,7 +897,7 @@ last two show the configuration in force and the one action that needs it:
   sentence is not written in the page — it sits next to the field in the config
   schema (`FIELD_HELP` in `ripple/config.py`), is served as `help` by
   `GET /config`, and a test holds every path that may be set at the page to an
-  entry, so a new parameter cannot arrive without one. Four of the forty rows stay
+  entry, so a new parameter cannot arrive without one. Four rows stay
   without a tooltip because they are not settings: the path of the configuration
   file, the `loading` line that sums four settings, and the two measured prefill
   rates.
@@ -1219,10 +1251,11 @@ key it shows an empty table.
 
 Point the client's base URL at `http://<host>:8010/v1` and its key at a **client
 key** (not the admin key). Served paths: `POST /v1/chat/completions`,
-`POST /v1/completions`, `POST /v1/embeddings`, and `GET /v1/models`. Streaming
-works; there is no read timeout on the proxy, so a long generation is allowed to
-finish. Anything that speaks the OpenAI API needs nothing else, and clients that
-read `OPENAI_BASE_URL` need not even be configured.
+`POST /v1/completions`, `POST /v1/embeddings`, `POST /v1/rerank`, and
+`GET /v1/models`. Streaming works; there is no read timeout on the proxy, so a
+long generation is allowed to finish. Anything that speaks the OpenAI API needs
+nothing else, and clients that read `OPENAI_BASE_URL` need not even be
+configured.
 
 ```bash
 curl -s http://192.0.2.10:8010/v1/chat/completions \
@@ -1235,14 +1268,44 @@ curl -s http://192.0.2.10:8010/v1/chat/completions \
 
 The key is scoped: it carries a list of models, and `/v1/models` shows a client
 only what its key may call. A model outside that list answers `404`, not `403` —
-deliberately, so a key cannot be used to enumerate what else exists.
+deliberately, so a key cannot be used to enumerate what else exists. Each
+`/v1/models` row also carries `type` — such as `llm`, `embedding` or `reranker`,
+or `""` when the node did not say — so a client can tell what a model is without
+calling it.
+
+**Rerank.** `POST /v1/rerank` speaks the Cohere/Jina shape: `query` (the string
+to score against), `documents` (the list of strings), `top_n` (how many results
+to return) and `return_documents` (whether the answer repeats the text). RIPPLE
+forwards the body unchanged and passes the node's answer back unchanged:
+
+```json
+{"results": [{"index": 0, "relevance_score": 0.93,
+              "document": {"text": "the first document"}}]}
+```
+
+`results` is the node's ranking; `document` is present when the node includes it.
+There is no bare `/rerank` alias — a client that defaults to that path changes
+its base URL or its path once.
+
+**Utility requests.** An embeddings or rerank call is a utility request: it is
+not a conversation. It holds no thread and no conversation slot, so it does not
+appear in `threads_new` and does not take a slot a chat request is waiting for;
+RIPPLE places it by load and residency alone, and admits it against the host's
+utility budget (`hosts[].max_inflight_utility`, §5.5; it follows `max_inflight`
+when unset) rather than the chat budget. A model the node labels `embedding` or
+`reranker` is utility on any path, so a chat-shaped call to such a model gets the
+same treatment. The response carries `x-ripple-reason: utility` and no
+`x-ripple-thread`, and `/stats` counts the call in `requests_utility`. Nothing is
+registered before the request is forwarded, so a utility call the node rejects
+leaves no thread behind.
 
 ### 7.2 `X-Session-Id`, and why threads exist
 
 The placement unit is the conversation, not the request. A conversation that keeps
 landing on the same node keeps its prefix cache, and a cache hit is the difference
 between a request that starts answering immediately and one that re-prefills tens
-of thousands of tokens.
+of thousands of tokens. Utility calls — embeddings and reranks — are the
+exception: they have no conversation and hold no slot (§7.1).
 
 Send `X-Session-Id` — any stable string per conversation — and RIPPLE never has to
 guess: the id *is* the thread, and an agent that sets its own id is never moved to
@@ -1271,11 +1334,13 @@ x-ripple-thread: sid:8f14e45f
 `x-ripple-host` is the node that answered. `x-ripple-reason` is a short token from
 the same vocabulary as the History tab: `resident`, `cold_load`, `evict_idle`,
 `thread`, `new_thread`, `rebind`, `moved`, `fallback`, `one_shot`, `ephemeral`,
-`slot_evict`, `model_pinned`, `degraded_host`. Three of them — `resident`,
-`cold_load`, `evict_idle` — have no entry in the dashboard catalog yet and appear
-as bare tokens; their meaning is in the table in §5.4. `x-ripple-thread` names the
-slot the request used. Together they answer "where did this go, and why" without
-opening the dashboard — which is what makes them useful in a client's log.
+`slot_evict`, `model_pinned`, `degraded_host`, `utility`. Three of them —
+`resident`, `cold_load`, `evict_idle` — have no entry in the dashboard catalog
+yet and appear as bare tokens; their meaning is in the table in §5.4.
+`x-ripple-thread` names the slot the request used. Together they answer "where
+did this go, and why" without opening the dashboard — which is what makes them
+useful in a client's log. A utility request is the case with no third header: it
+holds no slot, so there is no thread to name.
 
 ## 8. Troubleshooting
 

@@ -165,7 +165,17 @@ def residency_tier(host: HostRuntime, model: str, cfg: Config,
     for m in ordered:
         if m.id not in evicts:
             continue
-        busy = registry.slots(host.cfg.name, m.id) > 0
+        # Two kinds of work make a model busy, and only one of them holds a slot
+        # (issue #193): a one-shot request — and, from the utility class on,
+        # every embedding and rerank — reserves nothing in the registry but is
+        # still generating on the node. The phase bookkeeping knows it per
+        # (host, model), set after `acquire()` and cleared at release, so it
+        # cannot outlive the request. Reading `slots()` alone forecast such a
+        # model as `evict_idle` and would have unloaded it mid-request;
+        # `model_inflight` is the number `/healthz` reports, so the forecast and
+        # the page answer the same question.
+        busy = (registry.slots(host.cfg.name, m.id) > 0
+                or host.model_inflight(m.id) > 0)
         if m.pinned or busy:
             return Candidate(host=host, tier=TIER_CONFLICT, evicts=evicts,
                              note=f"would evict {'pinned' if m.pinned else 'active'} {m.id}")
@@ -355,10 +365,31 @@ def _admin_key_hint(hosts: list[HostRuntime]) -> str:
     return ""
 
 
+def _admission_load(host: HostRuntime, is_utility: bool) -> tuple[int, int]:
+    """The counter and the cap that decide one request class (issue #193).
+
+    Two budgets, two counters: `inflight` counts chat, `inflight_utility`
+    counts embeddings and reranks. One number cannot say which class holds it,
+    so a shared counter would either let a bulk ingest fill the chat budget or
+    let chat eat the utility one — both are the 503 this split exists to stop.
+    The cap is read through `utility_budget`, which resolves `None` to
+    `max_inflight`, so an unconfigured host behaves exactly as before.
+    """
+    if is_utility:
+        return host.inflight_utility, host.cfg.utility_budget
+    return host.inflight, host.cfg.max_inflight
+
+
+def _at_cap(host: HostRuntime, is_utility: bool) -> bool:
+    """Whether this request's own budget is spent on the host."""
+    used, cap = _admission_load(host, is_utility)
+    return used >= cap
+
+
 def choose(fleet: Fleet, cfg: Config, registry: ThreadRegistry, model: str, *,
            thread_key: str = "", exclude: frozenset[str] = frozenset(),
            kind: str | None = None, holds_slot: bool = True,
-           prompt_tokens: int = 0) -> Decision:
+           prompt_tokens: int = 0, is_utility: bool = False) -> Decision:
     """Pick a host for a new thread (binding) or a request (admission).
 
     `kind` is the traffic class of the calling key and only changes *whom* an
@@ -371,6 +402,12 @@ def choose(fleet: Fleet, cfg: Config, registry: ThreadRegistry, model: str, *,
     caller). It only feeds the prefill bias of the deficit rule: a long context
     is charged the extra cold prefill it would need on a slower host. 0 — the
     default — means "size unknown" and changes nothing.
+
+    `is_utility` is the request's class (issue #193), decided once by the
+    caller: an embedding or a rerank is admitted against its own budget, so a
+    bulk ingest never makes the host look full to a conversation. The same flag
+    must reach `admit()` — two predicates would answer two different things
+    about one host.
     """
     # The allow-list is part of the contract, not decoration (§5.1): a host may
     # only serve the models it is configured for, otherwise the eviction
@@ -449,9 +486,11 @@ def choose(fleet: Fleet, cfg: Config, registry: ThreadRegistry, model: str, *,
                                      evict_thread=spare,
                                      note=(f"slots full ({registry.slots_on_host(h.cfg.name)}"
                                            f"/{h.cfg.max_threads}), evicts idle {spare.label}"))
-            elif h.inflight >= h.cfg.max_inflight:
-                cand = Candidate(host=h, tier=TIER_FULL,
-                                 note=f"{h.inflight}/{h.cfg.max_inflight} inflight")
+            elif _at_cap(h, is_utility):
+                # The class's own counter against its own cap (issue #193): a
+                # host whose utility budget is spent is still open for chat.
+                used, cap = _admission_load(h, is_utility)
+                cand = Candidate(host=h, tier=TIER_FULL, note=f"{used}/{cap}")
         cands.append(cand)
 
     usable = [c for c in cands if c.tier < TIER_CONFLICT]
@@ -471,6 +510,16 @@ def choose(fleet: Fleet, cfg: Config, registry: ThreadRegistry, model: str, *,
         locked_hits = [c for c in cands if c.locked]
         if locked_hits:
             return _locked_decision(model, locked_hits)
+        # Every candidate is merely at its cap — nothing is in the way but the
+        # budget itself. Name that budget the way `admit()` does (issue #193),
+        # so one condition reads as one sentence whichever path answered it.
+        if cands and all(c.tier == TIER_FULL for c in cands):
+            budget = "max_inflight_utility" if is_utility else "max_inflight"
+            detail = "; ".join(f"{c.host.cfg.name} at {budget} ({c.note})"
+                               for c in cands)
+            return Decision(host=None, reason="conflict", candidates=cands,
+                            error_status=503,
+                            error_message=f"no host can take {model!r}: {detail}")
         detail = "; ".join(
             f"{c.host.cfg.name}: {c.reason}"
             + (f" ({c.note})" if c.note else "")
@@ -884,9 +933,17 @@ def plan_rebind(fleet: Fleet, cfg: Config, registry: ThreadRegistry, *,
 
 
 
-def admit(fleet: Fleet, host: HostRuntime, model: str) -> tuple[bool, str | None]:
+def admit(fleet: Fleet, host: HostRuntime, model: str,
+          is_utility: bool = False) -> tuple[bool, str | None]:
     """Admission for an already bound thread (§6.1): health and hard capacity.
-    No rebinding — a veto here means 503 or fallback, never a move."""
+    No rebinding — a veto here means 503 or fallback, never a move.
+
+    `is_utility` is the request's class (issue #193), computed once by the
+    caller and shared with `choose()`: an embedding or a rerank is measured
+    against `inflight_utility` / `max_inflight_utility`, chat against
+    `inflight` / `max_inflight`. The reason names the budget that refused, so
+    an operator can tell which ingest filled which cap.
+    """
     if not host.cfg.enabled:
         return False, "host disabled"
     if not host.in_pool:
@@ -899,8 +956,10 @@ def admit(fleet: Fleet, host: HostRuntime, model: str) -> tuple[bool, str | None
         if level:
             return False, f"model {model!r} is {level} on {host.cfg.name}"
         return False, f"model not offered by {host.cfg.name}"
-    if host.inflight >= host.cfg.max_inflight:
-        return False, f"{host.cfg.name} at max_inflight ({host.inflight}/{host.cfg.max_inflight})"
+    if _at_cap(host, is_utility):
+        used, cap = _admission_load(host, is_utility)
+        budget = "max_inflight_utility" if is_utility else "max_inflight"
+        return False, f"{host.cfg.name} at {budget} ({used}/{cap})"
     return True, None
 
 

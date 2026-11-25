@@ -193,6 +193,10 @@ def test_the_pdf_matches_the_manual():
     # The footer is drawn by Chrome, not by the style sheet: if the print call
     # lost `displayHeaderFooter`, every page number is gone and nobody notices.
     assert "page 1 of %d" % pages in text, "no page numbers in the footer"
+    # Issue #188: the version the manual belongs to, so two PDFs on a desk are
+    # told apart by the line at the bottom.
+    from ripple import __version__
+    assert f"RIPPLE {__version__}" in text, f"no version {__version__} in the footer"
 
 
 def test_every_picture_is_embedded_and_no_page_is_empty():

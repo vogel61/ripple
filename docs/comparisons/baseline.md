@@ -1,10 +1,10 @@
 # RIPPLE — capability inventory
 
 **Date:** Nov 20th, 2026
-**Scope:** RIPPLE at commit `531c345` (2026-11-19, version `0.1.0`) — the reference column the other three documents are compared against: functional and non-functional requirements, non-goals, operational surface, what is distinctive, and the known limits.
+**Scope:** RIPPLE at commit `531c345` (2026-11-19, version `0.1.0`) — the reference column the other three documents are compared against: functional and non-functional requirements, non-goals, operational surface, what is distinctive, and the known limits. The route list in §4 was updated for `/v1/rerank` (issue #193); everything else describes that snapshot.
 **Question:** What does RIPPLE actually implement, with `file:line` evidence, and where is the evidence thin or absent?
 
-Every `yes` below is backed by a `file:line` in this repository (commit `531c345`, 2026-11-19, version `0.1.0`) or by a config key or test name. Where the evidence was a docstring claim rather than a test or a measurement, the maturity column says so.
+Every `yes` below is backed by a `file:line` in this repository (commit `531c345`, 2026-11-19, version `0.1.0`), by a config key or test name, or — where a line reference had already moved — by the name of the function or constant that carries the evidence. Where the evidence was a docstring claim rather than a test or a measurement, the maturity column says so.
 
 Two notes on reading this table. First, some evidence lives in internal working documents that are **not published** — the acceptance report (`docs/acceptance.md`), the live-run protocols (`docs/as5-live-*`, `docs/loading-state-live-*`). Those references are kept for traceability; the files are not part of this tree, so the paths do not resolve here. Second, this inventory describes 0.1.0. Two entries changed in 0.1.1: `prefer_resident` is now honoured (it was parsed and never read) and `/stats` counts `evict_idle` (the branch was unreachable). See the CHANGELOG.
 
@@ -32,7 +32,7 @@ scored here.
 
 | ID | Requirement (short) | Implemented? | Evidence | Maturity |
 |---|---|---|---|---|
-| FA-1 | Single external entry point; `POST /v1/chat/completions` with and without `stream` | yes | `ripple/proxy.py:444` `PROXY_PATHS = ("v1/chat/completions", "v1/completions", "v1/embeddings")`; routes registered `proxy.py:2159-2160`; `listen_host`/`listen_port` in `config.example.yaml:11-12` | tested indirectly by every routing test (`tests/conftest.py` starts a real proxy against stubs); live run in `docs/acceptance.md` ("A real subagent … answered") |
+| FA-1 | Single external entry point; `POST /v1/chat/completions` with and without `stream`, and `POST /v1/rerank` (since #193) | yes | `PROXY_PATHS` in `ripple/proxy.py` — the tuple every POST route is registered from, with `v1/rerank` in it; `listen_host`/`listen_port` in `config.example.yaml:11-12` | tested indirectly by every routing test (`tests/conftest.py` starts a real proxy against stubs); live run in `docs/acceptance.md` ("A real subagent … answered") |
 | FA-2 | New thread → node with largest deficit; idle threads fade quadratically; atomic reservation; AND-hysteresis | yes | `ripple/placement.py:166` `_deficit()` (decay via `registry.weighted_slots`, `max(slots, inflight)`); hysteresis `placement.py:306` `imbalance()`; reservation under lock `proxy.py:2594` `async with self._lock` | tested: `test_fa2_atomic_reservation_never_overshoots_one_host`, `test_fa2_idle_threads_fade_quadratically`, `test_fa2_hysteresis_needs_both_thresholds`, `test_as1/as2_*`; AS-1 verified live |
 | FA-3 | Weights, `max_inflight`, `spill_threshold`, `thread_ttl_seconds` adjustable in YAML, no code change | yes | `config.example.yaml:42-84` (`hosts[].weight`, `max_inflight`, `spill_threshold`), `:86-99` (`affinity.ttl_seconds`) | tested: `test_fa3_weight_change_shifts_the_distribution` |
 | FA-4 | Route only to nodes that offer the model; unknown model → 404 | yes | model map refreshed per host in `ripple/hosts.py` probe loop; single-offer pinning `placement.py:524-526` (`model_pinned`); 404 path `proxy.py:3292` `_error()` | tested: `test_as8_fa4_model_offered_by_one_host_is_pinned_there`, `test_fa4_unknown_model_is_rejected_with_404` |
@@ -90,18 +90,18 @@ inventory's addition: what the operator therefore has to bring themselves.
 
 ## 4. Operational surface
 
-### Endpoints (`proxy.py:1196-2160`)
+### Endpoints (the route table in `ripple/proxy.py`)
 
 | Path | Method | Purpose |
 |---|---|---|
-| `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | POST | proxied with routing (`proxy.py:444`) |
-| `/v1/models` | GET | merged list of healthy hosts, filtered by client key (`proxy.py:2145`) |
-| `/healthz` | GET | fleet, per-host state, series, capabilities, threads (`proxy.py:3443`) |
-| `/stats` | GET | counters + thread snapshot + host ledger + decision ring (`proxy.py:3614`) |
-| `/config` | GET | effective config, secrets reduced to `set`/`none` (`proxy.py:2138`) |
-| `/` | GET | dashboard shell (`proxy.py:1196`) |
-| `/keys` | GET | key admin page (`proxy.py:1278`) |
-| `POST /reinit` | POST | re-resolve all host addresses (`proxy.py:2152`) |
+| `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/rerank` | POST | proxied with routing (`PROXY_PATHS`; each entry gets a route in `create_app()`) |
+| `/v1/models` | GET | merged list of healthy hosts, filtered by client key (`models()`) |
+| `/healthz` | GET | fleet, per-host state, series, capabilities, threads (`healthz()`) |
+| `/stats` | GET | counters + thread snapshot + host ledger + decision ring (`stats_payload()`) |
+| `/config` | GET | effective config, secrets reduced to `set`/`none` (the `/config` handler) |
+| `/` | GET | dashboard shell (the `/` route) |
+| `/keys` | GET | key admin page (the `/keys` route) |
+| `POST /reinit` | POST | re-resolve all host addresses (the `/reinit` route) |
 | `/admin/stats/reset` | POST | reset the per-host ledger |
 | `/admin/threads/{key}` | DELETE | drop one thread binding |
 | `/admin/keys`, `/admin/keys/{name}/{action}` | GET/POST | key CRUD + enable/disable/rotate |
@@ -119,7 +119,7 @@ inventory's addition: what the operator therefore has to bring themselves.
 ### Headers
 
 - **In:** `X-Session-Id` (name configurable via `affinity.header`) — optional, clients without it still work (RB-5); `Authorization: Bearer *** — client key when `auth.enabled`, otherwise passed upstream; `X-Forwarded-For` — believed only from `proxy.trusted_proxies` (`proxy.py:2955-2985`).
-- **Out:** `X-Ripple-Host`, `X-Ripple-Reason`, `X-Ripple-Thread` (`proxy.py:2901-2903`), reason ∈ `new_thread`, `thread`, `ephemeral`, `cold_load`, `evict_idle`, `model_pinned`, `fallback`, `rebind`, `slot_evict`, `degraded_host`.
+- **Out:** `X-Ripple-Host`, `X-Ripple-Reason`, `X-Ripple-Thread` — the third only when a slot is involved (so never on a utility call). Reason ∈ `new_thread`, `thread`, `ephemeral`, `cold_load`, `evict_idle`, `model_pinned`, `fallback`, `rebind`, `slot_evict`, `degraded_host`, `utility`.
 
 ### Config keys (`config.example.yaml`, parsed in `ripple/config.py`)
 

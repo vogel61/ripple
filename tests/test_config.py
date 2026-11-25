@@ -412,6 +412,32 @@ def test_the_config_view_says_what_is_editable_and_what_is_overridden(tmp_path):
     assert view["affinity"]["ttl_seconds"] == 900
 
 
+def test_a_disabled_host_has_no_share_of_new_threads(tmp_path):
+    """`total_weight` counts the enabled hosts — the quotient must not pretend.
+
+    A disabled node is skipped by the dispatcher (`placement` takes candidates
+    from `enabled` hosts only), so `weight / total_weight` would print a share it
+    can never receive: `3 → 60 %`, `2 → 40 %` and `1 → 20 %` add up to 120 %.
+    The weight stays (it is the wish for the day the node comes back), the share
+    is 0 — in the parameter table and in `/healthz` alike, both fed from here.
+    """
+    cfg = load_config(write_config(tmp_path, hosts=[
+        {"name": "A", "addresses": ["http://127.0.0.1:8000"], "weight": 3},
+        {"name": "B", "addresses": ["http://127.0.0.1:8001"], "weight": 2},
+        {"name": "C", "addresses": ["http://127.0.0.1:8002"], "weight": 1,
+         "enabled": False},
+    ]))
+    a, b, c = (cfg.host(name) for name in ("A", "B", "C"))
+    assert a is not None and b is not None and c is not None
+    assert cfg.target_share(a) == pytest.approx(0.6)
+    assert cfg.target_share(b) == pytest.approx(0.4)
+    assert cfg.target_share(c) == 0.0
+    assert cfg.target_share(a) + cfg.target_share(b) == pytest.approx(1.0)
+    # The table prints `hosts[].share` from the same expression.
+    shares = {row["name"]: row["share"] for row in cfg.summary()["hosts"]}
+    assert shares == {"A": 0.6, "B": 0.4, "C": 0.0}
+
+
 # -- the sentence that travels with every field (issue #139) ----------------
 #
 # The parameter table shows a row per field and a reader who does not know the
@@ -607,3 +633,61 @@ def test_a_bare_ripple_reads_the_config_in_the_ripple_home(tmp_path, monkeypatch
     written = tmp_path / ".ripple" / "config.yaml"
     written.write_text("listen_port: 8010\n", encoding="utf-8")
     assert default_config_path() == str(written)
+
+
+# -- the utility budget (issue #193, step 10) --------------------------------
+#
+# Utility traffic gets a second admission cap so a bulk ingest cannot hold every
+# slot a conversation needs. The declaration is optional — absent means "follow
+# max_inflight", which is what every existing file says by saying nothing — and
+# a value above `max_inflight` is refused, because a budget larger than the
+# machine's whole admission limit is a typo, not an intention.
+
+def test_a_utility_budget_above_max_inflight_is_refused(tmp_path):
+    """The cross-field rule, in the loader's own words, at both entry points.
+
+    `host_from_block` is the page's parser and `load_config` the file's; they
+    are the same function, so a node added at the page cannot be accepted with
+    a budget the file would refuse.
+    """
+    over = [{"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+             "max_inflight": 4, "max_inflight_utility": 5}]
+    with pytest.raises(ConfigError,
+                       match=r"max_inflight_utility \(5\) must not exceed max_inflight \(4\)"):
+        load_config(write_config(tmp_path, hosts=over))
+
+    from ripple.config import host_from_block
+    with pytest.raises(ConfigError, match="must not exceed max_inflight"):
+        host_from_block(dict(over[0]))
+
+    # The boundary itself is legal: the utility class may use the whole cap.
+    ok = write_config(tmp_path, hosts=[
+        {"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+         "max_inflight": 4, "max_inflight_utility": 4}])
+    cfg = load_config(ok)
+    assert cfg.hosts[0].max_inflight_utility == 4
+    assert cfg.hosts[0].utility_budget == 4
+
+
+def test_the_config_view_reports_the_utility_budget_in_effect(tmp_path):
+    """`/config → hosts[].max_inflight_utility` is a number, never null.
+
+    `null` in the file means "follow max_inflight"; the operator reads what is
+    enforced, so the view resolves the fallback instead of shipping the
+    declaration. A configured value is reported as itself.
+    """
+    declared = load_config(write_config(tmp_path, hosts=[
+        {"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+         "max_inflight": 6, "max_inflight_utility": 2}]))
+    assert declared.summary()["hosts"][0]["max_inflight_utility"] == 2
+
+    following = load_config(write_config(tmp_path, hosts=[
+        {"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+         "max_inflight": 6}]))
+    assert following.hosts[0].max_inflight_utility is None
+    assert following.summary()["hosts"][0]["max_inflight_utility"] == 6
+
+    # Restart-bound like the cap it belongs to: the page may not PATCH it.
+    from ripple.config import policy_refusal
+    refusal = policy_refusal("hosts.alpha.max_inflight_utility")
+    assert refusal and "restart" in refusal

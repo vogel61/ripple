@@ -77,14 +77,21 @@ PAGE_COUNT_TOOLS = ["/opt/homebrew/bin/qpdf", "/usr/local/bin/qpdf"]
 # be set inline: Chrome does not let a footer template inherit the page's style.
 # `<span class="pageNumber">` and `<span class="totalPages">` are filled in by
 # Chrome per page.
-FOOTER = (
-    '<div style="width:100%;margin:0 20mm;font-family:Helvetica,Arial,sans-serif;'
-    'font-size:8pt;color:#666;display:flex;justify-content:space-between;">'
-    '<span>RIPPLE — Operator\'s Manual</span>'
-    '<span>page <span class="pageNumber"></span> of '
-    '<span class="totalPages"></span></span>'
-    '</div>'
-)
+#: Which version a PDF belongs to is not a detail: two manuals on a desk look
+#: identical, and the only way to tell whether the one in your hand describes the
+#: build you run is the line at the bottom (issue #188). The version comes from
+#: `ripple.__version__` — one source of truth, the same one the footer of the
+#: dashboard and the release tag use.
+def footer(version: str) -> str:
+    """The page footer, with the version this manual belongs to."""
+    return (
+        '<div style="width:100%;margin:0 20mm;font-family:Helvetica,Arial,sans-serif;'
+        'font-size:8pt;color:#666;display:flex;justify-content:space-between;">'
+        f'<span>RIPPLE {version} — Operator\'s Manual</span>'
+        '<span>page <span class="pageNumber"></span> of '
+        '<span class="totalPages"></span></span>'
+        '</div>'
+    )
 # An empty header: Chrome reserves the top margin for one either way, and the
 # manual's own first line is a better title than a repeated running head.
 HEADER = '<div style="font-size:0;height:0;"></div>'
@@ -196,7 +203,8 @@ def _cdp():
 
 
 def render_pdf(html_path: Path, pdf_out: Path, *, chrome: str | None = None,
-               scratch: Path | None = None, timeout: float = 120.0) -> None:
+               scratch: Path | None = None, timeout: float = 120.0,
+               version: str = "") -> None:
     """Print `html_path` to `pdf_out` with headless Chrome, then stop Chrome.
 
     The page is printed only once every image has decoded (`naturalWidth > 0`):
@@ -231,7 +239,7 @@ def render_pdf(html_path: Path, pdf_out: Path, *, chrome: str | None = None,
                           preferCSSPageSize=True,
                           displayHeaderFooter=True,
                           headerTemplate=HEADER,
-                          footerTemplate=FOOTER,
+                          footerTemplate=footer(version or _version()),
                           marginTop=0.79, marginBottom=0.94,
                           marginLeft=0.79, marginRight=0.79)
     finally:
@@ -279,6 +287,20 @@ def page_count(pdf: Path) -> int | None:
     return found or None
 
 
+def _version() -> str:
+    """`ripple.__version__`, or "unknown" when this is run without the package.
+
+    The PDF is built from a checkout that has the package in it; a missing import
+    is a reason to say so in the footer, not to fail the build over a line of text.
+    """
+    try:
+        sys.path.insert(0, str(REPO))
+        from ripple import __version__        # noqa: WPS433
+        return __version__
+    except Exception:                          # noqa: BLE001
+        return "unknown"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Render docs/manual-en.md to a PDF (pandoc + headless Chrome).",
@@ -305,7 +327,8 @@ def main(argv: list[str] | None = None) -> int:
         html_path = args.html or (scratch / "manual.html")
         html_path.parent.mkdir(parents=True, exist_ok=True)
         build_html(pandoc, html_path)
-        render_pdf(html_path, args.out, chrome=args.chrome, scratch=scratch)
+        render_pdf(html_path, args.out, chrome=args.chrome, scratch=scratch,
+                   version=_version())
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -318,8 +341,8 @@ def main(argv: list[str] | None = None) -> int:
         print("pages:   %d" % pages)
     print("bytes:   %d" % size)
     print("seconds: %.2f" % elapsed)
-    print("wrote %s (%d images embedded, %d pages, %d bytes, %.2f s)"
-          % (args.out, len(images), pages or 0, size, elapsed))
+    print("wrote %s (%d images embedded, %d pages, %d bytes, %.2f s, footer: RIPPLE %s)"
+          % (args.out, len(images), pages or 0, size, elapsed, _version()))
     return 0
 
 

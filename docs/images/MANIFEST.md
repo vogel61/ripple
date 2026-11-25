@@ -11,33 +11,33 @@ a picture that looks wrong is a bug in the tool or in the style sheet.
 | | |
 |---|---|
 | **Command** | `./.venv/bin/python tools/mockup_snapshot.py --manual-crops --screenshot docs/images/readme-fleet.png` |
-| **Commit** | `289ac9f` |
-| **Date** | 2026-11-23T15:33:45+01:00 |
+| **Commit** | `d8b8543` |
+| **Date** | 2026-11-25T17:09:44+01:00 |
 | **Files** | 21 |
 
 | file | pixels | bytes | shows | state |
 |---|---|---|---|---|
-| `dashboard-fleet-de.png` | 1440 × 1000 | 163789 | the Fleet tab, German, for install-de.md | admin |
-| `dashboard-fleet.png` | 1440 × 1000 | 154423 | the Fleet tab, for install.md | admin |
-| `dashboard-models-de.png` | 1440 × 1000 | 155545 | the Models tab, German, for install-de.md | admin |
-| `dashboard-models.png` | 1440 × 1000 | 154421 | the Models tab, for install.md | admin |
+| `dashboard-fleet-de.png` | 1440 × 1000 | 163774 | the Fleet tab, German, for install-de.md | admin |
+| `dashboard-fleet.png` | 1440 × 1000 | 154716 | the Fleet tab, for install.md | admin |
+| `dashboard-models-de.png` | 1440 × 1000 | 155894 | the Models tab, German, for install-de.md | admin |
+| `dashboard-models.png` | 1440 × 1000 | 154493 | the Models tab, for install.md | admin |
 | `manual-fleet-card.png` | 1408 × 1106 | 136972 | one node card: memory bar and metrics | admin |
-| `manual-fleet.png` | 1440 × 1000 | 154407 | the Fleet tab: legend, two cards, KPI strip | admin |
-| `manual-history.png` | 1440 × 1000 | 248794 | the History tab: filters, rows, footer | admin |
+| `manual-fleet.png` | 1440 × 1000 | 154651 | the Fleet tab: legend, two cards, KPI strip | admin |
+| `manual-history.png` | 1440 × 1000 | 247187 | the History tab: filters, rows, footer | admin |
 | `manual-keys.png` | 1440 × 500 | 70528 | the key page (/keys) | read-only |
-| `manual-models.png` | 1440 × 1000 | 154294 | the Models tab: rows, fold, policy fields | admin |
+| `manual-models.png` | 1440 × 1000 | 154497 | the Models tab: rows, fold, policy fields | admin |
 | `manual-node-drain-timeout.png` | 2800 × 416 | 76190 | the deadline passing | admin |
 | `manual-node-drain.png` | 2800 × 356 | 59086 | the drain dialog | admin |
 | `manual-nodes-scan.png` | 2800 × 228 | 65445 | a sweep over a documentation range | admin |
-| `manual-nodes.png` | 1440 × 1000 | 188274 | the Nodes tab, with a preview | admin |
-| `manual-ops.png` | 1440 × 1000 | 197742 | the Operations tab with a maintenance window set | admin |
-| `manual-params.png` | 2808 × 3540 | 751283 | the parameter table: node stripes, global rows | admin |
-| `manual-restart.png` | 2808 × 438 | 114993 | the restart block (6.6) | admin |
+| `manual-nodes.png` | 1440 × 1000 | 188514 | the Nodes tab, with a preview | admin |
+| `manual-ops.png` | 1440 × 1000 | 197870 | the Operations tab with a maintenance window set | admin |
+| `manual-params.png` | 2808 × 3130 | 671176 | the parameter table: node stripes, global rows | admin |
+| `manual-restart.png` | 2808 × 438 | 115007 | the restart block (6.6) | admin |
 | `manual-tabs.png` | 2792 × 130 | 11950 | the tab bar, six numbered tabs | admin |
 | `manual-thread-busy.png` | 1420 × 268 | 27157 | one thread with a request in flight | admin |
-| `manual-threads.png` | 1440 × 1000 | 148160 | the Threads tab: six conversations | admin |
+| `manual-threads.png` | 1440 × 1000 | 148561 | the Threads tab: six conversations | admin |
 | `manual-tooltip.png` | 672 × 350 | 56231 | a tooltip: definition and source | admin |
-| `readme-fleet.png` | 2880 × 4560 | 862966 | the Fleet tab, full height (the README picture) | read-only |
+| `readme-fleet.png` | 2880 × 4560 | 862806 | the Fleet tab, full height (the README picture) | read-only |
 
 `state` is the tab's admin mode in that picture. `admin` means the demo
 key was in `sessionStorage` when it was taken, so the masthead chip says

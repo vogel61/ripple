@@ -649,15 +649,16 @@ def _chat_and_utility() -> list[StubModel]:
         StubModel(id=mid, model_type=kind) for mid, kind in UTILITY]
 
 
-def test_yes_writes_the_chat_models_and_names_what_it_left_out(tmp_path, capsys):
-    """An empty answer is a decision: the chat models, and the rest is named.
+def test_the_default_allow_list_includes_the_utility_models(tmp_path):
+    """An empty answer writes the node's whole list, embedding engine included.
 
-    oMLX serves utility engines beside the chat models and `/v1/models` offers
-    them like any other id; an empty allow-list made `MarkItDown` routable
-    (issue #157). The default is now the chat-capable models, and the line says
-    which ones stayed out and why.
+    oMLX lists an embedding engine beside the chat models and answers
+    `/v1/embeddings` for it (issue #193); a default that left it out made a
+    fresh install refuse a call the node serves.
     """
-    stub = _node_offering(_chat_and_utility())
+    stub = _node_offering([StubModel(id="m1", model_type="llm", loaded=True),
+                           StubModel(id="Qwen3-Embedding-4B-4bit-DWQ",
+                                     model_type="embedding")])
     try:
         assert main(_argv(tmp_path, closed_port(), "--host", stub.url,
                           "--no-check")) == 0
@@ -665,15 +666,28 @@ def test_yes_writes_the_chat_models_and_names_what_it_left_out(tmp_path, capsys)
         stub.stop()
 
     raw = yaml.safe_load(_config_path(tmp_path).read_text(encoding="utf-8"))
-    assert raw["hosts"][0]["models"] == [CHAT], raw["hosts"][0]
+    ids = ["m1", "Qwen3-Embedding-4B-4bit-DWQ"]
+    assert raw["hosts"][0]["models"] == ids, raw["hosts"][0]
+
+
+def test_the_line_names_the_utility_models_it_included(tmp_path, capsys):
+    """The one line says how wide the list is and what it holds."""
+    stub = _node_offering(_chat_and_utility())
+    try:
+        assert main(_argv(tmp_path, closed_port(), "--host", stub.url,
+                          "--no-check")) == 0
+    finally:
+        stub.stop()
 
     out = capsys.readouterr().out
-    line = next(line for line in out.splitlines() if "allow-list =" in line)
-    assert "1 chat-capable model(s)" in line
-    assert "left out 2" in line
+    lines = [line for line in out.splitlines() if "allow-list =" in line]
+    assert len(lines) == 1, out
+    line = lines[0]
+    assert "all 3 offered model(s)" in line, line
+    assert "including 2 that are not chat models" in line, line
     for mid, kind in UTILITY:
         assert f"{mid} ({kind})" in line, line
-    assert "`all`" in line
+    assert "left out" not in line
 
 
 def test_all_keeps_the_allow_list_empty_and_says_how_wide_it_is(tmp_path):

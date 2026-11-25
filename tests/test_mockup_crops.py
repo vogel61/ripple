@@ -32,6 +32,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from ripple.config import HostConfig, host_block  # noqa: E402
 from tools import mockup_fleet as fleet  # noqa: E402
 from tools import mockup_snapshot as ms  # noqa: E402
 
@@ -168,6 +169,45 @@ def test_the_fleet_is_the_one_the_manual_describes():
     assert fleet.node_preview()["name"] == "node-c"
     # node-c is previewed, not part of the fleet: two cards, not three.
     assert len(health["hosts"]) == 2
+
+
+def test_the_parameter_table_shows_the_fleet_and_its_real_shares():
+    """`/config` is "the configuration actually in force" — so it is the fleet.
+
+    The parameter table prints `weight → share` per host from this payload, and
+    the share is not a number anyone may write down: it is
+    `weight / sum(weight)` over the enabled hosts (`Config.target_share`).
+    A hand-typed share next to a weight is how the manual's picture came to show
+    `node-c · 1 → 0.0 %` (24.11.2026) — a node that was only ever previewed, in
+    a table of the fleet, with a share that no arithmetic produces.
+    """
+    health = fleet.healthz(1_763_000_000.0)
+    view = fleet.config()
+    names = [h["name"] for h in view["hosts"]]
+    assert names == [h["name"] for h in health["hosts"]], (
+        "the parameter table shows hosts the fleet does not have")
+    total = sum(h["weight"] for h in view["hosts"] if h["enabled"]) or 1.0
+    for host in view["hosts"]:
+        assert host["share"] == pytest.approx(host["weight"] / total, abs=1e-4), (
+            "%s: weight %s cannot be a share of %s"
+            % (host["name"], host["weight"], host["share"]))
+    assert sum(h["share"] for h in view["hosts"]) == pytest.approx(1.0)
+
+
+def test_the_parameter_table_carries_every_field_the_live_one_does():
+    """A field added to the payload must reach the picture, or the picture lies.
+
+    The table renders whatever `/config` sends, and the shim builds that dict by
+    hand. So a new field is invisible in the manual until someone remembers to
+    add it here — `max_inflight_utility` (25.11.2026) would have been exactly
+    that: a setting the reader is told about in the text and cannot find in the
+    picture. Comparing the key sets is the guard, the same way the share is
+    compared with its own arithmetic instead of being written down.
+    """
+    live = host_block(HostConfig(name="node-a", addresses=["http://192.0.2.10:8000"]))
+    shim = fleet.config()["hosts"][0]
+    missing = sorted(set(live) - set(shim))
+    assert missing == [], f"the shim's /config host row misses {missing}"
 
 
 def test_the_memory_bar_adds_up_to_the_models_it_sits_above():

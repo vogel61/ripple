@@ -429,6 +429,10 @@ class Stats:
     threads_deleted: int = 0
     # Requests from a `one-shot` key: they never held a slot, by construction.
     requests_one_shot: int = 0
+    # Utility calls (issue #193): embeddings and reranks. Counted apart from
+    # `requests_total`'s thread traffic because they open no thread and hold no
+    # slot — a number that says how much of the load is backfill, not chat.
+    requests_utility: int = 0
     auth_failures: int = 0
     # Admin requests refused by the failed-attempt limiter (issue #6): the
     # address is over budget, so its key was not even compared. `auth_failures`
@@ -519,6 +523,7 @@ class Stats:
             "threads_rebound": self.threads_rebound,
             "threads_deleted": self.threads_deleted,
             "requests_one_shot": self.requests_one_shot,
+            "requests_utility": self.requests_utility,
             "auth_failures": self.auth_failures,
             "admin_key_blocks": self.admin_key_blocks,
             "by_key": self.by_key,

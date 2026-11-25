@@ -57,6 +57,15 @@ Three properties of the list matter when reading the table:
   (`ripple/keys.py`) is a fifth, client-facing statement and is not one of these
   — see *What this is not* at the end.
 
+**The model's `type` is not a fifth statement.** `/v1/models → data[].type` and
+`/healthz → models[].type` (and `models[].hosts[].type` per node) carry the
+node's own word — such as `llm`, `embedding` or `reranker`, or `""` when the
+node did not say. That word decides the **request class**: an embedding or rerank
+is utility traffic, holds no conversation slot, and is admitted against
+`max_inflight_utility` instead of `max_inflight`. It changes none of the four
+statements above: a utility model is still permitted, routed, locked or resident
+by the same four axes, and its type is never a routing rule and never a lock.
+
 **The two predicates are not the same question (issue #116).**
 `HostRuntime.model_available()` (`ripple/hosts.py:1453`) answers "would RIPPLE
 send a request here": allow-list, policy, and the model being in the node's list.
@@ -108,12 +117,16 @@ says it before the click, from the preload's own arithmetic and nothing else
 * `null` when no host offers the model, or when no offering host can forecast at
   all — `([], None)` from the forecast means "no forecast" (unknown size, no
   ceiling, guard off), never "does not fit";
-* `true` otherwise, including when one host would have to evict an unlocked model
-  to hold it.
+* `true` otherwise, including when one host would have to evict an **idle**
+  unlocked model to hold it (a serving model is never evicted, so it counts as a
+  refusal).
 
 `hosts[].fits` carries the same answer per host: `null` where the host does not
 offer the model, `false` with the forecast's sentence where it refuses, `true`
-otherwise. A builtin is never infeasible (it has no weights), and a model that is
+otherwise. It means *fits and can be started now*: the forecast refuses if the
+only way to make room is to unload a locked, pinned or **serving** model, so a
+model that is answering a request is not a preload target until it is idle. A
+builtin is never infeasible (it has no weights), and a model that is
 merely not routed here does not warn — only memory infeasibility does. The
 forecast only reads: no eviction, no unlock and no pin happens to make room. The
 state lives in `GET /admin/models`; `/healthz` keeps its fields, so a reader that
@@ -439,7 +452,7 @@ would be invisible exactly when someone asks why a request is refused.
 | `listed` | it appears in `/v1/models` |
 | `hosts[].lock` | locked **and** resident on that host |
 | `hosts[].offered`, `hosts[].loaded`, `hosts[].policy`, `hosts[].dispatch`, `hosts[].routable` | as on the policy rows; `routable` is the availability column (issue #116) |
-| `hosts[].fits`, `hosts[].fit_reason` | whether that host could hold it: `null` where it does not offer the model, `false` with the forecast's sentence where it refuses, `true` otherwise — including where there is no forecast to make |
+| `hosts[].fits`, `hosts[].fit_reason` | whether that host could hold it *and start now*: `null` where it does not offer the model, `false` with the forecast's sentence where it refuses (locked, pinned or serving model in the way), `true` otherwise — including where there is no forecast to make |
 
 `/healthz` carries the lock on these keys:
 

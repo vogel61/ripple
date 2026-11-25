@@ -5,6 +5,54 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.4rc1] - 2026-11-25
+
+A release candidate, published for testing: the manual describes what this build
+does, and the surface it adds is real, but the version is not the one to run a
+fleet on until it has been tried. Minor, not patch: the configuration surface
+grows a key (`hosts[].max_inflight_utility`) and the proxy serves a fourth path.
+
+### Added
+
+- **`POST /v1/rerank`** (issue #193). RIPPLE forwards a reranker call with the
+  Cohere/Jina body (`query`, `documents`, `top_n`, `return_documents`), balances
+  it like any other request and shows it in the dashboard. Until now a RAG stack
+  needed a second base URL and a second key for its reranker, and the model lived
+  outside the fleet.
+- **`type` on `/v1/models`, `/healthz` and each `models[].hosts[]` row** — the
+  node's own word (`llm`, `embedding`, `reranker`), empty when the node did not
+  say. A client can tell what a model is without calling it.
+- **A utility budget of its own**: `hosts[].max_inflight_utility`, empty follows
+  `max_inflight`, a value above it is refused at load. A bulk ingest now fills its
+  own budget instead of the one a conversation waits on.
+- **The dashboard names the type** and gives a model that holds no slot a share
+  measured in requests instead of thread slots, with the column header saying
+  which key is in force.
+
+### Fixed
+
+- **The ghost thread disappears** (issue #193). `POST /v1/embeddings` used to
+  open a thread — `anon:x`, or one per `X-Session-Id` — that held a slot for
+  `affinity.ttl_seconds`: twenty embedding calls could take a node's whole slot
+  account, and a request the node rejected left the same thread behind, because
+  the thread was registered before the request was forwarded. An embedding or
+  rerank request is now a utility request: it holds no thread and no slot, is
+  placed by load and residency only, and `threads_new` no longer counts it.
+  `/v1/rerank` is served, `/v1/models` and `/healthz` carry `type`, and
+  `hosts[].max_inflight_utility` gives a bulk ingest a budget of its own. Those
+  responses carry `x-ripple-thread` no more. No migration: the registry is in
+  memory.
+- **A profile model no longer counts its memory once per profile row**
+  (issue #195). oMLX builds a profile row (`X:agent`, `X:think-1m`) as a copy of
+  the source model's status, `actual_size` included, and the fleet card summed
+  every resident row: one 112 GB engine with two profiles read 336 GB, and a
+  user saw 449.6 GB against a 260.4 GB ceiling while oMLX's own number said
+  40 %. A row carrying `source_model_id` is now skipped in
+  `used_bytes_measured` — it is a view of a model already counted — while a real
+  engine keeps contributing its size.
+
 ## [0.2.3] - 2026-11-23
 
 The install path, repaired. Sixteen fixes in one release, because 0.2.2 was cut

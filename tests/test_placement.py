@@ -30,7 +30,8 @@ from ripple.config import (AffinityConfig, Config, HostConfig, MigrateConfig,
                            PlacementConfig, RebindConfig)
 from ripple.hosts import CURVE_MIN_BUCKETS, HostRuntime
 from ripple.placement import (MigrateFleet, MigrateHost, ThreadState, _delta_total,
-                              decide_migration, fleet_view, plan_rebind)
+                              admit, choose, decide_migration, fleet_view,
+                              plan_rebind)
 from ripple.registry import Thread, ThreadRegistry
 
 from tests.support import make_config
@@ -615,3 +616,89 @@ def test_the_view_collects_the_fleet_without_touching_the_decision() -> None:
     assert view.hosts["M5"].curve[1.0] == 60.2
     assert view.hosts["M5"].pp_tps == 1000.0
     assert d.moves and d.host == "M5"
+
+
+# -- two budgets, two counters (issue #193, step 10) ------------------------
+#
+# `inflight` mixes every class, so a split budget cannot be derived from it: the
+# counters have to be kept apart. These two tests pin the split on the host and
+# the consequence on both admission paths — a utility burst may spend its own
+# budget to the last slot without a conversation seeing a full host.
+
+def utility_host(name: str = "M5", *, max_inflight: int = 4,
+                 utility: int | None = 2) -> HostRuntime:
+    """A loaded host with a utility budget smaller than its chat cap."""
+    cfg = HostConfig(name=name, addresses=[f"http://{name}.test:8000"], weight=1.0,
+                     max_inflight=max_inflight, max_inflight_utility=utility,
+                     spill_threshold=max_inflight)
+    h = HostRuntime(cfg=cfg, client=None)
+    h.healthy = True
+    h.status = "healthy"
+    h.identity_ok = True
+    h.models[MODEL] = ModelInfo(id=MODEL, available=True, loaded=True)
+    return h
+
+
+def test_the_two_counters_move_independently():
+    """`acquire(is_utility=True)` spends the utility budget and nothing else.
+
+    The chat cap is never charged for an embedding, the utility cap is never
+    charged for a chat turn, and `release()` cannot drive either counter below
+    zero — a double release after a failed dispatch must not hand out capacity
+    that was never taken.
+    """
+    h = utility_host(max_inflight=4, utility=2)
+
+    assert h.acquire() and h.inflight == 1 and h.inflight_utility == 0
+    assert h.acquire(is_utility=True) and h.inflight == 1 and h.inflight_utility == 1
+
+    h.release(is_utility=True)
+    assert (h.inflight, h.inflight_utility) == (1, 0)
+    h.release(is_utility=True)                       # already zero: stays zero
+    assert (h.inflight, h.inflight_utility) == (1, 0)
+
+    h.release()
+    assert (h.inflight, h.inflight_utility) == (0, 0)
+    h.release()
+    assert (h.inflight, h.inflight_utility) == (0, 0)
+
+    # The caps are the class's own: two embeddings fill the utility budget
+    # while four chat slots stay free, and the third embedding is refused.
+    assert h.acquire(is_utility=True) and h.acquire(is_utility=True)
+    assert not h.acquire(is_utility=True)
+    assert h.inflight_utility == 2 and h.inflight == 0
+    for _ in range(4):
+        assert h.acquire()
+    assert not h.acquire()
+
+
+def test_a_utility_burst_does_not_refuse_a_chat_thread():
+    """The reason this budget exists: a backfill must not 503 a conversation.
+
+    Two embeddings hold the whole utility budget on the only host; the third is
+    refused with the budget named, while `admit()` and `choose()` still hand the
+    same host to a chat thread — its counter is untouched.
+    """
+    h = utility_host(max_inflight=4, utility=2)
+    cfg = make_config([h.cfg])
+    fleet = _FakeFleet([h])
+    reg = ThreadRegistry(AffinityConfig())
+
+    assert h.acquire(is_utility=True) and h.acquire(is_utility=True)
+
+    ok, why = admit(fleet, h, MODEL, is_utility=True)
+    assert not ok and why is not None
+    assert "at max_inflight" in why, why
+    assert "max_inflight_utility (2/2)" in why, why
+
+    # A chat turn is admitted: its own counter is empty.
+    assert admit(fleet, h, MODEL) == (True, None)
+    decision = choose(fleet, cfg, reg, MODEL, thread_key="conversation",
+                      prompt_tokens=100)
+    assert decision.host is h, decision.error_message
+
+    # And the utility path through `choose()` refuses the same host, so both
+    # admission paths answer from the same predicate.
+    burst = choose(fleet, cfg, reg, MODEL, thread_key="ingest", is_utility=True)
+    assert burst.host is None
+    assert "at max_inflight_utility (2/2)" in (burst.error_message or ""), burst.error_message

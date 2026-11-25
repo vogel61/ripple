@@ -347,11 +347,14 @@ def test_the_install_path_stop_init_start(tmp_path, capsys, monkeypatch):
         assert "is not a CIDR network" not in first.err, first.err
         assert "no networks" not in first.out, first.out
 
-        # the allow-list is the chat model, not the utility engine beside it
-        # (#157): the stub's second model is `model_type: markitdown`, and an
-        # empty answer used to route it as if it were a chat model
-        assert raw["hosts"][0]["models"] == [CHAT_MODEL], raw["hosts"][0]
-        assert any("allow-list = 1 chat-capable model(s)" in line
+        # the allow-list is the node's whole offered list, the utility engine
+        # beside the chat model included (#193): the fleet serves
+        # `/v1/embeddings` and `/v1/rerank`, so a default that left the
+        # conversion engine out would refuse a call the node answers. The stub's
+        # second model is `model_type: markitdown`.
+        assert raw["hosts"][0]["models"] == [CHAT_MODEL, INFRA_MODEL], raw["hosts"][0]
+        assert any(f"allow-list = all 2 offered model(s)" in line
+                   and "including 1 that are not chat models" in line
                    and f"{INFRA_MODEL} (markitdown)" in line
                    for line in first.out.splitlines()), first.out
 

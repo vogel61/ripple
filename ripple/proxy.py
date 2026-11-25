@@ -50,6 +50,7 @@ from .placement import (TIER_COLD_LOAD, TIER_EVICT_IDLE, MigrationDecision, Migr
 from .registry import (ThreadRegistry, estimate_tokens, fingerprint, prompt_size_text,
                        prompt_text, user_messages)
 from .stats import SERIES_WINDOW_SECONDS, Stats, UsageLedger, log_request
+from .utility import is_utility_path, is_utility_type, utility_text
 
 log = logging.getLogger("ripple")
 reqlog = logging.getLogger("ripple.request")
@@ -456,7 +457,17 @@ def _sse_json(event: bytes) -> dict | None:
             return obj
     return None
 
-PROXY_PATHS = ("v1/chat/completions", "v1/completions", "v1/embeddings")
+#: The paths RIPPLE forwards, and therefore the paths that get a route.
+#:
+#: `v1/rerank` is here without a bare `/rerank` alias (D2): the forwarder sends
+#: the path it received, so an alias would need a path map, and this oMLX build
+#: serves `/v1/rerank` — confirmed in its own OpenAPI document, not guessed. A
+#: wrong path would come back as the node's 404 *through* RIPPLE with
+#: `x-ripple-host` set, which reads like a RIPPLE failure. The same reason is
+#: why `UTILITY_PATHS` has to stay a subset of this tuple: a utility path that
+#: is not proxied is classified but unreachable.
+PROXY_PATHS = ("v1/chat/completions", "v1/completions", "v1/embeddings",
+               "v1/rerank")
 HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade",
               "proxy-authenticate", "proxy-authorization", "te", "trailer",
               "content-length", "content-encoding"}
@@ -2895,15 +2906,37 @@ class Ripple:
                                            "type": "invalid_request_error",
                                            "code": "model_not_found"}}, status_code=404)
         stream = bool(body.get("stream"))
-        # Two different texts, on purpose (issue #14): `text` is what the user
-        # wrote and stays the input of the prefix match; `prompt_tokens` is the
-        # size of the *whole* request — system prompt, history, tool schema —
-        # and is what decides "ephemeral", the prefill bias and the rebind cost.
-        # Sized from `text` alone, an 83 k-token Hermes turn looked like 27
-        # tokens.
-        text = prompt_text(body)
-        prompt_chars = len(text)
-        prompt_tokens = estimate_tokens(prompt_size_text(body))
+        # The request's class, decided once (issue #193). `admit()` and the
+        # new-thread gate cannot know it — they are told, so both admission
+        # paths answer from one predicate instead of drifting apart about one
+        # host. This step also uses it for the thread and slot decision.
+        #
+        # The path names the class on its own; a request for a model the node
+        # labels `embedding`/`reranker` is utility whatever path it arrived on.
+        # The type is a fact about the model, not about the node that wins, so
+        # any host that knows it answers for the request — asking only the
+        # eventual host would make the class depend on placement.
+        is_utility = is_utility_path(path) or any(
+            is_utility_type(h.model_type(model)) for h in self.fleet.hosts)
+
+        if is_utility:
+            # `utility_text()` feeds the log line and the decision ring, never
+            # placement (issue #193): an embedding has no prefix to price, so
+            # the prefill bias and the ephemeral gate must not read its input
+            # as a prompt. `prompt_tokens = 0` is what keeps them out.
+            text = utility_text(body)
+            prompt_chars = len(text)
+            prompt_tokens = 0
+        else:
+            # Two different texts, on purpose (issue #14): `text` is what the
+            # user wrote and stays the input of the prefix match;
+            # `prompt_tokens` is the size of the *whole* request — system
+            # prompt, history, tool schema — and is what decides "ephemeral",
+            # the prefill bias and the rebind cost. Sized from `text` alone, an
+            # 83 k-token Hermes turn looked like 27 tokens.
+            text = prompt_text(body)
+            prompt_chars = len(text)
+            prompt_tokens = estimate_tokens(prompt_size_text(body))
         self.stats.requests_total += 1
         # FA-14: the placement layer's own note for this request ("prefill bias
         # beta -0.29", "all hosts at spill_threshold", "evicts idle …"). It is
@@ -2919,7 +2952,21 @@ class Ripple:
         # this request may hold a slot at all (one-shot).
         kind = client_key.kind if client_key is not None else "interactive"
         one_shot = kind == "one-shot"
-        if one_shot:
+        # A utility request reserves nothing (issue #193). Decided once, so the
+        # first placement and the retry hop cannot disagree: a full slot account
+        # neither refuses a utility call nor evicts a conversation for it.
+        holds_slot = not one_shot and not is_utility
+        if is_utility:
+            # Classify by path before identity (issue #193): a utility call is
+            # not a conversation. `_identify()` would adopt an existing thread
+            # by the back door through the header or the prompt, and
+            # `register()` would reserve a slot for a prefix cache nothing will
+            # ever ask for again — the ghost thread this step removes. Nothing
+            # is registered here, so a request the node rejects (404, 500) leaves
+            # nothing behind either.
+            key, source, thread = None, "utility", None
+            self.stats.requests_utility += 1
+        elif one_shot:
             # A one-shot request never binds a thread and never takes a slot,
             # however large the prompt is. It also must not adopt an existing
             # thread — that would bind it by the back door and keep its cache
@@ -2932,7 +2979,12 @@ class Ripple:
             self.stats.requests_one_shot += 1
         else:
             key, source, thread = self._identify(request, body, model, text)
-        ephemeral = one_shot or self._is_ephemeral(body, prompt_tokens)
+        # A utility request is not ephemeral either (issue #193):
+        # `note_ephemeral()` would put it back into `_deficit` for the whole
+        # ephemeral window (60 s) after it finished, the tail this step exists
+        # to avoid. Its load is counted while it runs, by `inflight`, and not
+        # one second longer.
+        ephemeral = not is_utility and (one_shot or self._is_ephemeral(body, prompt_tokens))
 
         async with self._lock:
             if thread is not None and source == "prefix_match" and kind == "interactive":
@@ -2946,7 +2998,8 @@ class Ripple:
                     log.info("promote thread=%s batch->interactive", thread.label)
             if thread is not None:
                 host = self.fleet.get(thread.host)
-                ok, why = (admit(self.fleet, host, model) if host else (False, "host gone"))
+                ok, why = (admit(self.fleet, host, model, is_utility=is_utility)
+                           if host else (False, "host gone"))
                 if ok:
                     # The size of *this* request is the price of moving the
                     # thread: one prefill of the next prompt. The registry
@@ -2980,7 +3033,8 @@ class Ripple:
                             # destination that filled up between the fleet view
                             # and here must not receive a thread whose cache it
                             # would then throw away.
-                            dst_ok, dst_why = admit(self.fleet, target, model)
+                            dst_ok, dst_why = admit(self.fleet, target, model,
+                                                    is_utility=is_utility)
                             if dst_ok:
                                 self._note_migration(thread, target.cfg.name,
                                                      migration, now=moment)
@@ -3032,7 +3086,8 @@ class Ripple:
                     decision = choose(self.fleet, self.cfg, self.registry, model,
                                       thread_key=thread.key,
                                       exclude=frozenset({thread.host}),
-                                      prompt_tokens=prompt_tokens)
+                                      prompt_tokens=prompt_tokens,
+                                      is_utility=is_utility)
                     if decision.host is None:
                         return self._error(decision, model, t0, prompt_chars,
                                            thread.label,
@@ -3052,8 +3107,9 @@ class Ripple:
             else:
                 decision = choose(self.fleet, self.cfg, self.registry, model,
                                   thread_key=key or "", kind=kind,
-                                  holds_slot=not one_shot,
-                                  prompt_tokens=prompt_tokens)
+                                  holds_slot=holds_slot,
+                                  prompt_tokens=prompt_tokens,
+                                  is_utility=is_utility)
                 if decision.host is None:
                     return self._error(decision, model, t0, prompt_chars, None,
                                        prompt_tokens=prompt_tokens,
@@ -3081,19 +3137,28 @@ class Ripple:
                 # above.
                 if _evicts_idle(decision):
                     self.stats.evict_idle += 1
-                if one_shot:
+                if is_utility:
+                    # The class is the reason (issue #193): the call reserved
+                    # nothing, so how the node was picked says less than what
+                    # the request is.
+                    reason = "utility"
+                elif one_shot:
                     reason = "one_shot"
                 elif decision.reason in ("cold_load", "evict_idle", "model_pinned",
                                          "slot_evict", "degraded_host"):
                     reason = decision.reason
                 else:
                     reason = "new_thread" if not ephemeral else "ephemeral"
-                if ephemeral:
-                    # No slot, and the load signal is written when the request is
-                    # *done* (see the release below), not here: an entry noted at
-                    # dispatch expires after 60 s, and a request that generates
-                    # for 225 s then became invisible while it was still running
-                    # (issue #14, cause 3).
+                if is_utility or ephemeral:
+                    # Neither opens a thread: an ephemeral chat turn is too
+                    # short to keep, a utility call is not a chat turn at all.
+                    # For an ephemeral request the load signal is written when
+                    # the request is *done* (see the release below), not here:
+                    # an entry noted at dispatch expires after 60 s, and a
+                    # request that generates for 225 s then became invisible
+                    # while it was still running (issue #14, cause 3).
+                    # `note_ephemeral()` stays out of the utility case on
+                    # purpose — see `ephemeral` above.
                     thread = None
                 else:
                     thread = self.registry.register(
@@ -3138,13 +3203,14 @@ class Ripple:
             # cannot. One entry per dispatch, also for a retry hop — that is a
             # second attempt at a node, and the node did receive the request.
             self._request_times.append((time.time(), host.cfg.name, model))
-            if not host.acquire():
+            if not host.acquire(is_utility=is_utility):
+                budget = "max_inflight_utility" if is_utility else "max_inflight"
                 return self._error(None, model, t0, prompt_chars,
                                    thread.label if thread else None,
                                    prompt_tokens=prompt_tokens,
                                    client=client,
                                    thread_source=_thread_source(thread, source), status=503,
-                                   message=f"{host.cfg.name} at max_inflight")
+                                   message=f"{host.cfg.name} at {budget}")
             # Issue #18: the node is prefilling this model from here until the
             # first token, and generating after it. Counted on the host, so
             # /healthz can say what the machine is doing without asking it —
@@ -3177,7 +3243,7 @@ class Ripple:
                     # never streamed was prefilling for its whole life, and one
                     # that failed never reached a first token.
                     host.end_phase(model, PHASE_PP)
-                    host.release()
+                    host.release(is_utility=is_utility)
                     if thread is not None:
                         self.registry.leave(thread)
                     elif ephemeral:
@@ -3213,8 +3279,9 @@ class Ripple:
             decision = choose(self.fleet, self.cfg, self.registry, model,
                               thread_key=thread.key if thread else "",
                               exclude=frozenset(tried), kind=kind,
-                              holds_slot=not one_shot,
-                              prompt_tokens=prompt_tokens)
+                              holds_slot=holds_slot,
+                              prompt_tokens=prompt_tokens,
+                              is_utility=is_utility)
             if decision.host is None:
                 return self._error(None, model, t0, prompt_chars,
                                    thread.label if thread else None,
@@ -3269,7 +3336,8 @@ class Ripple:
                                                   strip_usage=strip_usage,
                                                   thread=thread,
                                                   ephemeral=ephemeral,
-                                                  status=status),
+                                                  status=status,
+                                                  is_utility=is_utility),
                                      status_code=status, media_type=media,
                                      headers=headers)
 
@@ -3472,7 +3540,7 @@ class Ripple:
     async def _stream(self, resp: httpx.Response, host: HostRuntime,
                       model: str, *, strip_usage: bool = False,
                       thread: Any = None, ephemeral: bool = False,
-                      status: int = 200) -> AsyncIterator[bytes]:
+                      status: int = 200, is_utility: bool = False) -> AsyncIterator[bytes]:
         """Pass the stream through event by event.
 
         Event framing (not raw chunks) is needed for two reasons: the first token
@@ -3531,7 +3599,7 @@ class Ripple:
             # `thread.active` was 0 while the request was still running, which
             # made a running thread an eviction candidate.
             host.end_phase(model, phase)
-            host.release()
+            host.release(is_utility=is_utility)
             if thread is not None:
                 self.registry.leave(thread)
             elif ephemeral:
@@ -3699,13 +3767,11 @@ class Ripple:
         `host.inflight` is the node's slot count, not a per-model figure: put
         that into `models[].hosts[]` and every model row of the node carries the
         same number, whatever the traffic — a busy model and an idle one are
-        indistinguishable in the `req` column. The phase bookkeeping (#18) is per
-        (host, model): `begin_phase` runs right after `acquire()` and
-        `end_phase` at the same release, so `pp + tg` is exactly this node's
-        in-flight requests split by the model they were dispatched for.
+        indistinguishable in the `req` column. The arithmetic lives on the host
+        (`HostRuntime.model_inflight`), because the preload forecast asks the same
+        question and two copies of one sum drift (issue #193).
         """
-        slot = host.phases.get(model) or {}
-        return int(slot.get(PHASE_PP, 0)) + int(slot.get(PHASE_TG, 0))
+        return host.model_inflight(model)
 
     def _requests_by_model(self, window_s: float | None = None) -> dict[str, dict[str, int]]:
         """Requests per (host, model) inside the served window (issue #91).
@@ -3774,6 +3840,25 @@ class Ripple:
                 f"({h.models_error or 'never read'})"
                 for h in self.fleet.hosts if h.model_list_unreadable]
 
+    def _model_type(self, model: str) -> str:
+        """What the fleet says `model` is, or `""` when no node labelled it.
+
+        A type is a fact about the model, not about the node that happens to win
+        a request (issue #193), so the first node that names one answers for the
+        model. The order is the fleet's own, not a vote: a node that says
+        `reranker` and one that says nothing still mean `reranker`, and two
+        nodes that disagree are reported per host in `/healthz → models[].hosts`
+        rather than averaged into a word neither of them said.
+
+        Never a guess: an unlabelled fleet yields `""`, the same honest answer
+        `HostRuntime.model_type()` gives for one node.
+        """
+        for h in self.fleet.hosts:
+            kind = h.model_type(model)
+            if kind:
+                return kind
+        return ""
+
     def _annotate_site(self, row: dict[str, Any], host_cfg: HostConfig) -> None:
         """Declared and derived site of one host (issue #67).
 
@@ -3839,6 +3924,12 @@ class Ripple:
                     "actual_size": info.actual_size,
                     "context_len": info.context_len,
                     "vision": info.vision,
+                    # What *this node* says the model is (issue #193): `llm`,
+                    # `embedding`, `reranker`. Per host, because the type is the
+                    # node's own claim — two nodes may label their copies
+                    # differently, and the row above carries the fleet's answer.
+                    # `""` when this node did not say; never a guess at `llm`.
+                    "type": h.model_type(mid),
                     "threads": self.registry.slots(h.cfg.name, mid),
                     # In flight for *this* model on *this* node — the `req`
                     # column reads it. Not `h.inflight`: that is the node's slot
@@ -3897,6 +3988,11 @@ class Ripple:
             entry["lock"] = self._locked(mid)
             entry["builtin"] = self._builtin(mid)
             entry["lock_reason"] = self._lock_reason(mid)
+            # What the model is (issue #193), one word for the row: the first
+            # node that named it answers, and the per-host rows keep each node's
+            # own claim. `""` when nobody labelled it — the page shows a chip
+            # only for a type it was actually told.
+            entry["type"] = self._model_type(mid)
             # The model-level availability the page paints (issue #116): routable
             # while at least one node holds it. A lock does not enter here either
             # — a locked model nobody has loaded is `locked, not resident`, and
@@ -4032,10 +4128,15 @@ class Ripple:
                     continue
                 if key is not None and not key.model_allowed(mid):
                     continue        # a key sees only what it may call
-                row = seen.setdefault(mid, {
-                    "id": mid, "object": "model", "owned_by": "ripple",
-                    "created": 0,
-                })
+                row = seen.get(mid)
+                if row is None:
+                    # `type` (issue #193) is what a client needs to tell a chat
+                    # model from an embedding or a reranker without calling it:
+                    # the node's own word, `""` when the node did not say.
+                    row = seen[mid] = {
+                        "id": mid, "object": "model", "owned_by": "ripple",
+                        "created": 0, "type": self._model_type(mid),
+                    }
                 if info.context_len:
                     row["max_model_len"] = max(row.get("max_model_len", 0),
                                                info.context_len)

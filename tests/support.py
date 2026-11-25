@@ -89,6 +89,10 @@ class StubModel:
     # A model oMLX refuses to load on its own (a drafter, a broken file). The
     # calibration has to skip it and keep measuring the others.
     load_fails: bool = False
+    # The source model this row is a profile of (issue #195). oMLX repeats the
+    # source's `actual_size` on the profile row, so the stub has to be able to
+    # say which rows are real.
+    source_model_id: str = ""
 
     def __post_init__(self) -> None:
         if self.actual_size is None:
@@ -106,6 +110,14 @@ class StubState:
     final_ceiling: int = CEILING
     current_model_memory: int | None = None
     chat_status: int = 200
+    # The status `/v1/embeddings` answers (issue #193). A node that rejects the
+    # call is the case that used to leave a ghost thread behind, so a test has
+    # to be able to force it.
+    embeddings_status: int = 200
+    # The status `/v1/rerank` answers (issue #193). Same reason: the failure
+    # case has to be forceable, and a node that rejects the call must leave
+    # nothing behind.
+    rerank_status: int = 200
     # What a non-streaming completion answers. Defaults keep the historical
     # fixture; a test that needs an empty answer (a reasoning model that spent
     # its whole budget, issue #82) sets both of these.
@@ -159,6 +171,12 @@ class StubState:
     # observations
     calls: dict[str, int] = field(default_factory=dict)
     chat_bodies: list[dict[str, Any]] = field(default_factory=list)
+    # What each `/v1/embeddings` call carried, in order (issue #193): a utility
+    # request must reach the node with the client's body untouched.
+    embeddings_bodies: list[dict[str, Any]] = field(default_factory=list)
+    # What each `/v1/rerank` call carried, in order (issue #193): the rerank body
+    # is the client's, and the node must see it byte for byte.
+    rerank_bodies: list[dict[str, Any]] = field(default_factory=list)
     auth_headers: list[str] = field(default_factory=list)
     load_calls: list[str] = field(default_factory=list)
     unload_calls: list[str] = field(default_factory=list)
@@ -324,7 +342,10 @@ def build_stub_app(state: StubState) -> FastAPI:
              "max_context_window": m.context_len, "engine_type": m.engine_type,
              "last_access": m.last_access,
              "is_loading": m.is_loading,
-             "loading_started_at": m.loading_started_at}
+             "loading_started_at": m.loading_started_at,
+             # oMLX emits this only on a profile row (issue #195); a real
+             # engine's row has no such key, so the stub omits it too.
+             **({"source_model_id": m.source_model_id} if m.source_model_id else {})}
             for m in state.models
         ]}
 
@@ -349,6 +370,58 @@ def build_stub_app(state: StubState) -> FastAPI:
             return StreamingResponse(_sse(state, body),
                                      media_type="text/event-stream")
         return _completion(state, body)
+
+    @app.post("/v1/embeddings")
+    async def embeddings(request: Request) -> Any:
+        """The embedding surface (issue #193): the path a utility request hits.
+
+        One item per string input, in the OpenAI shape. `embeddings_status` is
+        the knob the failure test needs — a node that rejects the call is
+        exactly the case that must leave no thread behind.
+        """
+        state.bump("embeddings")
+        body = await request.json()
+        state.embeddings_bodies.append(body)
+        if state.delay:
+            await asyncio.sleep(state.delay)
+        if state.embeddings_status >= 400:
+            return JSONResponse(
+                {"error": {"message": f"stub failure {state.embeddings_status}"}},
+                status_code=state.embeddings_status)
+        raw = body.get("input")
+        texts = [item for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
+        count = max(1, len(texts))
+        return {"object": "list",
+                "data": [{"object": "embedding", "index": i,
+                          "embedding": [0.0, 0.1]} for i in range(count)]}
+
+    @app.post("/v1/rerank")
+    async def rerank(request: Request) -> Any:
+        """The rerank surface (issue #193): a Cohere/Jina body, a Cohere answer.
+
+        oMLX serves this from its own `RerankerEngine`, on `/v1/rerank` — the
+        path is confirmed against that build's OpenAPI document, so the stub
+        answers on exactly that one and on no alias. `top_n` slices the results
+        the way the engine does, and `rerank_status` is the knob the failure
+        case needs.
+        """
+        state.bump("rerank")
+        body = await request.json()
+        state.rerank_bodies.append(body)
+        if state.delay:
+            await asyncio.sleep(state.delay)
+        if state.rerank_status >= 400:
+            return JSONResponse(
+                {"error": {"message": f"stub failure {state.rerank_status}"}},
+                status_code=state.rerank_status)
+        raw = body.get("documents")
+        texts = [item for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
+        results = [{"index": i, "relevance_score": round(0.9 - 0.1 * i, 3),
+                    "document": {"text": text}} for i, text in enumerate(texts)]
+        top_n = body.get("top_n")
+        if isinstance(top_n, int) and top_n > 0:
+            results = results[:top_n]
+        return {"results": results}
 
     @app.post("/v1/models/{model_id}/load")
     async def load(model_id: str):

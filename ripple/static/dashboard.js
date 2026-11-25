@@ -1864,6 +1864,22 @@ function policyControl(m, x, keyed) {
     ' onchange="modelPolicy(this)"' + (keyed ? '' : ' disabled') + '>' + opts + '</select>';
 }
 
+/* Was ein Modell ist (issue #193): oMLX nennt den Typ in `/v1/models`, und
+   `/healthz → models[].type` trägt ihn bis hierher. Nur die beiden Klassen, die
+   nie einen Thread halten, bekommen ein Abzeichen — `llm` ist der Normalfall
+   und braucht keins, und ein fehlender Typ ist keine Behauptung, sondern ein
+   leeres Feld. Der Typ entscheidet auch die Währung des Verteilungsblocks
+   (`distKey`), nicht die Zahl der gerade belegten Slots: ein Chat-Modell ohne
+   warmen Thread kann morgen einen haben, ein Embedding-Modell nie. */
+const TYPE_CHIP = {embedding: 'models.type_embedding',
+                   reranker: 'models.type_reranker'};
+const modelType = m => String((m && m.type) || '').toLowerCase();
+const isUtilityModel = m => !!TYPE_CHIP[modelType(m)];
+const typeChip = m => {
+  const id = TYPE_CHIP[modelType(m)];
+  return id ? '<span class="chip model-type">' + esc(t(id)) + '</span>' : '';
+};
+
 function modelRows(m, order, keyed) {
   const hosts = m.hosts.slice().sort((a, b) => (order.get(a.host) ?? 9) - (order.get(b.host) ?? 9));
   return hosts.map((x, i) => {
@@ -1889,7 +1905,7 @@ function modelRows(m, order, keyed) {
                 „hier nicht", grün für „hier ja". */
              nrIcon(x) +
              '<span class="model-line"><span class="model-name">' + esc(m.id) + '</span>' +
-             '</span></td>';
+             '</span>' + typeChip(m) + '</td>';
     }
     out += '<td class="node-cell" data-label="' + esc(t('models.th_node')) + '">' +
            '<span class="node-name">' + esc(x.host) + '</span>' +
@@ -1962,7 +1978,11 @@ function modelRows(m, order, keyed) {
     out += '<td class="num" data-label="' + esc(t('models.th_req')) + '">' +
            T('running', nf(x.inflight)) + '</td>';
     out += '<td class="num" data-label="' + esc(t('models.th_threads')) + '">' +
-           T('threads_m', nf(x.threads)) + '</td>';
+           /* Ein Embedding- oder Rerank-Modell hält nie einen Thread (issue
+              #193): `0` wäre hier keine Messung, sondern eine Zahl, die für
+              immer gleich bliebe. Der Strich sagt „gilt hier nicht"; bei einem
+              Chat-Modell bleibt die 0 eine echte Null. */
+           (isUtilityModel(m) ? '—' : T('threads_m', nf(x.threads))) + '</td>';
     /* Der Trenner zwischen geschätzter und gemessener Größe stand im dunkelsten
        Linienton und war auf dem Körper kaum zu sehen; er trägt jetzt die Farbe
        der Zahlen neben sich (#19). Nur im Körper — die Kopfzeile schreibt ihn
@@ -2222,6 +2242,18 @@ async function loadPolicyOrphans() {
    `thread share` (nicht `share`), daneben die Requests je (Knoten, Modell) im
    selben Fenster wie der Verlauf, und eine Zeile ohne Slot sagt mit
    `no warm thread`, warum ihr Balken fehlt. */
+/* D5 (issue #193): die zweite Währung für ein Modell, das **nie** einen Slot
+   hält. `embedding` und `reranker` belegen keinen Thread, also ist „Anteil an
+   den belegten Slots" für sie dauerhaft 0/0; gemessen wird stattdessen der
+   Anteil an den Anfragen im Fenster (`hosts[].requests_by_model`). Das Ziel
+   bleibt der Quotient der Gewichte, damit die Abweichung dieselbe Frage
+   beantwortet: „die Gewichte sagen 60/40, der Verkehr läuft 75/25".
+
+   Diese eine Funktion ist die Naht für D5b: die spätere Arbeits-Währung
+   (`work`, aus einer gemessenen Rate) ändert nur den Rückgabewert hier, nicht
+   das Zeilenrendering. */
+const distKey = m => isUtilityModel(m) ? 'requests' : 'slots';
+
 function renderDist(h, s) {
   const th = h.threads || {};
   const total = th.active || 0;
@@ -2267,6 +2299,10 @@ function renderDist(h, s) {
 
   return withWork.map(m => {
     const threadsHere = m.hosts.reduce((a, x) => a + (x.threads || 0), 0);
+    /* Welche Währung dieser Block spricht (D5) und, für `requests`, der Nenner:
+       alle Anfragen dieses Modells im Fenster über die Knoten. */
+    const key = distKey(m);
+    const reqTotal = m.hosts.reduce((a, x) => a + reqOf(m, x.host), 0);
     /* Ohne belegten Slot gibt es keinen Ist-Anteil: 0 / 0 ist keine Messung,
        sondern eine Division durch null. Dann steht hier der Satz, der das sagt,
        statt „Ist 100,0 %“ und „Ist 0,0 %“. Die Zeilen bleiben trotzdem stehen —
@@ -2283,18 +2319,40 @@ function renderDist(h, s) {
       .sort((a, b) => (order.get(a.host) ?? 9) - (order.get(b.host) ?? 9)).map(x => {
       const tShare = (th.target_share || {})[x.host] ?? 0;
       const aShare = (th.actual_share || {})[x.host] ?? 0;
-      const d = aShare - tShare;
       const reqs = reqOf(m, x.host);
-      /* Der Balken ist der Anteil an den *belegten* Slots; ohne einen einzigen
-         Slot gibt es nichts zu füllen. Dann sagt die Zelle selbst, warum. */
-      const track = threadsHere === 0
-        ? '<span class="dist-why">' + esc(t('dist.no_warm_thread')) + '</span>'
-        : `<span class="dtrack">${hostStripe(byName.get(x.host) || {name: x.host})}<i class="a" style="width:${(aShare * 100).toFixed(1)}%"></i><i class="tk" style="left:${(tShare * 100).toFixed(1)}%"></i></span>`;
-      const actual = threadsHere === 0 ? '—' : T('share_a', pct(aShare), true);
-      const delta = threadsHere === 0
-        ? '—'
-        : `<span class="delta ${Math.abs(d) > 0.1 ? 'off' : 'on'}"
-            data-tip="${esc(tipText('delta'))}">${signed(d)}</span>`;
+      /* Der Ist-Anteil kommt aus der Währung des Blocks: bei `slots` aus dem
+         Slot-Anteil des Servers, bei `requests` aus diesem Knoten geteilt
+         durch alle Anfragen des Modells im Fenster. Das Ziel bleibt in beiden
+         Fällen `target_share` — der Quotient der Gewichte. */
+      const share = key === 'requests'
+        ? (reqTotal > 0 ? reqs / reqTotal : 0)
+        : aShare;
+      const d = share - tShare;
+      const hasShare = key === 'requests' ? reqTotal > 0 : threadsHere > 0;
+      /* Der Balken ist der Ist-Anteil der Block-Währung: bei `slots` der Anteil
+         an den belegten Slots, bei `requests` der Anteil an den Anfragen im
+         Fenster. Ohne eine Messung gibt es nichts zu füllen: ein Slot-Modell
+         sagt dann, warum; ein Slot-loses Modell ohne Anfragen trägt den Strich. */
+      const track = hasShare
+        ? `<span class="dtrack">${hostStripe(byName.get(x.host) || {name: x.host})}<i class="a" style="width:${(share * 100).toFixed(1)}%"></i><i class="tk" style="left:${(tShare * 100).toFixed(1)}%"></i></span>`
+        : key === 'requests'
+          ? '<span class="dist-why">—</span>'
+          : '<span class="dist-why">' + esc(t('dist.no_warm_thread')) + '</span>';
+      const actualTip = key === 'requests'
+        ? t('dist.note_requests_key') + '  ' + t('common.source') +
+          ': /healthz → hosts[].requests_by_model'
+        : tipText('share_a');
+      const deltaTip = key === 'requests'
+        ? t('dist.note_requests_key') + '  ' + t('common.source') +
+          ': hosts[].requests_by_model − threads.target_share'
+        : tipText('delta');
+      const actual = hasShare
+        ? '<span class="tip flip" data-tip="' + esc(actualTip) + '">' + pct(share) + '</span>'
+        : '—';
+      const delta = hasShare
+        ? `<span class="delta ${Math.abs(d) > 0.1 ? 'off' : 'on'}"
+            data-tip="${esc(deltaTip)}">${signed(d)}</span>`
+        : '—';
       return `
         <div class="dist-row">
           <span class="dist-host" title="${esc(x.host)}">${esc(x.host)}</span>
@@ -2318,10 +2376,10 @@ function renderDist(h, s) {
           <span class="dist-name" title="${esc(m.id)}">${esc(m.id)}</span>
           <span class="dist-count">${T('slots_total', esc(t('dist.slots', {a: nf(threadsHere), b: nf(slotsTotal)})))}</span>
         </div>
-        ${threadsHere === 0 ? '<div class="dist-empty">' + t('dist.no_slots') + '</div>' : ''}
+        ${key === 'slots' && threadsHere === 0 ? '<div class="dist-empty">' + t('dist.no_slots') + '</div>' : ''}
         <div class="dist-cols" aria-hidden="true">
           <span class="dc"><b>${esc(t('dist.th_node'))}</b><span class="key">${esc(t('dist.th_node_sub'))}</span></span>
-          <span class="dc"><b>${esc(t('dist.th_share'))}</b><span class="key">${esc(t('dist.th_share_sub'))}</span></span>
+          <span class="dc"><b>${esc(t(key === 'requests' ? 'dist.th_share_requests' : 'dist.th_share'))}</b><span class="key">${esc(t('dist.th_share_sub'))}</span></span>
           <span class="dc num tip" data-tip="${esc(reqTip)}"><b>${esc(t('dist.th_req'))}</b><span class="key">${esc(t('dist.th_req_sub', {n: nf(win)}))}</span></span>
           <span class="dc num"><b>${esc(t('dist.th_target'))}</b><span class="key">%</span></span>
           <span class="dc num"><b>${esc(t('dist.th_actual'))}</b><span class="key">%</span></span>
@@ -2330,11 +2388,13 @@ function renderDist(h, s) {
         ${rows}
         <div class="dist-note tip" data-tip="${esc(t('dist.requests_tip') + '  ' + t('common.source') + ': /stats → by_host[].requests')}">
           ${esc(t('dist.requests_since', {list: reqLine}))}<br>
-          ${threadsHere === 0
-            ? t('dist.note_noslot')
-            : total <= 1
-              ? t('dist.note_one')
-              : esc(t('dist.note_many'))}
+          ${key === 'requests'
+            ? esc(t('dist.note_requests_key'))
+            : threadsHere === 0
+              ? t('dist.note_noslot')
+              : total <= 1
+                ? t('dist.note_one')
+                : esc(t('dist.note_many'))}
         </div>
       </div>`;
   }).join('');
@@ -3205,6 +3265,12 @@ function paramsTableLive(c, overrides, editable) {
         {path: hp + 'weight', kind: 'num', raw: host.weight});
     row(t('params.max'), fmtNum(host.max_inflight) + ' / ' + fmtNum(host.max_threads),
         {path: hp + 'max_inflight', why: restart});
+    /* The utility budget has a row of its own (issue #193): it is a second
+       admission cap, not a detail of the first, and `/config` sends the number
+       in effect (never null), so the cell needs no "follows max_inflight"
+       wording. Restart-bound like the cap it belongs to. */
+    row(t('params.max_utility'), fmtNum(host.max_inflight_utility),
+        {path: hp + 'max_inflight_utility', why: restart});
     row(t('params.spill'), fmtNum(host.spill_threshold),
         {path: hp + 'spill_threshold', kind: 'num', raw: host.spill_threshold});
     row(t('params.hard'), fmtNum(host.hard_threshold),

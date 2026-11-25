@@ -312,6 +312,13 @@ class HostRuntime:
     used_bytes_zero_ticks: int = 0
     guard_enabled: bool = False
     models: dict[str, ModelInfo] = field(default_factory=dict)
+    # What `/v1/models` said each id is (`model_type`: `llm`, `embedding`,
+    # `vlm`…), captured from the list `probe_capabilities()` already reads.
+    # `models` is replaced by the `/v1/models/status` answer on every probe, and
+    # that endpoint does not carry the field — without this map the type would
+    # be lost the moment a model is resident (issue #193). Rewritten on every
+    # probe; an absent id means the node did not say.
+    listed_types: dict[str, str] = field(default_factory=dict)
     # When `models` was last read from the node, and why the last attempt failed
     # (issue #53). An empty `models` alone cannot tell "the node does not carry
     # the model" from "the node never told us": the first is a permanent 404 for
@@ -326,6 +333,12 @@ class HostRuntime:
     relearn_due: bool = True
     rtt_ms: float | None = None
     inflight: int = 0
+    #: The same count for utility traffic — embeddings and reranks (issue #193).
+    #: Two counters, not one: `inflight` is what a conversation competes for, and
+    #: a bulk ingest filling it is the 503 the split budget exists to stop. Kept
+    #: beside `inflight` because `acquire()`/`release()` move one or the other,
+    #: never both.
+    inflight_utility: int = 0
     requests_total: int = 0
     errors_total: int = 0
     http_507_total: int = 0
@@ -357,11 +370,12 @@ class HostRuntime:
     # The load this host is running, if RIPPLE caused it:
     # {"model", "size_gb", "started_at", "eta_seconds", "source"}.
     loading: dict | None = None
-    # The preload pass this host owes (issue #119): a locked model is loaded
-    # without a request having to arrive first, once per healthy transition.
-    # Set on the transition, on the end of a maintenance window and at start-up;
-    # cleared by the tick that schedules the pass. A *failed* preload is a
-    # recorded state (`preloads`) and not a new flag — there is no retry loop.
+    # The preload pass this host owes (issue #119): a locked or pinned model is
+    # loaded without a request having to arrive first, once per healthy
+    # transition. Set on the transition, on the end of a maintenance window and
+    # at start-up; cleared by the tick that schedules the pass. A *failed*
+    # preload is a recorded state (`preloads`) and not a new flag — there is no
+    # retry loop, so a pin that cannot fit is reported once per transition.
     preload_due: bool = True
     # The last preload attempt per model (issue #119):
     # {model: {"model", "state", "reason", "size_gb", "started_at",
@@ -524,6 +538,16 @@ class HostRuntime:
             if nid:
                 self.node_id_seen = nid
                 self.identity_ok = True
+            if self.capabilities_seen is not None:
+                # The set this node last reported stands until the new backend
+                # has answered (issue #190): `Backend.capabilities` starts empty,
+                # so in the window between the swap and the re-read below the
+                # host would answer "can do nothing" — and a fleet recompute in
+                # that window (another node's change, an `add()`, the
+                # `_resolve_all()` pass itself) intersects the fleet down to
+                # nothing. `reinit()` drops the backend before it gets here, so
+                # the set has to come from the host and not from the old object.
+                backend.capabilities = self.capabilities_seen  # type: ignore[misc]
             self.backend = backend
             self.resolved_address = address
             self.resolved_at = time.time()
@@ -791,7 +815,15 @@ class HostRuntime:
         """
         if self.backend is None:
             return
-        caps, notes, _models = await probe_capabilities(self.backend, health=health)
+        caps, notes, listed = await probe_capabilities(self.backend, health=health)
+        # The list probe_capabilities() has just read is the only place the node
+        # says what each id *is* (`model_type`), and it used to be discarded
+        # right here. `models` is replaced by the residency answer on this same
+        # probe, and that answer does not carry the field — keeping the map is
+        # what lets `model_type()` answer without a second list request per
+        # probe (issue #193). Replaced wholesale: a type that disappeared from
+        # the node's list must not linger.
+        self.listed_types = {m.id: m.model_type for m in listed}
         previous = set(self.capability_notes)
         self.backend.capabilities = caps  # type: ignore[misc]
         self.capability_notes = notes
@@ -805,7 +837,7 @@ class HostRuntime:
         self._note_capabilities(caps)
 
     def _note_capabilities(self, caps: frozenset[str]) -> None:
-        """One line per change, and the fleet recomputes its intersection (#88).
+        """One line per change; the fleet recomputes on every read (#88, #190).
 
         `Fleet.capabilities` is the intersection every routing decision is
         checked against, and it used to be computed in `start()` and `add()` only.
@@ -813,20 +845,26 @@ class HostRuntime:
         matters is `residency`, because #80's eviction builds on it — therefore
         left the fleet on the old set until RIPPLE restarted.
 
-        The fleet is told from here, on the change and not on the poll: the node
-        has just answered, so this costs no request and no extra tick, and a node
-        that stays as it is says nothing. The first read is not a change — there
-        is nothing to compare it against — and a re-resolve that finds the same
-        set stays quiet for the same reason.
+        The fleet is told from here, on the read and not on the poll: the node
+        has just answered, so this costs no request and no extra tick.
+
+        **Every** read tells the fleet, the first one included (issue #190). A
+        node that was unresolvable when the process started never took part in
+        the intersection `_resolve_all()` built, so its first read is the moment
+        it becomes a member — and "the first read is not a change" left the fleet
+        empty for ever: both live nodes reported all six capabilities while
+        `/healthz` said `capabilities.*: false`, FA-18 off and RB-9 unverified.
+
+        Only the *line* stays bound to a real change: a node that keeps its set
+        says nothing, so a quiet fleet does not write on every transition.
         """
         before = self.capabilities_seen
         after = frozenset(caps)
         self.capabilities_seen = after
-        if before is None or before == after:
-            return
-        changed = " ".join(f"{c}={'on' if c in after else 'off'}"
-                           for c in sorted(before ^ after))
-        log.warning("capabilities changed host=%s %s", self.cfg.name, changed)
+        if before is not None and before != after:
+            changed = " ".join(f"{c}={'on' if c in after else 'off'}"
+                               for c in sorted(before ^ after))
+            log.warning("capabilities changed host=%s %s", self.cfg.name, changed)
         if self.fleet is not None:
             self.fleet._recompute_capabilities()
 
@@ -1114,13 +1152,30 @@ class HostRuntime:
         return float(min(max(seconds, MIN_LOAD_ESTIMATE_SECONDS), ld.max_seconds))
 
     # -- live counters -----------------------------------------------------
-    def acquire(self) -> bool:
+    def acquire(self, is_utility: bool = False) -> bool:
+        """Take a place in this request's own budget (issue #193).
+
+        Two budgets, two counters. `is_utility` is the class the caller already
+        decided (`is_utility_path()` / `is_utility_type()`), so this method does
+        not classify — it only counts, and refuses when the class's cap is spent.
+        The cap comes through `cfg.utility_budget`, which resolves the declared
+        `None` to `max_inflight`, so an unconfigured host is unchanged.
+        """
+        if is_utility:
+            if self.inflight_utility >= self.cfg.utility_budget:
+                return False
+            self.inflight_utility += 1
+            return True
         if self.inflight >= self.cfg.max_inflight:
             return False
         self.inflight += 1
         return True
 
-    def release(self) -> None:
+    def release(self, is_utility: bool = False) -> None:
+        """Give the place back to the budget it came from — never below zero."""
+        if is_utility:
+            self.inflight_utility = max(0, self.inflight_utility - 1)
+            return
         self.inflight = max(0, self.inflight - 1)
 
     # -- drain (issue #70) --------------------------------------------------
@@ -1191,6 +1246,22 @@ class HostRuntime:
         if slot.get("tg"):
             return PHASE_TG
         return None
+
+    def model_inflight(self, model: str) -> int:
+        """Requests RIPPLE has in flight for `model` on this node — nothing else.
+
+        `inflight` is the node's slot count: it says that *something* runs here,
+        not what. The phase bookkeeping is per (host, model) — `begin_phase`
+        runs right after `acquire()` and `end_phase` at the same release — so
+        `pp + tg` is exactly this node's in-flight requests for one model. This
+        is the number `/healthz` reports as `models[].hosts[].inflight`.
+
+        A preload asks it to leave a serving model alone (issue #193): the
+        host-wide counter would make every preload refuse while any other
+        request runs, which is the opposite of a preload's job.
+        """
+        slot = self.phases.get(model) or {}
+        return int(slot.get(PHASE_PP, 0)) + int(slot.get(PHASE_TG, 0))
 
     @property
     def phase(self) -> str | None:
@@ -1518,6 +1589,25 @@ class HostRuntime:
         return bool(info is not None
                     and info.engine_type.strip().lower() in VIRTUAL_ENGINES)
 
+    def model_type(self, model: str) -> str:
+        """What the node says `model` is: `llm`, `embedding`, `vlm`… (issue #193).
+
+        Two sources, one fact, and a fixed precedence: a fresh `ModelInfo` wins,
+        the list map is the fallback. The order is not cosmetic — `models` is
+        replaced by the `/v1/models/status` answer on every probe, and that
+        endpoint does not carry `model_type`, so the map is what keeps the type
+        alive once a model is resident. On a version whose status answer *does*
+        carry it, the map is simply never consulted.
+
+        Both are rewritten on every probe, so neither can outlive the answer it
+        came from. An empty string is "the node did not say" — never a guess at
+        `llm`.
+        """
+        info = self.models.get(model)
+        if info is not None and info.model_type:
+            return info.model_type
+        return self.listed_types.get(model, "")
+
     # -- preload forecast (issue #119) --------------------------------------
     def preload_forecast(self, model: str) -> tuple[list[str], str | None]:
         """What loading `model` here would displace — or why it cannot fit.
@@ -1528,7 +1618,13 @@ class HostRuntime:
         preload of a *locked* model is allowed to displace an unlocked one —
         that is the operator's intent, the lock is the promise that the model is
         there — but a second locked or pinned model is never taken for it, and
-        the operator has to hear about both outcomes.
+        neither is one that is serving a request (issue #193): unloading a model
+        mid-request is not a cost the operator agreed to when the lock was set.
+        The operator has to hear about every outcome.
+
+        The in-flight test is per model (`model_inflight`), not the node's
+        `inflight`: a preload on a node that happens to be answering a request
+        for some *other* model is exactly the case a preload exists for.
 
         Returns `(evicts, None)` when the load fits (evicting `evicts` first),
         `([], None)` when there is no forecast to make (unknown size, no ceiling,
@@ -1548,6 +1644,7 @@ class HostRuntime:
         evicts: list[str] = []
         blocked_locked: list[str] = []
         blocked_pinned: list[str] = []
+        blocked_busy: list[str] = []
         remaining = needed
         for m in sorted(loaded, key=lambda entry: entry.last_access or 0.0):
             if remaining <= target:
@@ -1557,6 +1654,11 @@ class HostRuntime:
                 continue
             if m.pinned:
                 blocked_pinned.append(m.id)
+                continue
+            if self.model_inflight(m.id) > 0:
+                # The model is answering right now (issue #193). A lock may cost
+                # an idle model its residency, never a request its stream.
+                blocked_busy.append(m.id)
                 continue
             evicts.append(m.id)
             remaining -= m.estimated_size or 0
@@ -1573,6 +1675,8 @@ class HostRuntime:
             reason += f"; {', '.join(blocked_locked)} is locked and cannot be evicted"
         if blocked_pinned:
             reason += f"; {', '.join(blocked_pinned)} is pinned on the node"
+        if blocked_busy:
+            reason += f"; {', '.join(blocked_busy)} is serving a request"
         return evicts, reason
 
     def note_preload(self, model: str, *, state: str, reason: str | None = None,
@@ -1629,6 +1733,14 @@ class HostRuntime:
         `actual_size` after the load — the number the card shows, because it is
         the only one that was measured rather than configured.
 
+        A row with a `source_model_id` is a *profile* of another model
+        (`X:agent`, `X:think-1m`): oMLX builds it as a copy of the source
+        model's status, so it repeats that engine's `actual_size` while
+        occupying no memory of its own. Counting it would charge one engine
+        once per profile and could put the card above the ceiling while
+        oMLX's own number sat at 40 % (issue #195). Only the payload's field
+        decides this — never the id's shape.
+
         A model without an `actual_size` contributes nothing (it is skipped, not
         counted as zero), and a reported zero *is* a contribution: a resident
         model that occupies nothing (a tokenizer-only entry) must not make the
@@ -1637,7 +1749,8 @@ class HostRuntime:
         `used_bytes`.
         """
         sizes = [m.actual_size for m in self.models.values()
-                 if m.loaded and m.actual_size is not None]
+                 if m.loaded and m.actual_size is not None
+                 and not m.source_model_id]
         if not sizes:
             return None
         return sum(sizes)
@@ -1738,6 +1851,10 @@ class HostRuntime:
             "used_bytes_measured": self.used_bytes_measured(),
             "used_ratio": used_ratio,
             "inflight": self.inflight,
+            # The other budget (issue #193): what a 503 naming
+            # `max_inflight_utility` is about, and the number that shows a
+            # backfill running beside a conversation instead of instead of it.
+            "inflight_utility": self.inflight_utility,
             # What the node is doing right now (issue #18): `pp` between dispatch
             # and the first token, `tg` while tokens stream, None when idle. The
             # aggregate over this node's models — prefill wins over decode.
@@ -1999,12 +2116,14 @@ class Fleet:
             await host._poll_loading()
 
     async def _preload_host(self, host: HostRuntime) -> None:
-        """One preload pass over a host's locked models — the whole of #119.
+        """One preload pass over a host's locked and pinned models — #119, D4.
 
         Triggered by the transition into a healthy verdict, by the end of a
         maintenance window and once at start-up. The gates, in this order: the
         node has to be an oMLX one that answers, no other load may be running,
-        the model has to be locked, on the node, permitted by the allow-list and
+        the model has to be locked *or pinned on the node* (`pin` in oMLX means
+        "keep it resident", so RIPPLE preloads it the way it preloads a lock —
+        D4, decided 2026-11-24), on the node, permitted by the allow-list and
         the policy, not a builtin, not resident and not already loading. Then the
         forecast decides whether it fits; a model that does not fit is a recorded
         failure and **not** an attempt.
@@ -2042,7 +2161,13 @@ class Fleet:
         # of a maintenance window), and "loaded" from ten minutes ago is not
         # evidence about the node that was just handed back.
         await host._read_models()
-        for model in self.policy.locked_models():
+        # Locks ∪ pins (D4): a lock is the operator's promise in RIPPLE's own
+        # file, a pin is oMLX's own "keep it resident" — both mean the model has
+        # to be there without a request. Read from the answer just fetched, so a
+        # pin cleared in oMLX is not acted on from memory.
+        wanted = set(self.policy.locked_models())
+        wanted.update(mid for mid, info in host.models.items() if info.pinned)
+        for model in sorted(wanted):
             if host.loading is not None:
                 break
             info = host.models.get(model)
@@ -2082,7 +2207,7 @@ class Fleet:
 
     async def _preload_one(self, host: HostRuntime, model: str, *,
                            size_gb: float | None, evicts: list[str]) -> None:
-        """Load one locked model, report what it displaced, settle the state.
+        """Load one locked or pinned model, report what it displaced, settle the state.
 
         The load itself is oMLX's `POST /v1/models/{id}/load`, which blocks until
         the model is resident on the instances measured so far. What it *does*

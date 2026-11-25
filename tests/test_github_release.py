@@ -77,3 +77,95 @@ def test_a_failed_upload_is_not_reported_as_success(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         mod.upload_pdf("v0.2.1", pdf)
     assert "boom" in str(exc.value)
+
+# --- the notes cite the internal board, the reader is on GitHub (#188) ------
+
+def test_a_mapped_reference_points_at_the_github_number():
+    mod = _module()
+    text = "**The admin key** (issue #158) is shown once."
+    out, dropped = mod.translate_refs(text, {158: 13})
+    assert out == "**The admin key** (#13) is shown once."
+    assert dropped == []
+
+
+def test_an_unmapped_reference_is_dropped_not_left_dangling():
+    mod = _module()
+    text = "**The weight question** (issue #169) explains nothing."
+    out, dropped = mod.translate_refs(text, {158: 13})
+    assert out == "**The weight question** explains nothing."
+    assert dropped == [169]
+
+
+def test_a_list_of_issues_is_translated_as_a_whole():
+    mod = _module()
+    out, _ = mod.translate_refs("Both (issues #157, #158) are fixed.",
+                                {157: 16, 158: 13})
+    assert out == "Both (#16, #13) are fixed."
+
+
+def test_a_list_keeps_only_the_numbers_that_have_a_mirror():
+    mod = _module()
+    out, dropped = mod.translate_refs("Both (issues #157, #169) are fixed.", {157: 16})
+    assert out == "Both (#16) are fixed."
+    assert dropped == [169]
+
+
+def test_prose_that_mentions_an_issue_keeps_its_shape():
+    mod = _module()
+    out, _ = mod.translate_refs("see issue #157 for why", {157: 16})
+    assert out == "see #16 for why"
+
+
+def test_a_release_candidate_is_a_prerelease():
+    """The word that keeps a candidate out of `latest` (25.11.2026).
+
+    `latest` is what the manual link in every final release resolves to, so a
+    candidate that took that slot would hand its manual to everyone clicking the
+    link in 0.2.3's notes.
+    """
+    mod = _module()
+    for version in ("0.2.4rc1", "1.0.0b2", "2.0.0-alpha", "0.3.0-rc.1", "0.1.0dev"):
+        assert mod.is_prerelease(version), version
+    for version in ("0.2.3", "0.2.4", "1.0.0", "1.3"):
+        assert not mod.is_prerelease(version), version
+
+
+def test_a_candidate_links_its_own_manual():
+    """`latest/download` skips pre-releases — so a candidate links its tag."""
+    mod = _module()
+    candidate = mod.manual_line("0.2.4rc1")
+    assert "/releases/download/v0.2.4rc1/" in candidate, candidate
+    assert "release candidate" in candidate, candidate
+    final = mod.manual_line("0.2.4")
+    assert "/releases/latest/download/" in final, final
+
+
+def test_a_release_without_a_map_is_said_out_loud():
+    """A version whose map is missing keeps the internal numbers — and the tool
+    says so, instead of pretending the notes are ready."""
+    mod = _module()
+    assert mod.load_map("0.0.0-nope") == {}
+
+
+def test_the_map_of_this_release_is_readable():
+    mod = _module()
+    mapping = mod.load_map("0.2.3")
+    assert mapping.get(158) == 13
+    assert mapping.get(187) == 45
+    assert len(mapping) == 34
+
+def test_a_bare_number_in_prose_is_translated_too():
+    mod = _module()
+    out, _ = mod.translate_refs("the behaviour change in #157 was a defect", {157: 16})
+    assert out == "the behaviour change in #16 was a defect"
+
+
+def test_translating_twice_changes_nothing_the_second_time():
+    """The tool regenerates the notes from CHANGELOG.md on every run; the
+    translation must not drift if it is applied to its own output."""
+    mod = _module()
+    once, _ = mod.translate_refs("**X** (issue #158), see #157 and (#43).",
+                                 {158: 13, 157: 16})
+    twice, dropped = mod.translate_refs(once, {158: 13, 157: 16})
+    assert once == twice
+    assert dropped == []

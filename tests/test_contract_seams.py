@@ -118,6 +118,25 @@ async def test_absent_loading_signals_stay_unknown_not_false(stub_factory):
     assert residency["big"].loading_started_at is None
 
 
+async def test_a_profile_row_carries_its_source_model_id(stub_factory):
+    """`source_model_id` arrives on a profile row and stays empty on an engine.
+
+    oMLX emits the field only on a profile (`X:agent`), so the parsing must not
+    infer it from the id's colon — a model legitimately named with one is still
+    a real engine (issue #195).
+    """
+    stub = stub_factory(models=[
+        StubModel(id="X", loaded=True, estimated_size=112 * 10**9),
+        StubModel(id="X:agent", loaded=True, estimated_size=112 * 10**9,
+                  source_model_id="X"),
+    ])
+    async with httpx.AsyncClient() as client:
+        residency = await (OmlxBackend(stub.url, client=client)).residency()
+    assert residency is not None
+    assert residency["X:agent"].source_model_id == "X"
+    assert residency["X"].source_model_id == ""
+
+
 # -- admin surface ----------------------------------------------------------
 async def test_calibration_endpoints_are_mounted_and_need_the_admin_key(
         ripple_factory, stub_factory, tmp_path):

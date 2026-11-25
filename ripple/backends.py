@@ -55,12 +55,25 @@ class ModelInfo:
     # decides what an engine type means (`Host.model_builtin`, issue #118). An
     # empty string is "the node did not say", never "an ordinary model".
     engine_type: str = ""
+    # What the node says the id *is*, from `/v1/models` (`llm`, `embedding`,
+    # `vlm`…). Kept apart from `engine_type` on purpose: `engine_type` names the
+    # engine that serves the id, `model_type` the request class — and a model is
+    # routed as a utility model by the latter (issue #193). Empty is "the node
+    # did not say", never "an ordinary llm".
+    model_type: str = ""
     last_access: float | None = None
     # oMLX's own loading signals (`/v1/models/status`). None = the backend does
     # not report them, which is not the same as "not loading" — a caller must
     # treat None as "unknown", never as false.
     is_loading: bool | None = None
     loading_started_at: float | None = None   # epoch seconds, oMLX's clock
+    # The model this row is a *profile* of (`X:agent`, `X:think-1m`). oMLX
+    # builds a profile row by copying the source model's status dict, so the
+    # row repeats the base engine's `actual_size` although it occupies no
+    # memory of its own — the measured sum has to know which rows are real
+    # (issue #195). Empty means "a real engine": only the payload's own field
+    # is trusted, never the id's shape.
+    source_model_id: str = ""
 
 
 @dataclass
@@ -166,6 +179,7 @@ class OmlxBackend(Backend):
                 context_len=_as_int(m.get("max_model_len")),
                 vision=str(m.get("model_type", "")).lower() in ("vlm", "vision"),
                 engine_type=str(m.get("engine_type") or ""),
+                model_type=str(m.get("model_type") or ""),
             ))
         return out
 
@@ -195,9 +209,17 @@ class OmlxBackend(Backend):
                 vision=str(m.get("engine_type", "")).lower() in ("vlm", "vision")
                 or str(m.get("model_type", "")).lower() in ("vlm", "vision"),
                 engine_type=str(m.get("engine_type") or ""),
+                # Some oMLX versions carry the field here too. When they do,
+                # this is the fresher answer and `Host.model_type()` prefers it;
+                # when they do not, the list map kept by the host still answers
+                # (issue #193).
+                model_type=str(m.get("model_type") or ""),
                 last_access=_as_float(m.get("last_access")),
                 is_loading=_as_bool_opt(m.get("is_loading")),
                 loading_started_at=_as_float(m.get("loading_started_at")),
+                # Only a profile row carries this; a real engine does not
+                # (issue #195).
+                source_model_id=str(m.get("source_model_id") or ""),
             )
         return out
 

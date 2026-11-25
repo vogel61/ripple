@@ -158,7 +158,8 @@ def _host(name: str, **row) -> dict:
         "version": "0.8.0", "guard_enabled": True, "hard_threshold": 0.95,
         "ceiling_bytes": None, "used_bytes": None, "used_bytes_measured": None,
         "used_ratio": None, "inflight": 0, "phase": None, "phase_switches": 0,
-        "max_inflight": 6, "spill_threshold": 4, "thread_slots": 0,
+        "max_inflight": 6, "max_inflight_utility": 6, "inflight_utility": 0,
+        "spill_threshold": 4, "thread_slots": 0,
         "max_threads": 20, "target_threads": 0.0, "rtt_ms": None,
         "errors_total": 0, "http_507_total": 0, "requests_total": 0,
         "last_error": None, "last_seen": None, "models_available": 0,
@@ -314,8 +315,8 @@ def healthz(now: float | None = None, commit: str = "0000000",
         # resident, one whose promise no node can keep (#126).
         "locks": sorted([ATLAS32, ATLAS140]),
         "fleet": {"overlay_file": "~/.ripple/fleet.yaml", "overlay_persist": True,
-                  "overlay_error": None, "overlay_hosts": [NODE_C],
-                  "overlay_overrides": {NODE_B: ["weight"]}, "drain_seconds": 120.0},
+                  "overlay_error": None, "overlay_hosts": [],
+                  "overlay_overrides": {}, "drain_seconds": 120.0},
         "requests_window_seconds": 900.0,
         "threads": {
             "active": 6,
@@ -545,7 +546,7 @@ def stats(now: float | None = None) -> dict:
 
 # ── /config ─────────────────────────────────────────────────────────────────
 def config() -> dict:
-    return {
+    view = {
         "source": "config.yaml",
         "listen": "127.0.0.1:8010",
         "log_level": "info",
@@ -559,7 +560,8 @@ def config() -> dict:
              "site_name": "Hub", "site_networks": ["192.0.2.0/24"],
              "backend": "omlx", "enabled": True, "weight": 3.0, "share": 0.6,
              "addresses": ["http://" + ADDR_A], "node_id": ID_A,
-             "max_inflight": 6, "max_threads": 20, "spill_threshold": 4,
+             "max_inflight": 6, "max_inflight_utility": 6,
+             "max_threads": 20, "spill_threshold": 4,
              "hard_threshold": 0.95, "prefer_resident": True, "pp_tps": PP_A,
              "tg_tps": TG_A, "models": [], "api_key": "set",
              "replication": {"address": "not configured", "ssh_user": "not configured",
@@ -568,18 +570,10 @@ def config() -> dict:
              "site_name": "Lab", "site_networks": ["198.51.100.0/24"],
              "backend": "omlx", "enabled": True, "weight": 2.0, "share": 0.4,
              "addresses": ["http://" + ADDR_B], "node_id": ID_B,
-             "max_inflight": 6, "max_threads": 20, "spill_threshold": 3,
+             "max_inflight": 6, "max_inflight_utility": 6,
+             "max_threads": 20, "spill_threshold": 3,
              "hard_threshold": 0.95, "prefer_resident": True, "pp_tps": PP_B,
              "tg_tps": TG_B, "models": [], "api_key": "set",
-             "replication": {"address": "not configured", "ssh_user": "not configured",
-                             "model_roots": [], "api_key": "none"}},
-            {"name": NODE_C, "role": "worker", "source": "overlay", "site": "hub",
-             "site_name": "Hub", "site_networks": ["192.0.2.0/24"],
-             "backend": "omlx", "enabled": True, "weight": 1.0, "share": 0.0,
-             "addresses": ["http://" + ADDR_C], "node_id": ID_C,
-             "max_inflight": 6, "max_threads": 20, "spill_threshold": 4,
-             "hard_threshold": 0.95, "prefer_resident": True, "pp_tps": None,
-             "tg_tps": None, "models": [], "api_key": "set",
              "replication": {"address": "not configured", "ssh_user": "not configured",
                              "model_roots": [], "api_key": "none"}},
         ],
@@ -638,6 +632,16 @@ def config() -> dict:
                   "flush_seconds": 30.0},
         "warnings": [],
     }
+    # Die Anteile werden gerechnet, nicht getippt: `weight / sum(weight)` über
+    # die Knoten der Flotte — genau `Config.target_share`. Eine Zahl, die von
+    # Hand neben einem Gewicht steht, ist die Art Zeile, die still falsch wird;
+    # im Handbuchbild stand `node-c · 1 → 0.0 %` (24.11.2026), und ein Knoten,
+    # der nicht in der Flotte ist, gehört ohnehin nicht in diese Tabelle.
+    enabled = [h for h in view["hosts"] if h["enabled"]]
+    total = sum(h["weight"] for h in enabled) or 1.0
+    for host in view["hosts"]:
+        host["share"] = round(host["weight"] / total, 4) if host["enabled"] else 0.0
+    return view
 
 
 # ── GET /admin/models ───────────────────────────────────────────────────────

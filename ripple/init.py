@@ -356,9 +356,9 @@ class Node:
     #: which is which (issue #157).
     offered: list[tuple[str, str]] = field(default_factory=list)
     #: The operator answered the models question with the offered default (an
-    #: empty line). The allow-list is then the chat-capable models — decided as
-    #: soon as the list is readable, which needs the oMLX key, and said out loud
-    #: when it is decided (`_resolve_models`).
+    #: empty line). The allow-list is then every offered model, utility engines
+    #: included — decided as soon as the list is readable, which needs the oMLX
+    #: key, and said out loud when it is decided (`_resolve_models`).
     models_by_default: bool = False
 
 
@@ -447,8 +447,9 @@ def _split_list(raw: str) -> list[str]:
 # ---------------------------------------------------------------------------
 #: `model_type` values oMLX reports for something a chat thread can be sent to.
 #: Anything else it *names* (measured: `embedding`, `markitdown`) is a utility
-#: engine: legitimate — MarkItDown converts documents — but not a thread to
-#: balance, so it needs an explicit opt-in.
+#: engine: legitimate — MarkItDown converts documents — and routed like any
+#: other model (issue #193); the type is what `init` reads to say which of the
+#: offered models it included and why.
 CHAT_MODEL_TYPES = frozenset({"llm", "chat", "vlm", "vision", "text", "completion"})
 
 #: The one answer that keeps an allow-list empty on purpose: "really all of
@@ -529,28 +530,27 @@ def _resolve_models(node: Node, out: Callable[[str], None]) -> bool:
 
     One line per node, and only where the answer was the default or "all": a
     list the operator typed is written exactly as typed and needs no comment.
+    The default is every offered model, utility engines included — an
+    allow-list that left them out would refuse a call the node answers.
     Returns True when this call decided the allow-list.
     """
     if not node.offered:
         return False
-    chat = [mid for mid, kind in node.offered if _is_chat_model(kind)]
     utility = [(mid, kind) for mid, kind in node.offered if not _is_chat_model(kind)]
 
     if node.models_by_default:
         node.models_by_default = False
-        if chat:
-            node.models = chat
-            if utility:
-                out(f"node {node.name}: allow-list = {len(chat)} chat-capable "
-                    f"model(s); left out {len(utility)} that are not chat "
-                    f"models: {_named_utility(utility)} — name them (or answer "
-                    f"`{ALL_MODELS}`) to route them")
-            else:
-                out(f"node {node.name}: allow-list = all {len(chat)} offered "
-                    f"model(s), every one of them chat-capable")
-            return True
-        # Nothing chat-capable was offered: the empty answer cannot be narrowed,
-        # so it stays empty — and that is exactly the case that has to be said.
+        node.models = [mid for mid, _kind in node.offered]
+        if utility:
+            out(f"node {node.name}: allow-list = all {len(node.offered)} "
+                f"offered model(s), including {len(utility)} that are not "
+                f"chat models: {_named_utility(utility)} — included because "
+                f"an embedding or conversion call must reach the model the "
+                f"node lists")
+        else:
+            out(f"node {node.name}: allow-list = all {len(node.offered)} "
+                f"offered model(s), every one of them chat-capable")
+        return True
     if not node.models:
         detail = (f", including {len(utility)} that are not chat models: "
                   f"{_named_utility(utility)}" if utility else "")
@@ -968,13 +968,13 @@ def _ask_node_detail(index: int, total: int, node: Node, options: Options,
     label = f"node {index}/{total} ({', '.join(node.addresses)})"
     node.name = prompter.text(f"{label} name", node.name) or node.name
     node.weight = _ask_weight(prompter, f"{label} weight", node.weight)
-    # The default is the chat-capable models, not the empty list (issue
-    # #157): an empty allow-list is the widest possible statement — every
-    # model the node offers becomes routable, including oMLX's utility
-    # engines (`markitdown`, `embedding`), which are not threads to balance.
-    # The list itself needs the oMLX key to be read, so the answer is
-    # settled in `_fill_models` once the key is known; `models_by_default`
-    # carries "the operator took the default" that far.
+    # The default is every offered model, not the empty list (issue #157,
+    # and #193 for the utility engines): an empty allow-list is the widest
+    # possible statement — every model the node offers *and every model added
+    # later* becomes routable — so it is no longer what an empty answer means.
+    # The list itself needs the oMLX key to be read, so the answer is settled
+    # in `_fill_models` once the key is known; `models_by_default` carries
+    # "the operator took the default" that far.
     # `all` is the documented way to keep the list empty on purpose.
     if node.models:
         out(f"{label}: {len(node.models)} model(s) offered")
@@ -983,11 +983,10 @@ def _ask_node_detail(index: int, total: int, node: Node, options: Options,
     # default is settled later, which is the same decision, said later.
     if options.omlx_key:
         _read_offered(node, options.omlx_key)
-    default_models = ", ".join(mid for mid, kind in node.offered
-                               if _is_chat_model(kind))
-    raw = prompter.text(f"{label} models (comma separated; empty = the "
-                        f"chat-capable ones, `{ALL_MODELS}` = every model "
-                        f"the node offers)", default_models)
+    default_models = ", ".join(mid for mid, _kind in node.offered)
+    raw = prompter.text(f"{label} models (comma separated; empty = every "
+                        f"model the node offers, `{ALL_MODELS}` = leave the "
+                        f"list open for models added later)", default_models)
     typed = _split_list(raw)
     if len(typed) == 1 and typed[0].lower() == ALL_MODELS:
         node.models, node.models_by_default = [], False
@@ -1354,12 +1353,12 @@ def _fill_models(nodes: list[Node], api_key: str,
     model list, and decide the allow-list where the operator took the default
     (issue #157).
 
-    The default is the chat-capable models, not the whole list. An empty
-    allow-list is the widest possible statement — every model the node offers
-    becomes routable, utility engines included — so it is no longer what an
-    empty answer means; `all` is. A list the operator typed is left exactly as
-    typed, and a node whose allow-list is empty on purpose keeps the list open
-    for models added later.
+    The default is every offered model, utility engines included: a node that
+    lists an embedding model answers `/v1/embeddings` for it, and an allow-list
+    that left it out would refuse a call the node serves. The empty allow-list
+    is still the widest statement — it also covers models added later — so it
+    stays what `all` means, not what an empty answer means. A list the operator
+    typed is left exactly as typed.
     """
     for node in nodes:
         key = node.api_key or api_key

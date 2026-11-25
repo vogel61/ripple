@@ -24,7 +24,8 @@ import logging
 from ripple.config import HostConfig, PlacementConfig
 from ripple.hosts import CURVE_MIN_BUCKETS, HostRuntime
 
-from tests.support import (host_config, host_row, make_config, stub_model_loaded)
+from tests.support import (closed_port, host_config, host_row, make_config,
+                           stub_model_loaded)
 
 OLD = "0.8.0rc1"
 NEW = "0.8.0"
@@ -462,3 +463,143 @@ async def test_an_unchanged_capability_note_is_logged_once(
              if r.getMessage().startswith("capability host=")]
     assert len(lines) == len(notes), lines
     assert all(host.cfg.name in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# 13. A node that only resolves after start-up joins the intersection (#190)
+# ---------------------------------------------------------------------------
+async def test_a_node_that_resolves_late_joins_the_fleet_intersection(
+        stub_factory, ripple_factory, caplog):
+    """The start-up read is a node's first read *and* the fleet's only chance.
+
+    Measured on the live instance 24.11.2026: neither node was resolvable when
+    the process started (oMLX was still coming up, `unresolved host=… node_id
+    unreadable`), so `_resolve_all()` built an empty intersection. Both nodes
+    resolved minutes later and reported all six capabilities — and the fleet
+    stayed empty for ever, because the first read of a node was "not a change"
+    and never told the fleet. `/healthz` then showed `capabilities.*: false`
+    while every host row listed six: FA-18 off, RB-9 unverified, no restart
+    that would fix it short of one that is not allowed to happen.
+    """
+    a = stub_factory(models=[stub_model_loaded("m1")])
+    cfg = make_config([host_config("A", f"http://127.0.0.1:{closed_port()}",
+                                   node_id=a.state.node_id)])
+    harness = await ripple_factory(cfg)
+    host = harness.host("A")
+
+    # At start-up there is nothing to intersect: the node never answered.
+    assert host.backend is None
+    assert harness.ripple.fleet.capabilities == frozenset()
+    assert (await harness.healthz())["capabilities"]["residency"] is False
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="ripple.hosts"):
+        host.cfg.addresses[:] = [a.url]      # the node answers from now on
+        await host.refresh()                 # no restart, one discovery tick
+
+    assert host.status == "healthy"
+    assert "residency" in host.capabilities
+    assert set(harness.ripple.fleet.capabilities) == set(host.capabilities)
+    caps = (await harness.healthz())["capabilities"]
+    assert caps["residency"] is True
+    assert caps["eviction_guard"] is True
+    # The first read is still not a *change*: the fleet hears about it, the
+    # operator does not get a "changed" line for a set that never changed.
+    lines = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith("capabilities changed")]
+    assert lines == []
+
+
+async def test_a_re_resolve_does_not_open_a_hole_in_the_intersection(
+        stub_factory, ripple_factory, monkeypatch):
+    """A second `resolve()` swaps in a backend that knows no capability yet.
+
+    `Backend.capabilities` starts empty on a fresh object, so in the window
+    between the swap and the re-read the host answers `frozenset()` — and any
+    other node that recomputes in that window (a capability change, an `add()`,
+    the `_resolve_all()` pass itself) pulls the fleet's intersection down to
+    nothing and logs `fleet_capabilities lost=…` about a node that can do
+    everything. The set the node last reported therefore travels into the new
+    backend (issue #190).
+    """
+    a = stub_factory(models=[stub_model_loaded("m1")])
+    harness = await ripple_factory(_one_host(a))
+    host = harness.host("A")
+    fleet = harness.ripple.fleet
+    before = set(fleet.capabilities)
+    assert "residency" in before
+    old = host.backend
+
+    # Observe the window between the swap and the re-read: what a concurrent
+    # recompute would have intersected, and what it would have left behind.
+    real = host._read_capabilities
+    seen: list[frozenset[str]] = []
+
+    async def spy(health=None):
+        seen.append(host.capabilities)
+        fleet._recompute_capabilities()
+        seen.append(fleet.capabilities)
+        await real(health)
+
+    monkeypatch.setattr(host, "_read_capabilities", spy)
+    await host.reinit()                      # drop the resolution, probe again
+
+    assert host.backend is not old
+    assert seen[0] == frozenset(before)      # the fresh backend is not empty
+    assert seen[1] == frozenset(before)      # … and the fleet keeps the set
+    assert set(fleet.capabilities) == before
+
+
+# ---------------------------------------------------------------------------
+# 3. A profile is not a second engine (issue #195)
+# ---------------------------------------------------------------------------
+GB = 10**9
+
+
+async def test_a_profile_row_does_not_add_memory_twice(
+        stub_factory, ripple_factory):
+    """One 112 GB engine with two profiles is 112 GB, not 336 GB.
+
+    oMLX builds a profile row (`X:agent`, `X:think-1m`) as a copy of the source
+    model's status, `actual_size` included, so summing every resident row
+    charged the engine once per profile. The user saw 449.6 GB against a
+    260.4 GB ceiling (172.7 %) while oMLX's own `current_model_memory` said
+    40 %. The payload's `source_model_id` is the only marker: the row is a view
+    of a model already counted.
+    """
+    a = stub_factory(
+        models=[
+            stub_model_loaded("X", estimated_size=112 * GB),
+            stub_model_loaded("X:agent", estimated_size=112 * GB,
+                              source_model_id="X"),
+            stub_model_loaded("X:think-1m", estimated_size=112 * GB,
+                              source_model_id="X"),
+        ],
+        final_ceiling=260_400_000_000,
+    )
+    harness = await ripple_factory(_one_host(a))
+    host = harness.host("A")
+
+    assert host.used_bytes_measured() == 112 * GB
+    row = host_row(await harness.healthz(), "A")
+    assert row["used_bytes_measured"] == 112 * GB
+    # The card's percentage is measured against the ceiling; before the fix it
+    # read 129 %, which is the number the user reported.
+    assert row["used_bytes_measured"] / row["ceiling_bytes"] < 1.0
+
+
+async def test_two_different_models_still_add_up(stub_factory, ripple_factory):
+    """The guard against over-correcting: only a profile row is skipped.
+
+    A second engine is a real resident model and must keep its `actual_size` in
+    the sum, even when both rows are loaded side by side.
+    """
+    a = stub_factory(models=[
+        stub_model_loaded("m1", estimated_size=112 * GB),
+        stub_model_loaded("m2", estimated_size=8 * GB),
+    ])
+    harness = await ripple_factory(_one_host(a))
+    host = harness.host("A")
+
+    assert host.used_bytes_measured() == 120 * GB
+
