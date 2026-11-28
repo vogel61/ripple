@@ -603,3 +603,301 @@ async def test_two_different_models_still_add_up(stub_factory, ripple_factory):
 
     assert host.used_bytes_measured() == 120 * GB
 
+
+# ---------------------------------------------------------------------------
+# 4. The cluster facts reach the payload (issue #194)
+# ---------------------------------------------------------------------------
+DEPLOYMENT = {
+    "deployment_id": "dep-194",
+    "world_size": 2,
+    "tensor_parallel_size": 2,
+    "pipeline_stages": 1,
+    "strategy": "tensor_parallel",
+    "backend": "mlx",
+    "target_context_tokens": 131072,
+    "profile": "cluster",
+}
+
+
+def _model_host_row(health: dict, model_id: str, name: str) -> dict:
+    """The per-host row of one model in `/healthz → models[]`."""
+    for entry in health["models"]:
+        if entry["id"] != model_id:
+            continue
+        for row in entry["hosts"]:
+            if row["host"] == name:
+                return row
+    raise AssertionError(f"model {model_id!r} is missing host {name!r} in /healthz")
+
+
+async def test_healthz_reports_a_coordinators_cluster_facts(
+        stub_factory, ripple_factory):
+    """A stub that says `distributed: true` shows both fields in `/healthz`.
+
+    The fields are per node, not per model: only the coordinator holds the
+    deployment record, so the row that carries it is `models[].hosts[]` — the
+    same place `actual_size` and `routable` live (issue #194).
+    """
+    a = stub_factory(models=[
+        stub_model_loaded("big", distributed=True, cluster=DEPLOYMENT),
+    ])
+    harness = await ripple_factory(_one_host(a))
+
+    row = _model_host_row(await harness.healthz(), "big", "A")
+    assert row["distributed"] is True
+    assert row["cluster"] == DEPLOYMENT
+
+
+async def test_healthz_says_false_and_null_without_a_deployment(
+        stub_factory, ripple_factory):
+    """A plain node answers `false`/`null` — the measured 25.11.2026 shape.
+
+    The keys are always present in the payload so a client never has to tell
+    "absent" from "not a coordinator"; only the *values* differ.
+    """
+    a = stub_factory(models=[stub_model_loaded("big")])
+    harness = await ripple_factory(_one_host(a))
+
+    row = _model_host_row(await harness.healthz(), "big", "A")
+    assert row["distributed"] is False
+    assert row["cluster"] is None
+
+
+
+# ---------------------------------------------------------------------------
+# 5. A cluster is one logical node (issue #194, steps 3-5)
+# ---------------------------------------------------------------------------
+def _cluster_config(*stubs, declared: dict[str, str] | None = None) -> HostConfig:
+    """One cluster host over several stubs, in the order given.
+
+    `declared` is what the operator would write in `member_ids`; the default is
+    the honest one (every stub under its own id). `node_id` is the coordinator's
+    — the machine the deployment activates on, and the one the host serves
+    through until a `distributed` flag says otherwise.
+    """
+    addresses = [s.url for s in stubs]
+    ids = declared if declared is not None else {s.url: s.state.node_id for s in stubs}
+    return host_config("C", addresses, node_id=stubs[0].state.node_id,
+                       cluster=True, member_ids=ids)
+
+
+async def test_two_machines_behind_one_host_resolve_as_one_node(stub_factory,
+                                                               ripple_factory):
+    """Two ids, two addresses, one host — and one row in `/healthz`.
+
+    This is the gate `resolve()` used to close on every second machine: an
+    address answering with a foreign `node_id` was `identity_mismatch`. A
+    cluster declares one id per address instead, so both answers are the truth
+    the configuration predicted.
+    """
+    a = stub_factory(models=[stub_model_loaded("big")])
+    b = stub_factory(models=[stub_model_loaded("big")])
+    harness = await ripple_factory(make_config([_cluster_config(a, b)]))
+    host = harness.host("C")
+
+    assert [m.address for m in host.members] == [a.url, b.url]
+    assert [m.node_id for m in host.members] == [a.state.node_id, b.state.node_id]
+    assert [m.node_id_seen for m in host.members] == [a.state.node_id, b.state.node_id]
+    assert all(m.identity_ok for m in host.members)
+    assert host.identity_ok is True
+    assert host.status == "healthy"
+    assert host.in_pool is True
+
+    # One logical node: the fleet has one row, not two.
+    assert [row["name"] for row in (await harness.healthz())["hosts"]] == ["C"]
+
+
+async def test_an_id_no_declaration_covers_is_still_an_identity_mismatch(
+        stub_factory, ripple_factory):
+    """A third address is not a member just because it answers.
+
+    `member_ids` covers two addresses; the third falls back to the host's own
+    `node_id` and answers with something else, which is exactly the gate RB-9
+    is about. The host keeps serving through its declared coordinator — a
+    stranger must not make the cluster unusable — but it says so, per member and
+    on the host.
+    """
+    a = stub_factory(models=[stub_model_loaded("big")])
+    b = stub_factory(models=[stub_model_loaded("big")])
+    stranger = stub_factory(models=[stub_model_loaded("big")])
+    cfg = _cluster_config(a, b, stranger,
+                          declared={a.url: a.state.node_id, b.url: b.state.node_id})
+    harness = await ripple_factory(make_config([cfg]))
+    host = harness.host("C")
+
+    assert [m.identity_ok for m in host.members] == [True, True, False]
+    assert host.identity_ok is False
+    third = host.members[2]
+    assert third.reachable is False
+    assert third.last_error.startswith("identity_mismatch")
+    assert stranger.state.node_id in third.last_error
+
+    assert host.resolved_address == a.url
+    assert host.status == "healthy"
+
+
+async def test_the_member_that_reports_the_deployment_is_the_serving_one(
+        stub_factory, ripple_factory):
+    """`distributed` outranks the declared coordinator — it is the evidence.
+
+    The deployment record exists only on rank 0, so a member that says
+    `distributed: true` for a model is the one that can answer for it. The host
+    adopts that member's backend, and only that one.
+    """
+    first = stub_factory(models=[stub_model_loaded("big")])
+    second = stub_factory(models=[stub_model_loaded("big", distributed=True,
+                                                   cluster=DEPLOYMENT)])
+    harness = await ripple_factory(make_config([_cluster_config(first, second)]))
+    host = harness.host("C")
+
+    serving = host.serving_member
+    assert serving is not None
+    assert serving.address == second.url
+    assert serving.distributed == {"big"}
+    assert host.backend.base_url == second.url
+    assert host.resolved_address == second.url
+    assert host.world_size == 2
+
+
+async def test_a_serving_member_that_stops_answering_takes_the_host_down(
+        stub_factory, ripple_factory):
+    """No failover to a worker: an outage beats a 400 GB load on the wrong Mac.
+
+    The worker is reachable and healthy the whole time and is still not used —
+    its own `:8000` server would load the whole checkpoint if a request reached
+    it, which is the hazard this step removes. The host's own verdict goes
+    `down` through the flap guard (a refused connect is a hard failure), and the
+    address it talks to does not move.
+    """
+    coordinator = stub_factory(models=[stub_model_loaded("big", distributed=True,
+                                                        cluster=DEPLOYMENT)])
+    worker = stub_factory(models=[stub_model_loaded("big")])
+    harness = await ripple_factory(make_config([_cluster_config(coordinator, worker)]))
+    host = harness.host("C")
+    assert host.resolved_address == coordinator.url
+    assert host.in_pool is True
+
+    coordinator.stop()
+    await host.refresh()
+
+    assert host.status == "down"
+    assert host.healthy is False
+    assert host.in_pool is False
+    # The worker is still there, still healthy — and still not a target.
+    assert worker.running
+    assert host.members[1].reachable is True
+    assert host.resolved_address == coordinator.url
+    assert host.backend.base_url == coordinator.url
+
+
+async def test_a_member_that_goes_away_is_reported_without_taking_the_host_down(
+        stub_factory, ripple_factory):
+    """The `members` row is a statement about now, not about the last resolve.
+
+    A worker that disappears is not a deployment problem: the coordinator still
+    serves, so the host stays in the pool and only that member turns
+    `reachable: false` with the reason.
+    """
+    coordinator = stub_factory(models=[stub_model_loaded("big", distributed=True,
+                                                        cluster=DEPLOYMENT)])
+    worker = stub_factory(models=[stub_model_loaded("big")])
+    harness = await ripple_factory(make_config([_cluster_config(coordinator, worker)]))
+    host = harness.host("C")
+    assert host.members[1].reachable is True
+
+    worker.stop()
+    await host.refresh()
+
+    assert host.status == "healthy"
+    assert host.members[0].reachable is True
+    assert host.members[1].reachable is False
+    assert host.members[1].last_error
+    assert host.members[1].identity_ok is True     # not a wrong id, just gone
+
+
+async def test_a_deployment_is_not_priced_against_one_machine(stub_factory,
+                                                             ripple_factory):
+    """A shard is not a model size — the forecast names the cluster instead.
+
+    Pricing a 422 GB shard against one machine's ceiling answers a question
+    nobody asked (the deployment does not load from here at all), so the
+    refusal says what it is and leaves the arithmetic alone.
+    """
+    coordinator = stub_factory(models=[
+        stub_model_loaded("big", estimated_size=422 * GB, distributed=True,
+                          cluster=DEPLOYMENT)])
+    worker = stub_factory(models=[stub_model_loaded("big", estimated_size=422 * GB)])
+    harness = await ripple_factory(make_config([_cluster_config(coordinator, worker)]))
+    host = harness.host("C")
+
+    evicts, reason = host.preload_forecast("big")
+    assert evicts == []
+    assert reason is not None
+    assert reason.startswith("cluster:")
+    assert "big" in reason
+    assert "2 machines" in reason
+    assert "GB needed" not in reason
+
+
+async def test_capacity_is_the_serving_members_and_never_a_sum(stub_factory,
+                                                              ripple_factory):
+    """One ceiling, one used figure — the coordinator's.
+
+    Two machines do not add their memory up for a deployment: the model is
+    sharded over them, so a sum would describe a machine that does not exist and
+    the guard would price against it.
+    """
+    coordinator = stub_factory(
+        models=[stub_model_loaded("big", estimated_size=100 * GB, distributed=True,
+                                  cluster=DEPLOYMENT)],
+        final_ceiling=487 * GB)
+    worker = stub_factory(models=[stub_model_loaded("big", estimated_size=300 * GB)],
+                          final_ceiling=200 * GB)
+    harness = await ripple_factory(make_config([_cluster_config(coordinator, worker)]))
+    host = harness.host("C")
+
+    assert host.ceiling_bytes == 487 * GB
+    assert host.used_bytes == 100 * GB
+    row = host_row(await harness.healthz(), "C")
+    assert row["ceiling_bytes"] == 487 * GB
+    assert row["used_bytes"] == 100 * GB
+
+
+async def test_healthz_carries_the_cluster_shape(stub_factory, ripple_factory):
+    """The three keys the dashboard child is coded against, for a cluster.
+
+    `cluster` is the declaration, `world_size` what oMLX says the deployment
+    runs on, `members` one row per declared address with the fixed five keys.
+    """
+    coordinator = stub_factory(models=[stub_model_loaded("big", distributed=True,
+                                                        cluster=DEPLOYMENT)])
+    worker = stub_factory(models=[stub_model_loaded("big")])
+    harness = await ripple_factory(make_config([_cluster_config(coordinator, worker)]))
+
+    row = host_row(await harness.healthz(), "C")
+    assert row["cluster"] is True
+    assert row["world_size"] == 2
+    assert [m["address"] for m in row["members"]] == [coordinator.url, worker.url]
+    for member in row["members"]:
+        assert set(member) == {"address", "node_id", "identity_ok", "reachable", "error"}
+    assert row["members"][0]["node_id"] == coordinator.state.node_id
+    assert row["members"][0]["reachable"] is True
+    assert row["members"][0]["identity_ok"] is True
+    assert row["members"][0]["error"] is None
+
+
+async def test_healthz_says_false_null_and_empty_for_a_plain_host(
+        stub_factory, ripple_factory):
+    """A single-machine host answers the same three keys, empty.
+
+    The shape is fixed so a client never has to tell "absent" from "not a
+    cluster"; the behaviour of such a host is unchanged.
+    """
+    a = stub_factory(models=[stub_model_loaded("m1")])
+    harness = await ripple_factory(_one_host(a))
+
+    row = host_row(await harness.healthz(), "A")
+    assert row["cluster"] is False
+    assert row["world_size"] is None
+    assert row["members"] == []
+    assert row["identity_ok"] is True

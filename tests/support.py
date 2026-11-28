@@ -10,8 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import string
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+import pytest
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -66,6 +70,50 @@ TEST_FLEET_FILE = str(Path(tempfile.gettempdir()) /
 
 
 # ---------------------------------------------------------------------------
+# Where a test applies, and what this machine can do
+# ---------------------------------------------------------------------------
+#: The launchd/plist surface is macOS-only by *subject*: `ripple -perm` renders a
+#: LaunchAgent and hands it to launchd, and there is no launchd anywhere else.
+#: One marker and one reason, so the platform decision can be read in one line
+#: instead of being spelled out in seven files (issue #197). Everything else in
+#: the suite is stub-based and runs on any POSIX host.
+darwin_only = pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="launchd/plist: the subject is a launchd LaunchAgent, "
+           "which exists only on macOS")
+
+
+def local_rsync() -> str | None:
+    """The `rsync` on PATH, or None. The copies that are not stubbed use it."""
+    return shutil.which("rsync")
+
+
+#: The two copies a real rsync needs, or the reason a test cannot run.
+requires_rsync = pytest.mark.skipif(
+    local_rsync() is None,
+    reason="rsync is not installed on this machine — the copy is a real process")
+
+
+def rsync_progress_flag() -> str:
+    """The progress flag this machine's rsync takes; `""` when there is none.
+
+    The same question the transport asks before a copy (`rsync
+    --info=progress2 --version`): an rsync that does not know the option exits
+    non-zero before it prints a version, and `--progress` is what both take.
+    A test asserts against this instead of against macOS's answer.
+    """
+    exe = local_rsync()
+    if exe is None:
+        return ""
+    try:
+        probe = subprocess.run([exe, "--info=progress2", "--version"],
+                               capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return "--progress"
+    return "--info=progress2" if probe.returncode == 0 else "--progress"
+
+
+# ---------------------------------------------------------------------------
 # Stub upstream
 # ---------------------------------------------------------------------------
 @dataclass
@@ -93,6 +141,12 @@ class StubModel:
     # source's `actual_size` on the profile row, so the stub has to be able to
     # say which rows are real.
     source_model_id: str = ""
+    # The cluster facts (issue #194). Both are omitted from the status answer
+    # while unset, because that is what a node without a deployment reports and
+    # a test must be able to pin the "keys absent" shape. A coordinator sets
+    # `distributed=True` and its own `cluster` record.
+    distributed: bool = False
+    cluster: dict | None = None
 
     def __post_init__(self) -> None:
         if self.actual_size is None:
@@ -345,7 +399,13 @@ def build_stub_app(state: StubState) -> FastAPI:
              "loading_started_at": m.loading_started_at,
              # oMLX emits this only on a profile row (issue #195); a real
              # engine's row has no such key, so the stub omits it too.
-             **({"source_model_id": m.source_model_id} if m.source_model_id else {})}
+             **({"source_model_id": m.source_model_id} if m.source_model_id else {}),
+             # The cluster facts (issue #194) are emitted only when the stub
+             # actually carries them: a row without the keys is the measured
+             # shape of a node that is not part of a deployment, and it has to
+             # stay testable.
+             **({"distributed": m.distributed} if m.distributed else {}),
+             **({"cluster": m.cluster} if m.cluster is not None else {})}
             for m in state.models
         ]}
 

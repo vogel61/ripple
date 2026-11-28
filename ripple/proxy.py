@@ -3924,6 +3924,13 @@ class Ripple:
                     "actual_size": info.actual_size,
                     "context_len": info.context_len,
                     "vision": info.vision,
+                    # The cluster facts are the *node's* (issue #194): only the
+                    # coordinator of a deployment carries a `cluster` record,
+                    # so they sit on the per-host row and never on the model
+                    # row above — a worker answers false/null for the same
+                    # deployment, and the two must not be averaged into one.
+                    "distributed": info.distributed,
+                    "cluster": info.cluster,
                     # What *this node* says the model is (issue #193): `llm`,
                     # `embedding`, `reranker`. Per host, because the type is the
                     # node's own claim — two nodes may label their copies

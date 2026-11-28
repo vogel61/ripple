@@ -498,8 +498,17 @@ def _listener_that_took_a_connection(port: int) -> None:
     """Bind, listen, accept one connection, close both ends — then close the
     listener. The server side closes first, so the port is left in `TIME_WAIT`
     with nothing listening: exactly the state RIPPLE leaves behind when it is
-    stopped while a client was connected (issue #151)."""
+    stopped while a client was connected (issue #151).
+
+    `SO_REUSEADDR` on the listener is part of that state, not a convenience:
+    uvicorn sets it on the socket it serves from, and the accepted socket
+    inherits it. Linux only lets a new `SO_REUSEADDR` bind take a port in
+    `TIME_WAIT` when the *old* socket carried the option too (the kernel
+    compares both sides), so a listener without it leaves a port no server
+    could take — a state RIPPLE cannot produce.
+    """
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", port))
     listener.listen(1)
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -523,6 +532,12 @@ def test_a_just_freed_port_is_free(tmp_path):
     """
     port = closed_port()
     _listener_that_took_a_connection(port)
+
+    # The premise, asserted so this cannot pass vacuously: a plain bind — the
+    # one that made `init` report "an unidentified process" — must still fail.
+    with pytest.raises(OSError):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as plain:
+            plain.bind(("127.0.0.1", port))
 
     state = probe_port(port)
     assert state.free is True, f"port {port} left in TIME_WAIT read as busy"

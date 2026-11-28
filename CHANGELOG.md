@@ -3,9 +3,72 @@
 All notable changes to this project. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.4] - 2026-11-28
 
-Nothing yet.
+The release candidate, finished: four fixes and the cluster. By the version table
+in `docs/release-process.md` a new configuration key and a new observable
+behaviour are a minor — 0.3.0. The operator kept 0.2.4 because it had been
+promised, and the deviation is written down here instead of being discovered
+later. Nothing an existing installation does changes: `cluster:` is optional, and
+what does change is that a misspelled key on a host is now an error instead of a
+line the file made and the process dropped.
+
+### Fixed
+
+- **The eviction forecast counts engines, not rows** (GitHub #48, reported by
+  Scott Lowry). oMLX lists every warm profile (`X:agent`, `X:think-1m`) as its
+  own loaded model carrying the base engine's *full* size, and the forecast
+  summed rows: one 113 GB whale with four warm profiles forecast 565 GB against
+  a 242 GB ceiling while `/healthz` honestly reported 81.8 GB used. A 0.665 GB
+  embedding request then "would evict the pinned engine", every host answered
+  `conflict`, and nothing could cold-load anywhere until the node was reloaded
+  by hand. Rows are now grouped by `source_model_id` — the field #195 added for
+  the measured sum — so an engine is counted once, a new profile of a warm
+  engine adds nothing, and an eviction frees a whole group at a time. The
+  pinned/busy/locked vetoes are untouched.
+- **The published tree ships no test that loads a withheld tool** (issue #196).
+  A `!` line in `tools/public_allow.txt` lost against a group pattern such as
+  `tests/**`, so the entry that withheld the release tooling was decorative and
+  `tests/test_github_release.py` was published while `tools/github_release.py`
+  was not: sixteen failures on a fresh checkout. `!` now wins, `drop_unlisted()`
+  uses that one classification instead of reading the allowlist twice, and the
+  export refuses to finish when a published test names an unpublished tool.
+- **The suite runs on Linux** (issue #197). The launchd plist test carried the
+  oMLX key on a host whose config file could not be read yet, the TIME_WAIT
+  fixtures built a listener RIPPLE cannot run (uvicorn sets `SO_REUSEADDR`), and
+  two replication tests parsed whatever format the host's rsync happened to
+  print. One `darwin_only` marker, capability-detected rsync, and fixtures that
+  model the real server: 24 failures to 0 on Debian 13.
+- **The replication progress parser reads the byte count under any locale**
+  (issue #198). `_PROGRESS_RE` reads a comma as the thousands separator, which
+  is what `LC_ALL=C` prints; under `LANG=de_DE.UTF-8` rsync prints `2.097.152`
+  and the parse stopped at the first digit — a 2 MB copy reported 2 bytes and
+  1 %. Every child RIPPLE starts now runs in the C locale, the remote side
+  included, because `ssh` forwards `LC_*` by default.
+
+### Added
+
+- **A cluster is one node.** When oMLX runs one model across two Macs, the fleet
+  tab shows **one card** with a `cluster` chip, `×2`, and a `?` beside it that
+  names the machines behind the number — address, the first eight characters of
+  the `node_id`, and whether it answered. A member that answers with an id the
+  configuration does not name says `identity ✗` instead of joining quietly, and
+  the Models tab lists the model once rather than once per Mac. Every number on
+  the card stays where it was, and none of them is added up: the capacity is the
+  serving machine's, never two ceilings side by side, because a model that fits
+  on one Mac does not fit twice as well on two. Declared in `config.yaml`
+  (`cluster: true`, one address and one `node_id` per machine) and confirmed by
+  the node, which reports `distributed` and `world_size` only once the
+  deployment is loaded — so a cluster that is declared and not yet activated
+  reads as two machines and no deployment, which is the truth rather than a
+  guess. `docs/install.md` §8 carries the second profile, the two-command switch
+  and the rollback (issue #194).
+- **`distributed` and `cluster` on each `/healthz` model row** (issue #194,
+  step 1). oMLX's own words: `distributed: true` says *this node is the
+  coordinator* of a parallel deployment, and `cluster` carries `deployment_id`,
+  `world_size`, `tensor_parallel_size`, `pipeline_stages`, `strategy`, `backend`,
+  `target_context_tokens` and `profile` untouched. A worker reports `false` for
+  the same model, so the flag never means "no deployment anywhere".
 
 ## [0.2.4rc1] - 2026-11-25
 

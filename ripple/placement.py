@@ -136,35 +136,60 @@ def residency_tier(host: HostRuntime, model: str, cfg: Config,
 
     loaded = [m for m in host.models.values() if m.loaded]
     target = host.cfg.hard_threshold * host.ceiling_bytes
-    forecast = sum(m.estimated_size or 0 for m in loaded) + info.estimated_size
+
+    # One engine, counted once (GitHub #48). oMLX lists every warm profile row
+    # (`X:agent`, `X:think-1m`, …) as its own loaded model carrying the base
+    # engine's *full* estimated size and naming the engine it belongs to in
+    # `source_model_id` (issue #195). Summing rows forecast one whale five
+    # times: 565 GiB against a 242 GiB ceiling while the node honestly reported
+    # 81.8 GiB used, so a 0.665 GiB embedding request "would evict the pinned
+    # engine", every host answered `conflict`, and nothing could cold-load
+    # anywhere until the node was reloaded by hand. The forecast owes the reader
+    # the arithmetic the measured sum learned in #195.
+    groups: dict[str, list[ModelInfo]] = {}
+    for m in loaded:
+        groups.setdefault(m.source_model_id or m.id, []).append(m)
+
+    def engine_size(rows: list[ModelInfo]) -> int:
+        # The base row is the one that points at no other engine; a profile row
+        # carries the engine's own size, so either one answers the question.
+        base = next((r for r in rows if not r.source_model_id), rows[0])
+        return base.estimated_size or 0
+
+    forecast = sum(engine_size(rows) for rows in groups.values())
+    # A profile of an engine that is already warm borrows its memory: those
+    # bytes are resident, and the request adds none of its own.
+    if (info.source_model_id or info.id) not in groups:
+        forecast += info.estimated_size
     if forecast <= target:
         return Candidate(host=host, tier=TIER_COLD_LOAD)
 
-    # Which models would oMLX evict? LRU order, until the forecast fits.
-    ordered = sorted(loaded, key=lambda m: m.last_access or 0.0)
+    # Which engines would oMLX evict? LRU by the engine's last touch: an engine
+    # unloads as a unit, so its warm profiles go with it and a group is only as
+    # idle as its most recently used member.
+    ordered = sorted(groups.values(),
+                     key=lambda rows: max(r.last_access or 0.0 for r in rows))
     evicts: list[str] = []
     remaining = forecast
-    for m in ordered:
+    for rows in ordered:
         if remaining <= target:
             break
-        evicts.append(m.id)
-        remaining -= m.estimated_size or 0
+        evicts.extend(r.id for r in rows)
+        remaining -= engine_size(rows)
+    evicted = [m for rows in ordered for m in rows if m.id in evicts]
 
     # The lock (issue #21) comes before every other veto: a locked model is not
     # a preference that another candidate can outbid, it is a promise that
     # RIPPLE will not take that memory away. The host is therefore unusable for
     # *this* model, and `choose()` only reports it if no host is left.
-    locked = [m.id for m in ordered
-              if m.id in evicts and host.policy is not None
-              and host.policy.locked(m.id)]
+    locked = [m.id for m in evicted
+              if host.policy is not None and host.policy.locked(m.id)]
     if locked:
         return Candidate(host=host, tier=TIER_CONFLICT, evicts=evicts,
                          locked=locked,
                          note=f"would evict locked {', '.join(locked)}")
 
-    for m in ordered:
-        if m.id not in evicts:
-            continue
+    for m in evicted:
         # Two kinds of work make a model busy, and only one of them holds a slot
         # (issue #193): a one-shot request — and, from the utility class on,
         # every embedding and rerank — reserves nothing in the registry but is

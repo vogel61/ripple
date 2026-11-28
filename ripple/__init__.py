@@ -2,7 +2,7 @@
 
 import sys as _sys
 
-__version__ = "0.2.4rc1"
+__version__ = "0.2.4"
 
 # The floor `pyproject.toml` declares, said in words instead of a SyntaxError.
 # `pip install` refuses an older interpreter on its own; this catches the other

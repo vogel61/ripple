@@ -1717,6 +1717,45 @@ function renderFleet(h) {
                            ': /healthz → hosts[].source') + '">' +
       esc(t(x.source === 'overlay' ? 'fleet.source_overlay' : 'fleet.source_config')) +
       '</span>';
+    /* A cluster arrives as one `hosts[]` row (issue #194): its machines are
+       `members`, not rows, so the card stays one card with every number it
+       already had. The chip carries `world_size` — the one figure the row
+       would otherwise not show — and the member list hangs off a `?` beside
+       it: two addresses inside the card body would make one row as tall as
+       two and read as two nodes again. */
+    const members = Array.isArray(x.members) ? x.members : [];
+    /* `world_size` stays null until oMLX starts the deployment (the plan's
+       "cluster, not loaded yet"), and the declared member list is the count
+       then: "one model across — machines" would read as a defect instead of
+       as a state the operator is waiting out. */
+    const worldSize = isNum(x.world_size) ? x.world_size : (members.length || null);
+    const memberTip = members.map(mb => {
+      /* The id is shortened to eight characters: a full oMLX id is a UUID and
+         would push the line past the tooltip's 320 px. */
+      const node = mb.node_id ? String(mb.node_id).slice(0, 8) : '—';
+      /* Two literal ids in the ternary, not a composed one: the i18n scan
+         reads literals and would take a prefix for a missing entry. */
+      const verdict = mb.reachable ? t('fleet.member_ok') : t('fleet.member_unreachable');
+      let line = [mb.address || '—', node, verdict].join(' · ');
+      /* `identity_ok: false` is the one member fact that must not be inferred
+         from `reachable`: the member answers, but it is not the machine the
+         configuration names (step 3 of the plan). */
+      if (mb.identity_ok === false) line += ' · ' + t('fleet.member_identity_bad');
+      if (mb.error) line += ' (' + mb.error + ')';
+      return line;
+    });
+    const clusterChip = x.cluster
+      ? '<span class="chip cluster tip" data-tip="' +
+          esc(t('fleet.cluster_tip', {n: nf(worldSize)})) + '">' +
+          esc(t('fleet.cluster')) +
+          (isNum(worldSize)
+            ? '<span class="den"> ×' + nf(worldSize) + '</span>' : '') +
+        '</span>' +
+        (memberTip.length
+          ? '<span class="tip cluster-members" data-tip="' +
+              esc(memberTip.join('\n')) + '">?</span>'
+          : '')
+      : '';
 
     return `
     <article class="card host" data-key="${esc(x.name)}">
@@ -1726,6 +1765,7 @@ function renderFleet(h) {
           <h3>${esc(x.name)}</h3>
           ${chip(x.state || x.status || 'unknown', x.phase || null,
                  x.phase ? phaseTip(x.phase, 'hosts[].phase') : '')}
+          ${clusterChip}
           <span class="role">${esc(x.role)} · ${esc(x.site)}</span>
           ${srcBadge}
           ${siteWarn}
@@ -1880,8 +1920,25 @@ const typeChip = m => {
   return id ? '<span class="chip model-type">' + esc(t(id)) + '</span>' : '';
 };
 
-function modelRows(m, order, keyed) {
-  const hosts = m.hosts.slice().sort((a, b) => (order.get(a.host) ?? 9) - (order.get(b.host) ?? 9));
+function modelRows(m, order, keyed, alias) {
+  /* A cluster is one logical node (issue #194): if a payload lists one of its
+     member addresses as a host of the model, that row belongs to the cluster's
+     row. Two rows for one deployment would read as two nodes serving the same
+     model — the duplication this step exists to remove. `alias` maps such an
+     address to the name of the cluster's `hosts[]` row; without it (every
+     non-cluster payload) this is the plain one-row-per-host loop it was. */
+  const byHost = new Map();
+  for (const x of m.hosts) {
+    const name = (alias && alias.get(x.host)) || x.host;
+    const row = name === x.host ? x : Object.assign({}, x, {host: name});
+    const prev = byHost.get(name);
+    if (!prev) { byHost.set(name, row); continue; }
+    /* The two entries describe the same node: keep the one that carries the
+       resident weight, so LOADED and tok/s do not go empty. */
+    if (row.loaded && !prev.loaded) byHost.set(name, row);
+  }
+  const hosts = [...byHost.values()]
+    .sort((a, b) => (order.get(a.host) ?? 9) - (order.get(b.host) ?? 9));
   return hosts.map((x, i) => {
     const cls = [i === 0 ? 'group-start' : '', x.loaded ? '' : 'dim'].filter(Boolean).join(' ');
     let out = '<tr class="' + cls + '" data-key="' + esc(m.id + '|' + x.host) + '">';
@@ -2051,7 +2108,18 @@ function renderModels(h) {
   const loaded = models.filter(m => m.hosts.some(x => x.loaded));
   const dim = models.filter(m => !m.hosts.some(x => x.loaded));
 
-  let rows = loaded.map(m => modelRows(m, order, keyed)).join('');
+  /* Member addresses point at the cluster's own row (issue #194): the models
+     table keeps one row per logical node, so an address that is a member of a
+     cluster host is folded into that host's name before the rows are built. */
+  const alias = new Map();
+  for (const x of (h.hosts || [])) {
+    if (!x.cluster) continue;
+    for (const mb of (x.members || [])) {
+      if (mb && mb.address) alias.set(mb.address, x.name);
+    }
+  }
+
+  let rows = loaded.map(m => modelRows(m, order, keyed, alias)).join('');
   if (dim.length) {
     const label = dim.length === 1 ? t('models.count_one', {n: nf(dim.length)})
                                    : t('models.count_many', {n: nf(dim.length)});
@@ -2060,7 +2128,7 @@ function renderModels(h) {
             '<td colspan="8"><span class="tw" aria-hidden="true">' +
             (showDim ? '▾' : '▸') + '</span> ' +
             esc(t('models.dim')) + ' · ' + T('not_loaded', esc(label)) + '</td></tr>';
-    if (showDim) rows += dim.map(m => modelRows(m, order, keyed)).join('');
+    if (showDim) rows += dim.map(m => modelRows(m, order, keyed, alias)).join('');
   }
 
   /* Ohne Schlüssel ist jedes Feld aus; der Satz darüber sagt warum, statt dass

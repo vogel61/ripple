@@ -99,6 +99,20 @@ _REJECTED_MARKERS = ("unrecognized option", "unknown option", "invalid option",
                      "illegal option", "syntax or usage error", "usage error")
 
 
+def _child_env() -> dict[str, str]:
+    r"""The environment every child RIPPLE starts gets: the C locale.
+
+    The numbers above are parsed with a comma as the thousands separator, which
+    is what `LC_ALL=C` produces. Under a German locale rsync prints
+    `2.097.152` and `df` prints its own separators, so `[\d,]+` matches the
+    `2` and the copy reports 2 bytes of 2 MB — measured on a Debian host with
+    `LANG=de_DE.UTF-8`, where a two-file copy of 2 MB reported `bytes_done=2`
+    and 1 % (issue #198). Machine-readable output must not follow the
+    operator's locale, and this is the side that decides what "readable" means.
+    """
+    return {**os.environ, "LC_ALL": "C", "LANG": "C"}
+
+
 class ReplicationError(Exception):
     """A job that cannot finish for a reason the operator can read."""
 
@@ -943,7 +957,8 @@ class SshTransport:
     async def run(self, argv: Sequence[str], *, timeout: float) -> tuple[int, str, str]:
         """Run a command without a shell; returns (rc, stdout, stderr)."""
         proc = await asyncio.create_subprocess_exec(
-            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=_child_env())
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -1139,7 +1154,8 @@ class SshTransport:
         reader = ProgressReader(flavour=flavour, total_bytes=total_bytes)
         started = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
-            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=_child_env())
         chunks: list[str] = []
 
         async def pump() -> None:

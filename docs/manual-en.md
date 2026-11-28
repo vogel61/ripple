@@ -578,6 +578,53 @@ The chip is also the fastest way to find the node you added yesterday and forgot
 about: the overlay is a file of its own, and a node in it has no line in
 `config.yaml` to look at.
 
+#### A cluster is one card
+
+When oMLX runs **one model across two Macs** — one deployment, one engine, two
+machines — RIPPLE shows the pair as one card, because it is one oMLX node: one
+model, one slot account, one verdict, one capacity. The card is the card above,
+with two additions in its head:
+
+- a **`cluster` chip** after the state chip, carrying `×N` — `×2` for a
+  deployment over both Macs;
+- a **`?`** beside the chip, and in its tooltip the machines behind that number,
+  one line each:
+
+    ```
+    http://127.0.0.1:8000 · 11111111 · ok
+    http://192.0.2.9:8000 · 22222222 · ok
+    ```
+
+Address, the first eight characters of the `node_id` that answered, and the
+verdict of the last probe: `ok` or `unreachable`. A member that answers with an
+id the configuration does not name carries `identity ✗` after its verdict — it
+is there, and it is not the machine you declared; nothing is routed to it, and
+that line is the only place the difference is visible. A member's own error
+follows in parentheses.
+
+**The card keeps every number it had.** Memory bar, inflight, slots, RTT, tok/s,
+cache, the footer, the maintenance row: all of it belongs to the one node and
+means exactly what it meant on a single machine. What a cluster does **not** do
+is add them up. The capacity is the **serving member's** — the machine that
+carries the deployment, the one reporting `distributed: true`, or the declared
+coordinator while nothing is loaded — never the sum of two ceilings. `×2` is
+context, not capacity: a model that fits on one Mac does not fit twice as well
+because there are two.
+
+**`world_size` is the deployment's own number**, and oMLX reports it only once
+the deployment is loaded. Until then `/healthz → hosts[].world_size` is `null`
+and the chip falls back to the number of declared members, so a cluster that has
+been declared and not yet activated reads as `×2` — two machines, one node, no
+model across them yet — and its tooltip says *one model across 2 machines; only
+the coordinator serves it* from the declaration rather than from oMLX. The
+number is never a sum over the members: it is either oMLX's report or the
+declaration's.
+
+The state on the card is the probe of the machine that **serves**. A worker that
+is unreachable is a line in the `?` tooltip, not a second card and not a second
+state — it has nothing to serve, so its absence cannot take the deployment down,
+and it is the first thing to look at when a load on the coordinator fails.
+
 #### `draining` and `disabled`
 
 Two states exist that oMLX knows nothing about; both are RIPPLE's own, and both
@@ -629,6 +676,15 @@ says what it writes before it writes it (§5.6, §6).
 
 One row per **(model, node)** pair — the same model appears once for every node
 that offers it. The columns:
+
+**A cluster is one node here too.** The model appears once for a cluster, not
+once per machine: the row's node is the cluster's name, and `Loaded`, `tok/s`,
+`Req`, `Threads` and `Size` are the deployment's — one engine, one load, one
+rate, one size. A member that a payload lists as its own host of the model is
+folded into the cluster's row (the row that carries the resident weight wins),
+so a deployment cannot read as two nodes serving the same model twice. What the
+worker would report for itself is not a second row and not a second rate: it is
+not a node the model is served from.
 
 | Column | Meaning |
 |---|---|
@@ -1075,6 +1131,10 @@ that pushes the restart control to `6.6` there, while this chapter has restart a
 §6.5 and Keys as §6.6. A reference to `6.6` on the page therefore means the
 restart element described in §6.5 here.
 
+§6.7 is the exception: a cluster is not a control on the page but a
+configuration, and it is here because what RIPPLE verifies about it belongs next
+to the other operator promises.
+
 ### 6.1 Maintenance — take a node out of rotation, gently
 
 **What it does.** Marks a node as `maintenance` for 30 minutes, 60 minutes, or
@@ -1244,6 +1304,78 @@ a key rotated by `ripple init --force` is the usual cause. A corrupt `keys.yaml`
 stops the process at startup instead of starting with zero keys — which looks like
 every client losing access at once. And `/keys` itself is open: without the admin
 key it shows an empty table.
+
+### 6.7 A cluster — one model over two Macs
+
+**What it is.** oMLX can run one model as a deployment over both Macs: the
+engine is split into ranks, the Thunderbolt link carries the collectives, and
+one model is served — by the coordinator. For RIPPLE that pair is **one node**:
+one card, one model row, one slot account, one capacity (§5.1, §5.2). Nothing on
+this page creates a deployment; oMLX does that, in its own Cluster panel, and
+RIPPLE's job is to show the result honestly.
+
+**How to declare it.** On the host that represents the pair:
+
+```yaml
+hosts:
+- name: willendorf-cluster
+  cluster: true                    # a declaration — RIPPLE verifies it
+  node_id: 11111111-…              # the coordinator: the member that serves
+  addresses:
+  - address: http://127.0.0.1:8000
+    node_id: 11111111-…            # what this machine answers with
+  - address: http://192.0.2.9:8000
+    node_id: 22222222-…            # …and this one
+  models:
+  - <the model the deployment runs>
+```
+
+`cluster: true` needs at least two addresses and a `node_id`; a per-address
+`node_id` is refused outside a cluster; an unknown key on a host is an error at
+start-up instead of a line the parser drops. `ripple --config … --check` prints
+what it made of the file. The second Mac answers with its **own** `node_id` —
+that is the difference to a single machine with several addresses, where one id
+is the only truth.
+
+**What RIPPLE verifies, and what it takes on your word.**
+
+- the **declaration** is yours: how many machines, which address, which
+  `node_id`. oMLX publishes no member list — rank, peers and the coordinator's
+  address live behind its admin key (`/admin/api/cluster/runtime`), and RIPPLE
+  does not ask for that key. Exact membership is therefore not verified, only
+  declared.
+- the **confirmation** is the node's: `distributed: true` on a model means *this
+  member is the coordinator of a deployment*, and `cluster.world_size` says over
+  how many machines. RIPPLE reads both from `/v1/models/status` on every probe
+  and sends the host's traffic to the member that reports the deployment. A
+  member that answers with an id no declaration covers is `identity ✗` and is
+  never a routing or preload target.
+- the card can therefore be wrong about **who** the members are — you typed it —
+  but not about **whether** a deployment runs: that is oMLX's own field.
+
+**What it costs.** Nothing while no deployment runs: a declared cluster with
+whole models loaded behaves like any other host. While a deployment runs the
+pair serves one model — the second Mac's memory belongs to that model and is not
+free for another one — and the ceiling the eviction guard prices against is the
+coordinator's, never the sum of both.
+
+**What it buys, and what it does not.** A model that fits on neither Mac can be
+served at all — that is the reason to run a deployment, and it is capacity, not
+speed. Measured on these two Macs, the pair runs at the slower member's rate:
+1 178–1 296 tok/s prefill against 3 897–3 988 on the M5 serving the whole model
+alone (`docs/measurements.md`, *A cluster against the fleet*). Two Macs across
+Thunderbolt are not a faster Mac; they are a bigger one, slower than its fast
+half.
+
+**What can go wrong.** The expensive one: a member's own `:8000` server would
+load the **whole** checkpoint if a request reached it, so a client pointed at
+the second Mac's port gets a second copy of a 200 GB model instead of a share of
+the deployment. Point clients at RIPPLE, never at a member. Two smaller ones: a
+deployment that has not been loaded yet has `world_size: null` and reads as N
+machines with nothing across them — a state, not a fault; and a preload of a
+distributed model is refused with `cluster: <model> runs as a deployment over 2
+machines; RIPPLE cannot load it`, because activation is oMLX's and a request is
+not a way to start a deployment.
 
 ## 7. Using RIPPLE as a client
 
@@ -1747,6 +1879,16 @@ state. The unit the dashboard shows and the unit placement reasons about.
 `node_id`, reachable through one or more addresses. A node is where a model is
 actually loaded and where the tokens are actually produced.
 
+**Cluster.** One oMLX deployment that runs a single model across more than one
+machine: the engine is split into ranks, the Macs serve it together, and one
+coordinator answers while the others feed it. In RIPPLE a cluster is **one
+node** — one card, one model row, one capacity — declared with `cluster: true`
+and one address per machine. The configuration says how many machines and which;
+the node confirms what it can: `distributed: true` on the model and its
+`world_size` (§6.7). Not the same word as in §9.4, where "a cluster" means
+several independent Macs behind one RIPPLE: those are separate nodes with
+separate models, and a cluster deployment is what replaces them while it runs.
+
 **Thread.** One conversation, the unit of placement and of the prefix cache. A
 thread holds a slot on exactly one node until it is rebound, deleted, or its TTL
 expires. Identified by the client's `X-Session-Id` (`sid:…`) or by a fingerprint of
@@ -1788,7 +1930,8 @@ pulled out from under a node answers with a truncated stream instead of an error
 
 *Sources for this manual: `ripple/dashboard.py`, `ripple/static/dashboard.js`, the
 message catalog `ripple/static/i18n/en.json`, `docs/install.md`,
-`docs/model-policy.md`, `docs/replication.md`, the key page (`ripple/keys.py`,
+`docs/model-policy.md`, `docs/replication.md`, `docs/cluster-plan.md`, the key
+page (`ripple/keys.py`,
 `ripple/keys_page.py`), and for the fleet overlay and the drain `ripple/config.py`
 and `ripple/hosts.py`. Chapter 9 rests on `ripple/placement.py`, the defaults in
 `ripple/config.py`, `docs/concurrency.md` and the traces in

@@ -80,7 +80,15 @@ FORBIDDEN_IN_LOG = (
 #: is not this test's to compare — the operator's proxy flushes its ledger every
 #: 30 s — so the unchanged-check skips them by name and the config assertions
 #: below prove that this test's paths are not theirs.
-LIVE_FILES = frozenset({"host_stats.json", "host_stats.json.tmp"})
+#:
+#: The cluster profile (issue #194) runs beside the productive one with its own
+#: stores, so its ledger and its runtime file move on the same clock. Only the
+#: files a *running* instance writes belong here: everything a profile merely
+#: names (calibration, maintenance, the model policy) stays compared, because a
+#: second instance must not be able to create it behind this test's back.
+LIVE_FILES = frozenset({"host_stats.json", "host_stats.json.tmp",
+                        "cluster-host_stats.json", "cluster-host_stats.json.tmp",
+                        "cluster-runtime.yaml"})
 
 #: The checkout this module lives in — the `ripple start` subprocess runs from
 #: here so it imports this tree's package and not an installed copy.
@@ -224,9 +232,15 @@ def _port_left_in_time_wait() -> int:
     one that made `init` report "an unidentified process" and move to 8011
     (issue #151). A plain `bind` on the port really does fail (errno 48); a
     `SO_REUSEADDR` bind — what uvicorn does — does not.
+
+    The listener carries `SO_REUSEADDR` because uvicorn's does, and the accepted
+    socket inherits it. On Linux a new `SO_REUSEADDR` bind only takes a port in
+    `TIME_WAIT` when the old socket had the option too, so leaving it off here
+    would build a state no RIPPLE listener can leave.
     """
     while True:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", 0))
         port = int(listener.getsockname()[1])
         if port not in (8000, 8010):        # never the operator's proxy

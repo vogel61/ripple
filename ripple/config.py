@@ -240,6 +240,15 @@ class HostConfig:
     # SSH destination and model roots for a replication job (issue #13).
     replication: "ReplicationHostConfig" = field(
         default_factory=lambda: ReplicationHostConfig())
+    #: One model sharded over several machines appears as this single host
+    #: (issue #194). Declared, not probed: the membership is what the operator
+    #: knows and oMLX does not publish. Default false, so every file written
+    #: before this field existed keeps describing one machine.
+    cluster: bool = False
+    #: The node_id each member of a cluster answers with, keyed by address.
+    #: Empty for a single machine — a per-address identity means nothing there,
+    #: which is why the parser refuses it without `cluster: true`.
+    member_ids: dict[str, str] = field(default_factory=dict)
     # Where this host's declaration comes from (issue #70): `config` for a host
     # written in `config.yaml`, `overlay` for one the operator added at the page
     # (`~/.ripple/runtime.yaml`). `/healthz` carries it, so the page can say which
@@ -1035,6 +1044,20 @@ class Config:
         }
 
 
+#: Every key a host block may carry (issue #194). The list is closed on
+#: purpose: `_parse_host` reads the keys it knows out of the merged mapping and
+#: ignores the rest, so without this set a misspelled key would be a declaration
+#: the file makes and the process silently drops — the operator would believe a
+#: machine, a key or a cluster is configured when it is not.
+_HOST_KEYS: frozenset[str] = frozenset({
+    "name", "addresses", "node_id", "weight", "enabled", "role", "site",
+    "backend", "api_key", "api_key_file", "max_inflight",
+    "max_inflight_utility", "max_threads", "spill_threshold", "hard_threshold",
+    "models", "warmup", "prefer_resident", "replication", "pp_tps", "tg_tps",
+    "cluster", "member_ids",
+})
+
+
 def _parse_host(raw: dict[str, Any], defaults: dict[str, Any], idx: int) -> HostConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"hosts[{idx}] must be a mapping")
@@ -1043,17 +1066,111 @@ def _parse_host(raw: dict[str, Any], defaults: dict[str, Any], idx: int) -> Host
         raise ConfigError(f"hosts[{idx}]: 'name' missing (stable identity, key for slots)")
     merged = {**defaults, **raw}
 
-    addresses = merged.get("addresses") or []
-    if isinstance(addresses, str):
-        addresses = [addresses]
-    if not addresses:
+    # Refused before anything is read (issue #194): a key the parser does not
+    # know is a declaration it would drop, and a dropped declaration is worse
+    # than a missing one — the file says one thing, the process does another.
+    # The check runs on the merged mapping because that is what the rest of this
+    # function reads, so a typo in `defaults:` is caught for every host at once.
+    unknown = sorted(set(merged) - _HOST_KEYS)
+    if unknown:
+        raise ConfigError(
+            f"host {name}: unknown key{'s' if len(unknown) > 1 else ''} "
+            f"{', '.join(repr(k) for k in unknown)} — allowed keys: "
+            f"{', '.join(sorted(_HOST_KEYS))}")
+
+    raw_addresses = merged.get("addresses") or []
+    if isinstance(raw_addresses, (str, dict)):
+        # One entry written without the list: a bare address, or a bare
+        # {address, node_id} pair.
+        raw_addresses = [raw_addresses]
+    if not raw_addresses:
         raise ConfigError(f"host {name}: 'addresses' missing")
+    if not isinstance(raw_addresses, (list, tuple)):
+        raise ConfigError(f"host {name}: 'addresses' must be a list")
+
     norm: list[str] = []
-    for a in addresses:
-        a = str(a).rstrip("/")
+    member_ids: dict[str, str] = {}
+    for entry in raw_addresses:
+        # An entry is an address, or a mapping that names the machine behind it
+        # (issue #194): `{address: http://…, node_id: …}`. A cluster needs the
+        # second form, because one host now stands for machines that answer
+        # with different node_ids and the address alone no longer identifies
+        # which member replied.
+        declared_id: str | None = None
+        if isinstance(entry, dict):
+            extra = sorted(set(entry) - {"address", "node_id"})
+            if extra:
+                raise ConfigError(
+                    f"host {name}: an address entry has unknown key {extra[0]!r} "
+                    f"(allowed: address, node_id)")
+            if not entry.get("address"):
+                raise ConfigError(
+                    f"host {name}: an address entry as a mapping needs 'address'")
+            declared_id = str(entry.get("node_id") or "").strip() or None
+            entry = entry["address"]
+        a = str(entry).rstrip("/")
         if not a.startswith(("http://", "https://")):
             raise ConfigError(f"host {name}: address {a!r} needs http:// or https://")
+        if a in norm:
+            # Two spellings of one machine would otherwise be probed twice and
+            # counted as two addresses — which is exactly what decides whether
+            # a cluster has two members.
+            raise ConfigError(f"host {name}: duplicate address {a!r} — "
+                              f"each machine is declared once")
         norm.append(a)
+        if declared_id:
+            member_ids[a] = declared_id
+
+    # `member_ids` is also a key of its own, which is how the overlay and the
+    # page rebuild a host from a HostConfig. An id written inside the address
+    # entry wins, because it sits next to the machine it names.
+    declared = merged.get("member_ids") or {}
+    if not isinstance(declared, dict):
+        raise ConfigError(f"host {name}: 'member_ids' must be a mapping of "
+                          f"address -> node_id")
+    for address, node_id in declared.items():
+        address = str(address).rstrip("/")
+        text = str(node_id or "").strip()
+        if address not in norm:
+            raise ConfigError(f"host {name}: member_ids names {address!r}, which "
+                              f"is not one of its addresses")
+        if not text:
+            raise ConfigError(f"host {name}: member_ids[{address!r}] is empty — "
+                              f"write the node_id that member answers with")
+        member_ids.setdefault(address, text)
+
+    cluster = merged.get("cluster", False)
+    if not isinstance(cluster, bool):
+        # Same trap as a policy boolean: `bool("false")` is true, so a quoted
+        # value would declare the opposite of what the file says.
+        raise ConfigError(f"host {name}: 'cluster' must be true or false, "
+                          f"got {cluster!r}")
+    if cluster:
+        if len(norm) < 2:
+            raise ConfigError(f"host {name}: cluster: true needs at least two "
+                              f"addresses (one machine per member)")
+        if not merged.get("node_id") and not member_ids:
+            raise ConfigError(f"host {name}: cluster: true needs a node_id — the "
+                              f"coordinator must be named (host 'node_id' or a "
+                              f"per-address node_id)")
+        # The coordinator is the member that serves the model, and the plan
+        # puts it first, so a host that names its members but no coordinator
+        # gets the first member's id as its own identity.
+        if not merged.get("node_id") and norm[0] in member_ids:
+            merged["node_id"] = member_ids[norm[0]]
+        if (merged.get("node_id") and norm[0] in member_ids
+                and str(merged["node_id"]) != member_ids[norm[0]]):
+            raise ConfigError(
+                f"host {name}: node_id {merged['node_id']!r} contradicts the "
+                f"node_id {member_ids[norm[0]]!r} declared for its first "
+                f"address — the coordinator is one machine")
+    elif member_ids:
+        # On one machine an address says nothing about identity: the host has a
+        # single node_id, and a second one beside it would be a claim nothing
+        # reads.
+        raise ConfigError(
+            f"host {name}: a per-address node_id needs cluster: true — a single "
+            f"machine has one node_id, not one per address")
 
     backend = str(merged.get("backend", "omlx")).lower()
     if backend not in ("omlx", "openai_compatible"):
@@ -1110,6 +1227,8 @@ def _parse_host(raw: dict[str, Any], defaults: dict[str, Any], idx: int) -> Host
         warmup=[str(m) for m in warmup],
         prefer_resident=bool(merged.get("prefer_resident", True)),
         replication=host_replication,
+        cluster=cluster,
+        member_ids=member_ids,
         pp_tps=(_num(merged["pp_tps"], f"host {name}: pp_tps", minimum=1.0)
                 if merged.get("pp_tps") else None),
         tg_tps=(_num(merged["tg_tps"], f"host {name}: tg_tps", minimum=1.0)
@@ -1170,8 +1289,9 @@ def host_from_block(block: dict[str, Any], defaults: dict[str, Any] | None = Non
 
     The same parser the file uses, so a host added at the page is validated
     exactly like a hand-written one — an address without a scheme, an unknown
-    backend or a `spill_threshold` above `max_inflight` is refused here instead
-    of failing on the first request. `ConfigError` is the caller's 400.
+    backend, a `spill_threshold` above `max_inflight` or a `cluster:` block the
+    parser cannot read is refused here instead of failing on the first request.
+    `ConfigError` is the caller's 400.
     """
     return _parse_host(block, defaults or {}, idx)
 
@@ -1645,6 +1765,13 @@ def host_block(host: HostConfig) -> dict[str, Any]:
         block["pp_tps"] = host.pp_tps
     if host.tg_tps:
         block["tg_tps"] = host.tg_tps
+    # A cluster is a declaration, so it has to survive the round trip through
+    # the overlay and the policy endpoint (issue #194); otherwise the first
+    # weight change would turn one logical node back into a plain host.
+    if host.cluster:
+        block["cluster"] = True
+    if host.member_ids:
+        block["member_ids"] = dict(host.member_ids)
     return block
 
 

@@ -28,6 +28,8 @@ from ripple import __main__ as cli
 from ripple import service
 from ripple.config import Config
 
+from tests.support import darwin_only
+
 
 # --- dispatch ---------------------------------------------------------------
 
@@ -499,6 +501,14 @@ def perm(monkeypatch, cfg, tmp_path):
     monkeypatch.setattr(service, "healthz", lambda port, timeout=2.0: state["health"])
     monkeypatch.setattr(service, "_command_of", lambda pid: state["command"])
     monkeypatch.setattr(service, "plist_path", lambda lab=None: tmp_path / "ai.ripple-test.plist")
+    # `needs_env_key` reads the *file*, not the loaded config, so the fixture
+    # owns that path as well: on a machine without `~/.ripple/config.yaml` it
+    # answers "the plist needs the key" and the install writes one, which is not
+    # what this test is about. This config names its own key (#179/#185).
+    naming = tmp_path / "config.yaml"
+    naming.write_text("defaults:\n  api_key_file: ~/.ripple/secrets.yaml#omlx.fleet\n",
+                      encoding="utf-8")
+    monkeypatch.setattr(service, "job_config_path", lambda: naming)
     monkeypatch.setattr(service, "api_key_from_file", lambda: "test-key-123")
     monkeypatch.setattr(service, "wait_job_gone", lambda lab=None, seconds=15.0: True)
     monkeypatch.setattr(service, "wait_port_free", lambda port, seconds=15.0: state["listener"])
@@ -530,7 +540,14 @@ def perm(monkeypatch, cfg, tmp_path):
     return state
 
 
+@darwin_only
 def test_perm_installs_the_job_and_waits_until_healthz_answers(perm, capsys):
+    """`ripple -perm` end to end: render, install, bootstrap, verify.
+
+    macOS-only by subject — the command installs a launchd LaunchAgent, so on a
+    host without launchd there is nothing for it to install. The rest of this
+    file fakes `_launchctl`/`_plutil` and runs anywhere.
+    """
     assert service.cmd_autostart([]) == 0
     plist = service.plist_path()
     assert plist.is_file()

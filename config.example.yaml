@@ -85,6 +85,25 @@ hosts:
   #     - http://192.0.2.11:8000
   #   models: []
 
+  # A cluster (issue #194): one model across two Macs. oMLX runs one deployment
+  # over both machines and only the coordinator serves it; for RIPPLE that pair
+  # is ONE node — one card, one model row, one capacity — so it is one host entry
+  # with one address per machine. `cluster: true` needs at least two addresses
+  # and a coordinator; each address names the `node_id` that machine answers
+  # with, which is what makes the second Mac a member instead of an identity
+  # mismatch. The capacity is the coordinator's, never the sum of both.
+  # A deployment replaces the fleet while it runs, so give it its own profile and
+  # its own port — docs/install.md §8 has the switch and the rollback.
+  # - name: cluster
+  #   cluster: true
+  #   node_id: <the coordinator's node_id>   # the member that serves the model
+  #   addresses:
+  #     - address: http://127.0.0.1:8000     # the Mac that activates the
+  #       node_id: <coordinator node_id>     # deployment
+  #     - address: http://192.0.2.21:8000    # the second machine
+  #       node_id: <its own node_id>
+  #   models: []                             # the model the deployment runs
+
 
 # Thread identity (FA-6, FA-7)
 affinity:
@@ -241,7 +260,10 @@ update:
 # a node added at the page can be deleted again. A node in both keeps the
 # config's identity and takes the overlay's weight/site/enabled.
 fleet:
-  file: ~/.ripple/fleet.yaml   # written atomically (0600), read at start-up
+  file: ~/.ripple/runtime.yaml # written atomically (0600), read at start-up.
+                               # The old name was fleet.yaml (before #78); a
+                               # runtime.yaml that does not exist yet adopts one
+                               # it finds beside it, but new installs write this.
   persist: true                # false = memory only, nothing read or written
   drain_seconds: 120           # how long a removal waits for inflight == 0
   drain_poll_seconds: 0.25     # how often it looks

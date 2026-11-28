@@ -9520,3 +9520,119 @@ def test_a_refusal_without_the_marker_keeps_the_generic_sentence(refusals_run):
         answer = refusals_run[lang]["unmarked"]
         assert answer["text"] == cat["nodes.err.other"].replace(
             "{msg}", "admin key required"), lang
+
+# -- #194: a cluster is one row, its members are detail ---------------------
+# The payload contract is additive: every `hosts[]` row carries `cluster`,
+# `world_size` and `members`, and a plain host answers `false`, `null`, `[]`.
+# The two machines of a deployment are `members` of one row — never rows of
+# their own, or the fleet would count one oMLX twice.
+CLUSTER_MEMBERS = [
+    {"address": "192.0.2.11:8000", "node_id": "m5aaaa1111bbbb",
+     "identity_ok": True, "reachable": True, "error": None},
+    # The member answers but under another id: the one fact `reachable` cannot
+    # carry, and the reason the line has to name it (plan step 3).
+    {"address": "192.0.2.21:8000", "node_id": "m3cccc2222dddd",
+     "identity_ok": False, "reachable": False, "error": "timeout"},
+]
+
+
+def _cluster_healthz() -> dict:
+    """The delivered fixture with `alpha` declared as a two-machine cluster."""
+    h = json.loads(json.dumps(_healthz()))
+    h["hosts"][0]["cluster"] = True
+    h["hosts"][0]["world_size"] = 2
+    h["hosts"][0]["members"] = json.loads(json.dumps(CLUSTER_MEMBERS))
+    return h
+
+
+def test_a_cluster_is_one_card_with_a_chip_and_its_world_size(tmp_path):
+    """One `hosts[]` row, one card — the chip is decoration on that row."""
+    out = _run_stub(tmp_path, _stub_fixture(healthz=_cluster_healthz()))
+    fleet = out["parts"]["fleet"]
+
+    # the members did not become rows: still one card per `hosts[]` entry
+    assert fleet.count('<article class="card host"') == 2
+    card = _card(fleet, "alpha")
+    assert 'class="chip cluster tip"' in card
+    assert ">" + _en()["fleet.cluster"] + '<span class="den"> ×2</span>' in card
+    assert _en()["fleet.cluster_tip"].replace("{n}", "2") in card
+    # every number the row carried before is still on it
+    plain = _card(fleet, "beta")
+    assert card.count('class="metric') == plain.count('class="metric')
+    assert card.count('class="host-foot"') == 1
+
+
+def test_the_members_are_one_tooltip_line_each_and_not_a_table(tmp_path):
+    """`address · node_id (8) · verdict`, one line per member.
+
+    The three verdict words are catalog ids, so the expectation is built from
+    the catalog and not typed here: a line with prose baked into the script
+    would read English on a German page (the defect this pins).
+    """
+    en = _en()
+    out = _run_stub(tmp_path, _stub_fixture(healthz=_cluster_healthz()))
+    card = _card(out["parts"]["fleet"], "alpha")
+
+    assert 'class="tip cluster-members"' in card
+    assert "192.0.2.11:8000 · m5aaaa11 · " + en["fleet.member_ok"] in card
+    # `identity_ok: false` is said out loud, and the error travels with it
+    assert ("192.0.2.21:8000 · m3cccc22 · " + en["fleet.member_unreachable"] +
+            " · " + en["fleet.member_identity_bad"] + " (timeout)") in card
+    # one line per member, no third line, no second member table
+    assert card.count(" · " + en["fleet.member_ok"]) == 1
+    assert card.count(" · " + en["fleet.member_unreachable"]) == 1
+    assert "<table" not in card
+    # the words are translated somewhere (`ok` happens to be `ok` in German),
+    # and the mark of a broken identity survives every translation
+    for key in ("fleet.member_ok", "fleet.member_unreachable",
+                "fleet.member_identity_bad"):
+        others = [_catalog(code)[key] for code in
+                  ("cs", "el", "hu", "ru", "tr", "zh")]
+        assert any(text != en[key] for text in others), key
+        assert all(text.strip() for text in others), key
+    for code in ("cs", "de", "el", "hu", "ru", "tr", "zh"):
+        assert _catalog(code)["fleet.member_identity_bad"].endswith("✗"), code
+
+
+def test_a_cluster_without_a_deployment_counts_its_members(tmp_path):
+    """`world_size` is null until the ranks start; the count is the members.
+
+    The plan calls this state out ("cluster, not loaded yet"): "one model
+    across — machines" would read as a broken number instead of a wait.
+    """
+    h = _cluster_healthz()
+    h["hosts"][0]["world_size"] = None
+    out = _run_stub(tmp_path, _stub_fixture(healthz=h))
+    card = _card(out["parts"]["fleet"], "alpha")
+
+    assert _en()["fleet.cluster_tip"].replace("{n}", "2") in card
+    assert _en()["fleet.cluster_tip"].replace("{n}", "—") not in card
+    assert "×2" in card
+
+
+def test_a_plain_host_carries_no_cluster_chip(rendered):
+    """An older payload has no `cluster`, no `members` — it reads as before."""
+    fleet = rendered["parts"]["fleet"]
+    assert 'chip cluster' not in fleet
+    assert "cluster-members" not in fleet
+    assert "undefined" not in fleet
+
+
+def test_the_model_appears_once_when_a_host_carries_members(tmp_path):
+    """A cluster is one logical node in the Models tab too (issue #194).
+
+    The fixture names a member address as a host of the model on top of the
+    cluster's own row — the shape that would print the model twice. The table
+    keeps one row, under the cluster's name, with the resident weight.
+    """
+    h = _cluster_healthz()
+    deepseek = next(m for m in h["models"] if m["id"] == DEEPSEEK)
+    member_row = json.loads(json.dumps(deepseek["hosts"][0]))
+    member_row.update({"host": "192.0.2.21:8000", "loaded": False, "tg_tps": None})
+    deepseek["hosts"].append(member_row)
+
+    out = _run_stub(tmp_path, _stub_fixture(healthz=h))
+    models = out["parts"]["models"]
+    keys = re.findall(r'data-key="' + re.escape(DEEPSEEK) + r'\|([^"]*)"', models)
+    assert keys == ["alpha", "beta"], keys
+    assert ">192.0.2.21:8000<" not in models

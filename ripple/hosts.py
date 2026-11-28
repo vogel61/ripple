@@ -292,6 +292,39 @@ class SeriesRing:
 
 
 @dataclass
+class MemberState:
+    """One machine of a cluster host (issue #194) — one declared address.
+
+    A cluster host is *one* logical node that happens to answer on several
+    machines, so the host keeps its single verdict, its single slot account and
+    its single capacity, and this is the per-machine detail beside it: who
+    answered, whether that was the id the configuration declared for it, whether
+    it is reachable, and whether it says it runs a distributed engine.
+
+    The declaration is the contract, the answer is the evidence. `node_id` is
+    what the operator wrote for this address (`cfg.member_ids[address]`, falling
+    back to the host's own `node_id`); `node_id_seen` is what the machine
+    actually said. They may differ only in a mismatch, which is exactly what
+    `identity_ok = False` and `last_error` report — never silently.
+
+    `distributed` holds the models this member reports as a distributed engine,
+    i.e. the models it coordinates (`ModelInfo.distributed` is a coordinator
+    statement, a worker reports `false`). It is a set and not a flag because a
+    deployment record exists per model, and it is the first evidence
+    `HostRuntime.serving_member` uses to decide which machine is the one to
+    talk to.
+    """
+
+    address: str
+    node_id: str | None
+    node_id_seen: str | None = None
+    identity_ok: bool = True
+    reachable: bool = False
+    last_error: str | None = None
+    distributed: set[str] = field(default_factory=set)
+
+
+@dataclass
 class HostRuntime:
     cfg: HostConfig
     client: httpx.AsyncClient
@@ -358,6 +391,17 @@ class HostRuntime:
     metrics: dict[str, dict[str, float]] = field(default_factory=dict)
     addr_switches: int = 0
     identity_ok: bool = True
+    #: The machines of a cluster host (issue #194), one entry per declared
+    #: address in **config order**; empty for a single-machine host, which is
+    #: what keeps its behaviour byte-identical to before. Filled by `resolve()`
+    #: from the identity probes it runs anyway, and refreshed on every probe
+    #: tick (`_refresh_members`).
+    members: list[MemberState] = field(default_factory=list)
+    #: The backend object per member address. Kept so that adopting another
+    #: member as the serving one hands over the object the identity probe
+    #: already built — a fresh one would start with an empty capability set and
+    #: answer "can do nothing" for one tick (the same window `#190` closed).
+    _backends: dict[str, Backend] = field(default_factory=dict, repr=False)
     # The two knobs the state machine needs from the config (ceiling, flap
     # guard). A default instance keeps a host constructible in a test without a
     # Fleet.
@@ -462,6 +506,213 @@ class HostRuntime:
             return OpenAICompatibleBackend(address, self.cfg.api_key, client=self.client)
         return OmlxBackend(address, self.cfg.api_key, client=self.client)
 
+    # -- cluster (issue #194) ----------------------------------------------
+    def _declared_id(self, address: str) -> str | None:
+        """Which `node_id` the configuration expects from this address.
+
+        A cluster declares one id per member (`cfg.member_ids`), because the
+        second Mac answers with its own id and not the coordinator's. Everywhere
+        else there is one machine behind the address list, so the host's own
+        `node_id` is the only declaration there is — and `member_ids` is empty
+        for such a host, which keeps the answer byte-identical to before.
+        """
+        return self.cfg.member_ids.get(address) or self.cfg.node_id
+
+    @property
+    def serving_member(self) -> MemberState | None:
+        """The one member that may carry this host's traffic (issue #194).
+
+        Three rules, in this order, and each of them is evidence and not a
+        preference:
+
+        1. the member that reports a distributed engine — the deployment record
+           lives only on rank 0, so `distributed` names the coordinator;
+        2. the member whose `node_id_seen` is the declared coordinator
+           (`cfg.node_id`) — the configuration's own claim, used before a
+           deployment is visible at all;
+        3. the first reachable member, which is only reached when neither the
+           node nor the declaration says anything (a plain host list that was
+           declared as a cluster).
+
+        A member with a broken identity is never a candidate: it answered with
+        an id no declaration covers, so nothing it says can be trusted to be
+        about this host.
+
+        **This is the whole safety property of the step.** A worker's own
+        `:8000` server would load the *whole* checkpoint if a request reached
+        it, so there is exactly one serving member and it does not move because
+        another member happens to answer — `resolve()` and `_refresh_once()`
+        hand the host's verdict and capacity to this member and to nobody else.
+        """
+        candidates = [m for m in self.members if m.identity_ok]
+        for member in candidates:
+            if member.distributed:
+                return member
+        if self.cfg.node_id:
+            for member in candidates:
+                if member.node_id_seen == self.cfg.node_id:
+                    return member
+        for member in candidates:
+            if member.reachable:
+                return member
+        return None
+
+    @property
+    def world_size(self) -> int | None:
+        """How many machines oMLX says the deployment runs on — context, not capacity.
+
+        Read from the serving member's own `cluster` records, never summed or
+        guessed: it is the number the dashboard shows beside a cluster row so
+        that "one node" does not hide "two machines". None when nothing is
+        distributed — a host that is merely declared as a cluster runs whole
+        models like any other.
+        """
+        serving = self.serving_member
+        if serving is None:
+            return None
+        sizes: list[int] = []
+        for model in serving.distributed:
+            info = self.models.get(model)
+            record = info.cluster if info is not None else None
+            size = record.get("world_size") if isinstance(record, dict) else None
+            if isinstance(size, int):
+                sizes.append(size)
+        return max(sizes) if sizes else None
+
+    def _note_members(self, answers: dict[str, tuple[Backend, str | None, str | None]]) -> None:
+        """Fold one round of identity probes into the member rows.
+
+        `answers` is address → `(backend, node_id, error)` exactly as
+        `_identity_probe()` returned it, so this is the same evidence the
+        single-machine walk uses — only kept per address instead of collapsed
+        into one verdict.
+
+        A failed answer is *not* evidence that the member changed its id or lost
+        its deployment: `node_id_seen` and `distributed` keep their last known
+        value, and only `reachable`/`last_error` follow the failure. Clearing
+        them would make an unreachable coordinator look like "no coordinator
+        here" and hand the host to the next member — the exact failover this
+        step exists to prevent.
+        """
+        by_address = {m.address: m for m in self.members}
+        for address in self.cfg.addresses:
+            member = by_address.get(address)
+            if member is None:
+                member = MemberState(address=address, node_id=self._declared_id(address))
+                self.members.append(member)
+                by_address[address] = member
+            backend, nid, error = answers.get(address, (None, None, None))
+            if backend is not None:
+                self._backends[address] = backend
+            if error is None:
+                member.reachable = True
+                member.identity_ok = True
+                member.last_error = None
+                if nid:
+                    member.node_id_seen = nid
+                continue
+            member.reachable = False
+            member.last_error = error
+            # Only a *wrong* id is an identity failure. A refused connect says
+            # nothing about who the machine is, and the host keeps the benefit
+            # of the doubt the same way it always has.
+            member.identity_ok = not error.startswith("identity_mismatch")
+
+    def _note_member_distributed(self) -> None:
+        """Record which models the serving member reports as distributed engines.
+
+        Free: `self.models` is the residency answer the probe tick already read
+        from that member, and `distributed` is a field of it. A read that failed
+        leaves `self.models` as it was, and the last known answer stands — a
+        failed read is not evidence that a deployment ended.
+        """
+        serving = self.serving_member
+        if serving is None:
+            return
+        serving.distributed = {mid for mid, info in self.models.items() if info.distributed}
+
+    async def _refresh_members(self) -> None:
+        """Refresh reachability and the deployment record of every other member.
+
+        The serving member's numbers come from the host's own probe in the same
+        tick (`self.models`, `_apply_health`), so it is skipped here. Every other
+        member costs one identity request and one residency read: two requests
+        per machine per interval, which is what makes the `members` row in
+        `/healthz` a statement about now instead of about the last resolve.
+
+        Both phases are gathered for the same reason `resolve()` gathers them
+        (issue #117): a blackholed address costs its whole connect timeout, and
+        a member list walked one by one would hold the tick for the sum of them.
+        """
+        serving = self.serving_member
+        others = [m for m in self.members
+                  if serving is None or m.address != serving.address]
+        if not others:
+            return
+        answers = await asyncio.gather(*(self._identity_probe(m.address) for m in others))
+        readable: list[tuple[MemberState, Backend]] = []
+        for member, (backend, nid, error) in zip(others, answers):
+            self._backends[member.address] = backend
+            if error is not None:
+                member.reachable = False
+                member.last_error = error
+                member.identity_ok = not error.startswith("identity_mismatch")
+                continue
+            member.reachable = True
+            member.last_error = None
+            member.identity_ok = True
+            if nid:
+                member.node_id_seen = nid
+            readable.append((member, backend))
+        if not readable:
+            return
+        residencies = await asyncio.gather(
+            *(backend.residency() for _, backend in readable),
+            return_exceptions=True)
+        for (member, _), residency in zip(readable, residencies):
+            # A failed read is not an answer: the last known deployment record
+            # stands, because "unreadable" is not "no longer distributed".
+            if isinstance(residency, dict):
+                member.distributed = {mid for mid, info in residency.items()
+                                      if info.distributed}
+
+    async def _adopt_serving_member(self) -> None:
+        """Point the host at the member that serves — and never at another one.
+
+        Called from the probe tick after the members were refreshed. A switch
+        happens only when the evidence moved the role (a deployment appeared on
+        another member, or the declared coordinator came back), never because
+        the current one stopped answering: the health verdict of an unreachable
+        serving member is `degraded`/`down` through the existing flap guard, and
+        that is the honest answer. A worker would answer a request by loading
+        the whole checkpoint, which is worse than an outage.
+        """
+        serving = self.serving_member
+        if serving is None:
+            return
+        if serving.address == self.resolved_address and self.backend is not None:
+            self.node_id_seen = serving.node_id_seen or self.node_id_seen
+            return
+        if self.loading is not None:
+            # A load is running on the member we talk to; swapping the address
+            # under it would leave a load nobody polls. The next tick retries.
+            return
+        backend = self._backends.get(serving.address) or self._make_backend(serving.address)
+        self._backends[serving.address] = backend
+        old = self.resolved_address
+        self.backend = backend
+        self.resolved_address = serving.address
+        self.resolved_at = time.time()
+        self.node_id_seen = serving.node_id_seen
+        if old and old != serving.address:
+            self.addr_switches += 1
+            log.warning("serving_member host=%s old=%s new=%s node_id=%s",
+                        self.cfg.name, old, serving.address, serving.node_id_seen)
+        # The new address is a different machine: its version, model list,
+        # capabilities and memory are not the ones the old member answered.
+        self.relearn_due = True
+        await self._relearn()
+
     # -- resolution --------------------------------------------------------
     async def _identity_probe(self, address: str) -> tuple[Backend, str | None, str | None]:
         """Ask one address who it is. No health probe, no state written.
@@ -469,18 +720,25 @@ class HostRuntime:
         Returns `(backend, node_id, error)`; `error` is the sentence that would
         land in `last_error` if this address is not usable. A separate step
         because the walk asks every address at once (issue #117).
+
+        The id is compared against the declaration *for this address*
+        (`_declared_id`): one machine behind several addresses expects the same
+        id on all of them, a cluster expects each member's own. An id that
+        matches no declaration is a mismatch in both cases — that is the gate
+        `resolve()` has always had, kept exactly, only asked per address.
         """
         backend = self._make_backend(address)
         if self.cfg.backend != "omlx":
             return backend, None, None
+        expected = self._declared_id(address)
         try:
             nid = await backend.identity()
         except (httpx.HTTPError, ValueError, OSError) as exc:
             return backend, None, f"{address}: {type(exc).__name__}: {exc}"
-        if self.cfg.node_id and nid and nid != self.cfg.node_id:
+        if expected and nid and nid != expected:
             return backend, nid, (f"identity_mismatch: {address} reports {nid}, "
-                                  f"expected {self.cfg.node_id}")
-        if self.cfg.node_id and nid is None:
+                                  f"expected {expected}")
+        if expected and nid is None:
             return backend, None, f"{address}: node_id unreadable"
         return backend, nid, None
 
@@ -516,6 +774,8 @@ class HostRuntime:
         old = self.resolved_address
         addresses = self.ordered_addresses()
         probes = await asyncio.gather(*(self._identity_probe(a) for a in addresses))
+        if self.cfg.cluster:
+            return await self._resolve_cluster(addresses, probes, old)
         usable: list[tuple[str, Backend, str | None]] = []
         for address, (backend, nid, error) in zip(addresses, probes):
             if error is not None:
@@ -568,6 +828,76 @@ class HostRuntime:
         self.status = "down"
         self.healthy = False
         return False
+
+    async def _resolve_cluster(self, addresses: list[str],
+                               probes: Sequence[tuple[Backend, str | None, str | None]],
+                               old: str | None) -> bool:
+        """Resolve a cluster host: every member is asked, exactly one is used.
+
+        The walk is the same as for a single machine — all addresses at once, in
+        configured order — but the outcome differs in the two ways this step is
+        about:
+
+        * every answer is kept per member instead of collapsing into one verdict,
+          so the host's `identity_ok` means "every member answered with the id
+          declared for it" and one wrong id is reported without making the
+          others unusable;
+        * the health probe and everything after it run on the **serving member
+          only** (`serving_member`). No other member is ever tried: a worker
+          answering `/health` says nothing about the deployment, and a request
+          that reached it would load the whole checkpoint.
+
+        A serving member that does not answer therefore makes the host `down`
+        instead of a host on its backup member. That is the deliberate trade:
+        an outage is recoverable, a 400 GB load on the wrong machine is not.
+        """
+        self._note_members(dict(zip(addresses, probes)))
+        self.identity_ok = all(m.identity_ok for m in self.members)
+        for member in self.members:
+            if member.last_error:
+                log.error("member_unusable host=%s addr=%s cause=%s",
+                          self.cfg.name, member.address, member.last_error)
+        serving = self.serving_member
+        backend = self._backends.get(serving.address) if serving is not None else None
+        if serving is None or backend is None or serving.last_error is not None:
+            if serving is None:
+                self.last_error = "no member answered with a declared node_id"
+            else:
+                self.last_error = serving.last_error or f"{serving.address}: unusable"
+            log.error("serving_member_unavailable host=%s addr=%s cause=%s",
+                      self.cfg.name, serving.address if serving is not None else "-",
+                      self.last_error)
+            self.status = "down"
+            self.healthy = False
+            return False
+        health = await self._health_probe(backend)
+        if isinstance(health, str) or not health.healthy:
+            self.last_error = (health if isinstance(health, str)
+                               else f"{serving.address}: {health.error or 'not healthy'}")
+            log.error("serving_member_unhealthy host=%s addr=%s cause=%s",
+                      self.cfg.name, serving.address, self.last_error)
+            self.status = "down"
+            self.healthy = False
+            return False
+
+        if self.capabilities_seen is not None:
+            # Same window as in the single-machine path (issue #190): the set
+            # this host last reported stands until the backend has answered.
+            backend.capabilities = self.capabilities_seen  # type: ignore[misc]
+        self.backend = backend
+        self.resolved_address = serving.address
+        self.resolved_at = time.time()
+        self.node_id_seen = serving.node_id_seen
+        self._apply_health(health)
+        await self._relearn(health)
+        if old and old != serving.address:
+            self.addr_switches += 1
+            log.warning("addr_switch host=%s old=%s new=%s", self.cfg.name, old,
+                        serving.address)
+        else:
+            log.info("resolved host=%s addr=%s node_id=%s members=%d", self.cfg.name,
+                     serving.address, self.node_id_seen, len(self.members))
+        return True
 
     async def reinit(self) -> bool:
         """Deliberate switch: drop the resolution and probe again (FA-21 rule 4).
@@ -694,6 +1024,15 @@ class HostRuntime:
                 self.stats.probes_skipped += 1
             await self._poll_loading()
             return
+        if self.members:
+            # A cluster (issue #194): the members that are not serving are asked
+            # on every tick, and the role is decided *before* the health probe —
+            # so that probe always measures the machine the host would route to.
+            # The serving member is skipped there; its numbers come from this
+            # tick's own probe below.
+            await self._refresh_members()
+            await self._adopt_serving_member()
+            self.identity_ok = all(m.identity_ok for m in self.members)
         try:
             health = await self.backend.health()
         except (httpx.HTTPError, ValueError, OSError) as exc:
@@ -781,6 +1120,9 @@ class HostRuntime:
             residency = None
         if residency is not None:
             self.models = residency
+            # Which models this member coordinates (issue #194) — a field of the
+            # answer just read, so it costs nothing and is never a guess.
+            self._note_member_distributed()
             # A model that is resident again is not a displaced one any more
             # (issue #119): the note says why it went, not that it is gone.
             for gone in [m for m in self.displaced
@@ -1630,7 +1972,18 @@ class HostRuntime:
         `([], None)` when there is no forecast to make (unknown size, no ceiling,
         guard off — the node then decides), and `([...], reason)` when it does
         not fit, with the sentence the dashboard and the log show.
+
+        A model the serving member reports as a distributed engine is refused
+        outright (issue #194): its shard is not a model size, and pricing it
+        against one machine's ceiling would be arithmetic about the wrong
+        object. A load there is oMLX's job — the deployment is activated in the
+        engine, not by a request.
         """
+        serving = self.serving_member
+        if serving is not None and model in serving.distributed:
+            machines = self.world_size or len(self.members)
+            return [], (f"cluster: {model} runs as a deployment over {machines} "
+                        "machines; RIPPLE cannot load it")
         info = self.models.get(model)
         if info is None or not info.estimated_size:
             return [], None
@@ -1841,6 +2194,21 @@ class HostRuntime:
             "node_id": self.node_id_seen,
             "node_id_expected": self.cfg.node_id,
             "identity_ok": self.identity_ok,
+            # The cluster view (issue #194): one logical node, several machines.
+            # `cluster` is the declaration, `world_size` what oMLX reports for
+            # the deployment, `members` one row per declared address. Always
+            # present — a single-machine host answers false / null / [] — because
+            # the shape is what a dashboard child is coded against, and a key
+            # that only appears for a cluster would be a second shape.
+            "cluster": self.cfg.cluster,
+            "world_size": self.world_size,
+            "members": [{"address": m.address,
+                         # The declared id: `identity_ok` and `error` are what
+                         # say whether the machine answered with it.
+                         "node_id": m.node_id,
+                         "identity_ok": m.identity_ok,
+                         "reachable": m.reachable,
+                         "error": m.last_error} for m in self.members],
             "version": self.version,
             "guard_enabled": self.guard_enabled,
             "hard_threshold": self.cfg.hard_threshold,

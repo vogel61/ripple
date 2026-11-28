@@ -691,3 +691,131 @@ def test_the_config_view_reports_the_utility_budget_in_effect(tmp_path):
     from ripple.config import policy_refusal
     refusal = policy_refusal("hosts.alpha.max_inflight_utility")
     assert refusal and "restart" in refusal
+
+
+# -- a cluster host, and a key the parser does not know (issue #194, step 2) --
+#
+# One model sharded over two Macs is one logical node, so a host may declare
+# `cluster: true` and name the node_id each of its members answers with. That
+# declaration only works if the parser can tell a key it understood from a key
+# it dropped: before this step `_parse_host` merged `defaults:` over the block
+# and read what it knew, so `cluster:` (and any typo) was accepted and ignored —
+# the file said one thing and the process did another.
+
+def test_an_unknown_key_on_a_host_names_host_and_key(tmp_path):
+    """A declaration that is not understood must not be a quiet no-op."""
+    typo = [{"name": "alpha", "addresses": ["http://127.0.0.1:8000"],
+             "wieght": 2}]
+    with pytest.raises(ConfigError, match=r"host alpha: unknown key 'wieght'") as exc:
+        load_config(write_config(tmp_path, hosts=typo))
+    # The allowed keys are listed, sorted, so the operator can find the right
+    # spelling without reading the source.
+    message = str(exc.value)
+    assert "allowed keys:" in message
+    assert "addresses, api_key, api_key_file, backend, cluster" in message
+
+
+def test_the_same_typo_in_defaults_is_refused(tmp_path):
+    """`defaults:` is merged into every host, so it is a host key too."""
+    with pytest.raises(ConfigError,
+                       match=r"host alpha: unknown key 'prefer_resident_'"):
+        load_config(write_config(tmp_path, defaults={"prefer_resident_": True}))
+
+
+def test_a_cluster_with_one_address_is_refused(tmp_path):
+    one = [{"name": "willendorf", "cluster": True, "node_id": "coord",
+            "addresses": ["http://127.0.0.1:8000"]}]
+    with pytest.raises(ConfigError, match=r"host willendorf: cluster: true needs "
+                                         r"at least two addresses"):
+        load_config(write_config(tmp_path, hosts=one))
+
+
+def test_a_cluster_without_a_named_coordinator_is_refused(tmp_path):
+    """The member that serves the model has to be identifiable."""
+    unnamed = [{"name": "willendorf", "cluster": True,
+                "addresses": ["http://127.0.0.1:8000", "http://192.0.2.9:8000"]}]
+    with pytest.raises(ConfigError, match=r"host willendorf: cluster: true needs a node_id"):
+        load_config(write_config(tmp_path, hosts=unnamed))
+
+
+def test_the_mapping_form_normalizes_into_addresses_and_member_ids(tmp_path):
+    """`{address, node_id}` per entry is the declared membership."""
+    declared = [{
+        "name": "willendorf", "cluster": True,
+        "addresses": [
+            {"address": "http://127.0.0.1:8000/", "node_id": "coord"},
+            {"address": "http://192.0.2.9:8000", "node_id": "worker"},
+        ],
+    }]
+    host = load_config(write_config(tmp_path, hosts=declared)).hosts[0]
+    # Order kept, trailing slash stripped, ids keyed by the normalized address.
+    assert host.addresses == ["http://127.0.0.1:8000", "http://192.0.2.9:8000"]
+    assert host.member_ids == {"http://127.0.0.1:8000": "coord",
+                               "http://192.0.2.9:8000": "worker"}
+    assert host.cluster is True
+    # The coordinator is the first member, so it is also the host's identity.
+    assert host.node_id == "coord"
+
+
+def test_a_per_address_id_without_cluster_is_refused(tmp_path):
+    """On one machine a second node_id is a claim nothing reads."""
+    single = [{"name": "alpha", "node_id": "a",
+               "addresses": [{"address": "http://127.0.0.1:8000", "node_id": "a"}]}]
+    with pytest.raises(ConfigError, match=r"host alpha: a per-address node_id "
+                                         r"needs cluster: true"):
+        load_config(write_config(tmp_path, hosts=single))
+
+    ids_only = [{"name": "alpha", "node_id": "a",
+                 "addresses": ["http://127.0.0.1:8000"],
+                 "member_ids": {"http://127.0.0.1:8000": "a"}}]
+    with pytest.raises(ConfigError, match="needs cluster: true"):
+        load_config(write_config(tmp_path, hosts=ids_only))
+
+
+def test_a_duplicate_address_is_refused(tmp_path):
+    """Two spellings of one machine would count as two cluster members."""
+    twice = [{"name": "willendorf", "cluster": True, "node_id": "coord",
+              "addresses": ["http://127.0.0.1:8000", "http://127.0.0.1:8000/"]}]
+    with pytest.raises(ConfigError, match=r"host willendorf: duplicate address "
+                                         r"'http://127.0.0.1:8000'"):
+        load_config(write_config(tmp_path, hosts=twice))
+
+
+def test_an_existing_config_parses_unchanged(tmp_path):
+    """Every file written before this step still describes a plain host."""
+    cfg = load_config(write_config(tmp_path))
+    host = cfg.hosts[0]
+    assert host.cluster is False
+    assert host.member_ids == {}
+    assert host.addresses == ["http://127.0.0.1:8000"]
+
+
+def test_host_from_block_enforces_the_same_rules(tmp_path):
+    """The page's parser is the file's parser, so the refusals are the same."""
+    from ripple.config import host_from_block
+
+    with pytest.raises(ConfigError, match=r"host willendorf: unknown key 'members'"):
+        host_from_block({"name": "willendorf", "cluster": True,
+                         "addresses": ["http://127.0.0.1:8000",
+                                       "http://192.0.2.9:8000"],
+                         "members": []})
+    with pytest.raises(ConfigError, match="needs at least two addresses"):
+        host_from_block({"name": "willendorf", "cluster": True, "node_id": "coord",
+                         "addresses": ["http://127.0.0.1:8000"]})
+    with pytest.raises(ConfigError, match="needs a node_id"):
+        host_from_block({"name": "willendorf", "cluster": True,
+                         "addresses": ["http://127.0.0.1:8000",
+                                       "http://192.0.2.9:8000"]})
+    with pytest.raises(ConfigError, match="needs cluster: true"):
+        host_from_block({"name": "alpha", "node_id": "a",
+                         "addresses": [{"address": "http://127.0.0.1:8000",
+                                        "node_id": "b"}]})
+    # And the valid block lands where the loader would put it.
+    ok = host_from_block({"name": "willendorf", "cluster": True,
+                          "addresses": [{"address": "http://127.0.0.1:8000",
+                                         "node_id": "coord"},
+                                        {"address": "http://192.0.2.9:8000",
+                                         "node_id": "worker"}]})
+    assert ok.cluster is True
+    assert ok.member_ids["http://192.0.2.9:8000"] == "worker"
+    assert ok.node_id == "coord"

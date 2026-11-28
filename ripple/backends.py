@@ -74,6 +74,18 @@ class ModelInfo:
     # (issue #195). Empty means "a real engine": only the payload's own field
     # is trusted, never the id's shape.
     source_model_id: str = ""
+    # oMLX's statement that **this node is the coordinator** of a parallel
+    # deployment (issue #194). The deployment record exists only on rank 0 and
+    # is never replicated to peers, so a worker reports `false` for the very
+    # same model — the flag says "coordinator here", never "no deployment
+    # anywhere". Measured 25.11.2026 on oMLX 0.8.3: every row was false.
+    distributed: bool = False
+    # oMLX's own `cluster` object from `/v1/models/status`: `deployment_id`,
+    # `world_size`, `tensor_parallel_size`, `pipeline_stages`, `strategy`,
+    # `backend`, `target_context_tokens`, `profile`. Passed through untouched —
+    # the keys are the engine's vocabulary, and renaming one here would make
+    # this no longer "what the node said". None = the node did not report it.
+    cluster: dict | None = None
 
 
 @dataclass
@@ -220,6 +232,14 @@ class OmlxBackend(Backend):
                 # Only a profile row carries this; a real engine does not
                 # (issue #195).
                 source_model_id=str(m.get("source_model_id") or ""),
+                # `/v1/models/status` is the only endpoint that carries the
+                # cluster facts, so they are read here and nowhere else
+                # (issue #194). A missing flag is not a coordinator, and a
+                # `cluster` that is not an object is no cluster at all —
+                # both stay at their defaults instead of guessing.
+                distributed=bool(m.get("distributed")),
+                cluster=(m.get("cluster")
+                         if isinstance(m.get("cluster"), dict) else None),
             )
         return out
 

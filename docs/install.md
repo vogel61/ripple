@@ -453,7 +453,86 @@ Further down: **Models** (one row per model and node, models that are not loaded
 
 ---
 
-## 8. Keys
+## 8. One model across two Macs
+
+oMLX can run **one model across both Macs**: one deployment, one engine, two
+machines, one coordinator. RIPPLE shows that pair as one node — one card, one
+model row, one capacity (manual §5.1 and §6.7) — and it needs a configuration
+that says so.
+
+**It replaces the fleet while it runs.** A deployment consumes both Macs, so it
+cannot sit beside the productive fleet. The cluster therefore gets a **second
+profile**, `~/.ripple/cluster.yaml`, and a **second RIPPLE instance**: its own
+port (`8011`; the productive one keeps `8010`), its own log, and its own state
+files. Every store moves, because two instances on one ledger poison each
+other's numbers — the ledger, the calibration curve, the maintenance windows,
+the model policy and the runtime overlay:
+
+```yaml
+listen_port: 8011
+log_file: ~/Library/Logs/ripple-cluster.log
+hosts:
+- name: willendorf-cluster
+  cluster: true                      # a declaration; the node confirms it
+  node_id: <the coordinator's node_id>
+  addresses:
+  - address: http://127.0.0.1:8000
+    node_id: <coordinator node_id>   # what this Mac answers with
+  - address: http://192.0.2.9:8000
+    node_id: <second Mac's node_id>  # and this one
+  models: [<the model the deployment runs>]
+placement:
+  maintenance_file: ~/.ripple/cluster-maintenance.yaml
+  model_policy_file: ~/.ripple/cluster-models.yaml
+  loading:
+    calibration_file: ~/.ripple/cluster-calibration.yaml
+stats:
+  file: ~/.ripple/cluster-host_stats.json
+fleet:
+  file: ~/.ripple/cluster-runtime.yaml
+```
+
+Each `node_id` is what that Mac answers on `GET /api/cluster/node_id`; the
+host's own `node_id` is the coordinator, the member that carries the deployment.
+`cluster: true` with fewer than two addresses, without a coordinator, or with an
+unknown key is refused — `ripple --config ~/.ripple/cluster.yaml --check` says
+which. The key paths are the real ones: a top-level `calibration_file:` or
+`host_stats:` is not a key RIPPLE reads, and a profile written that way would
+quietly write into the productive stores.
+
+**The switch is two commands.**
+
+```bash
+ripple shutdown                                       # the productive instance, :8010
+RIPPLE_CONFIG=~/.ripple/cluster.yaml ripple           # the cluster instance, :8011
+```
+
+Between them: activate the deployment in oMLX's Cluster panel and load the model
+on the coordinator. The cluster instance then answers on `:8011` with one card
+and `cluster ×2`; `curl -s :8011/healthz` shows `cluster: true`, `world_size: 2`
+and both members. Nothing is edited in `config.yaml`, so the productive fleet is
+one start away.
+
+**Back the same way.** `oMLX → Cluster → Deactivate` (an engine already loaded
+keeps running until its normal unload), unload the model on the coordinator,
+stop the cluster instance with `Ctrl-C`, then:
+
+```bash
+ripple                                                # :8010, the fleet as before
+```
+
+The productive configuration was never touched, so there is nothing to restore —
+only to restart. The cluster profile writes to `cluster-*` files and nowhere
+else; deleting them resets the cluster instance alone.
+
+**Do not point a client at a member's `:8000` while a deployment runs.** That
+server would load the whole checkpoint for itself instead of feeding the
+deployment — a second copy of the model, not a share of it. Clients talk to
+`:8011`.
+
+---
+
+## 9. Keys
 
 | Key | Where | What it opens |
 |---|---|---|
@@ -469,7 +548,7 @@ A refused admin key is reported as a refused key, not as a broken panel: the usu
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 **Everything answers 401.** The oMLX key is missing or wrong. This includes `GET /v1/models`, which is what makes the failure look like a proxy problem:
 
@@ -511,7 +590,7 @@ Fewer than 16 means a broken wheel — reinstall from a clean checkout.
 
 ---
 
-## 10. Where things live
+## 11. Where things live
 
 | Path | Content |
 |---|---|
@@ -558,7 +637,7 @@ Nothing else is left behind — no system-wide files, no daemon, no state outsid
 
 ---
 
-## 11. Where to read more
+## 12. Where to read more
 
 - [`README.md`](../README.md) — what RIPPLE does, the routing rules in detail, the configuration shape.
 - [`docs/manual-en.md`](manual-en.md) — the operator's manual: every panel and every control, what it costs and what can go wrong (§4 is the optimizer, §6.6 covers the key page).

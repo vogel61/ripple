@@ -26,6 +26,7 @@ import yaml
 
 from ripple import doctor
 from ripple.config import ConfigError, HostConfig, load_config
+from ripple.config import DEFAULT_FLEET_FILE
 from ripple.replication import (LocalSide, configured_ssh_targets,
                                 reachable_endpoint, ssh_target_for)
 from ripple.sites import (SiteConfig, ip_of, parse_networks, site_for_address,
@@ -521,6 +522,20 @@ def test_the_example_config_carries_one_neutral_site():
     assert cfg.sites[0].networks == ["127.0.0.0/8", "192.0.2.0/24"]
     assert cfg.hosts[0].site == "local"
     assert cfg.site_of(cfg.hosts[0]) is cfg.sites[0]
+
+
+def test_the_example_config_names_the_store_the_loader_writes():
+    """Issue #201: a copied example must not point at a file nothing writes.
+
+    The `fleet:` overlay moved from `fleet.yaml` to `runtime.yaml` in #78 and the
+    example kept the old name. It is not fatal — a `runtime.yaml` that does not
+    exist yet adopts a `fleet.yaml` beside it — but a reader who copies the
+    example configures a store the process only reads under an old name, and the
+    next `ripple init` writes the new one beside it.
+    """
+    cfg = load_config(ROOT / "config.example.yaml")
+    assert cfg.fleet.file == DEFAULT_FLEET_FILE, (
+        "config.example.yaml names a fleet file the loader does not write")
 
 
 def test_no_private_network_in_the_tracked_example():

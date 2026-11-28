@@ -23,17 +23,34 @@ import asyncio
 import dataclasses
 import os
 import pathlib
-import shutil
-import subprocess
+import sys
 
 import pytest
 
 from ripple import replication as rep
 from ripple.config import ReplicationConfig, ReplicationHostConfig, load_config
 
-from tests.support import bearer, host_config, keyed_config, wait_until
+from tests.support import (bearer, host_config, keyed_config, requires_rsync,
+                           rsync_progress_flag, wait_until)
 
 ADMIN = bearer("test-admin-key")
+
+
+def test_a_child_does_not_inherit_the_operators_locale(monkeypatch):
+    """`2.097.152` is not 2 (issue #198).
+
+    The progress line is parsed with a comma as the thousands separator, which
+    is what `LC_ALL=C` prints. Under a German locale rsync prints dots and the
+    parse stops at the first one: a two-file copy of 2 MB reported
+    `bytes_done=2` and 1 % on a Debian host with `LANG=de_DE.UTF-8`, measured
+    26.11.2026. So every child RIPPLE starts gets the C locale, whatever the
+    operator runs with.
+    """
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    env = rep._child_env()
+    assert env["LC_ALL"] == "C"
+    assert env["LANG"] == "C"
 
 GB = 1_000_000_000
 QWEN = "Qwen3.8-Flash-Next-oQ4e-mtp"
@@ -700,37 +717,86 @@ async def test_a_probe_that_cannot_run_falls_through_to_progress():
 # -- the fallback ------------------------------------------------------------
 def _fake_rsync(tmp_path, *, rejects: tuple[str, ...],
                 claims_info: bool = False) -> str:
-    """A stand-in for a rsync that refuses `rejects` the way openrsync does.
+    """A stand-in for openrsync: it refuses `rejects`, copies, and reports.
 
-    A message on stderr, its usage, exit 1 — and the real rsync for everything
-    else, so the copy in the test really copies. `--help` answers itself, which
-    is the point: a rsync whose help does not mention the flag it refuses.
-    `claims_info` makes that help advertise `--info=FLAGS`, i.e. a probe that
+    A complete stand-in, not an option filter. It refuses a flag the way
+    openrsync does (a message on stderr, its usage, exit 1), answers `--help`
+    itself, copies the tree, and prints openrsync's own `--progress` and
+    `--stats` output — `to-check=k/m` counters, a percentage per file.
+
+    The completeness is the point (issue #197). The copy used to be delegated to
+    whatever `rsync` the host has, so the numbers a test asserted on were the
+    host's format: GNU prints `to-chk=k/m` with `xfr#` and a *cumulative*
+    `--info=progress2` line, and a test written against openrsync then read a
+    different stream on Linux. The two tests that mean to exercise the real
+    rsync name it (`CopyingTransport("rsync")`); this fake is about the flag
+    negotiation, so it must not inherit the host's answer.
+
+    `claims_info` makes `--help` advertise `--info=FLAGS`, i.e. a probe that
     answers yes and a copy that then has to fall back.
     """
-    pattern = "|".join(rejects)
     help_line = ("      --info=FLAGS            fine-grained informational verbosity"
                  if claims_info else
                  "usage: rsync [-a] [--progress] [--partial] [--stats] source ... directory")
     script = tmp_path / "fake-rsync"
-    script.write_text(f"""#!/bin/sh
-for arg in "$@"; do
-  case "$arg" in
-    {pattern})
-      echo "rsync: unrecognized option \\`$arg'" >&2
-      echo "usage: rsync [-a] [--partial] [--stats] source ... directory" >&2
-      exit 1
-      ;;
-    --help)
-      echo "{help_line}"
-      exit 0
-      ;;
-  esac
-done
-exec "$(command -v rsync)" "$@"
-""", encoding="utf-8")
+    script.write_text(_FAKE_RSYNC_PY
+                      .replace("__PYTHON__", sys.executable)
+                      .replace("__REJECTS__", repr(list(rejects)))
+                      .replace("__HELP__", repr(help_line)),
+                      encoding="utf-8")
     script.chmod(0o755)
     return str(script)
+
+
+#: openrsync, in Python, for `_fake_rsync`. `%` formatting is used inside it
+#: because the script is written with `str.replace`, not with `%` or `format`.
+_FAKE_RSYNC_PY = r'''#!__PYTHON__
+"""openrsync, for the tests that force a flag fallback: copy, then report."""
+import os
+import shutil
+import sys
+
+REJECTS = __REJECTS__
+HELP = __HELP__
+
+args = sys.argv[1:]
+if "--help" in args:
+    print(HELP)
+    raise SystemExit(0)
+for arg in args:
+    if arg in REJECTS:
+        sys.stderr.write("rsync: unrecognized option `" + arg + "'\n")
+        sys.stderr.write("usage: rsync [-a] [--partial] [--stats] "
+                         "source ... directory\n")
+        raise SystemExit(1)
+
+flags = [a for a in args if a.startswith("-")]
+operands = [a for a in args if not a.startswith("-")]
+src, dst = operands[-2], operands[-1]
+
+files = sorted(name for name in os.listdir(src)
+               if os.path.isfile(os.path.join(src, name)))
+total = sum(os.path.getsize(os.path.join(src, name)) for name in files)
+os.makedirs(dst, exist_ok=True)
+shutil.copytree(src, dst, dirs_exist_ok=True)
+
+if "--progress" in flags:
+    # openrsync's per-file line: this file's bytes, its own 100%, and how many
+    # file-list entries are checked so far out of the copy's total (the copy's
+    # root directory is one entry and is never printed).
+    done = 0
+    for index, name in enumerate(files, start=1):
+        done += os.path.getsize(os.path.join(src, name))
+        sys.stdout.write("%14s 100%%  359.92MB/s    0:00:00 "
+                         "(xfer#%d, to-check=%d/%d)\r"
+                         % (format(done, ","), index, index, len(files) + 1))
+    sys.stdout.write("\n")
+
+print("Number of files: %d (reg: %d, dir: 1)" % (len(files) + 1, len(files)))
+print("sent %s bytes  received 70 bytes  359.92 bytes/sec"
+      % format(total + 512, ","))
+print("total size is %s  speedup is 1.00" % format(total, ","))
+'''
 
 
 def _two_files(root, *, megabytes: int = 1) -> int:
@@ -742,7 +808,11 @@ def _two_files(root, *, megabytes: int = 1) -> int:
 
 
 async def test_a_rsync_without_info_progress2_copies_with_progress(tmp_path):
-    """The macOS case: the probe says no, the copy runs with `--progress`."""
+    """The openrsync case: the probe says no, the copy runs with `--progress`.
+
+    openrsync is what macOS ships; the fake in this test impersonates it, so the
+    test does not need a Mac — nor does it depend on which rsync the host has.
+    """
     total = _two_files(tmp_path / "src")
     command = _fake_rsync(tmp_path, rejects=("--info=progress2",))
     transport = rep.SshTransport(rsync_command=command)
@@ -803,14 +873,17 @@ async def test_a_rsync_that_refuses_every_progress_flag_still_copies(tmp_path):
     assert (tmp_path / "dst" / "a.bin").exists()
 
 
+@requires_rsync
 async def test_a_real_copy_of_two_small_files_reports_bytes_and_100_percent(
         tmp_path):
-    """The local rsync itself, whatever it is — openrsync here, GNU elsewhere."""
-    if shutil.which("rsync") is None:
-        pytest.skip("no rsync on this machine")
+    """The local rsync itself, whatever it is — openrsync here, GNU elsewhere.
+
+    The expected flag is *asked*, not assumed: `rsync_progress_flag()` probes
+    `--info=progress2 --version` the way the transport does, so the same test
+    holds on macOS (openrsync: `--progress`) and on Linux (GNU:
+    `--info=progress2`).
+    """
     total = _two_files(tmp_path / "src")
-    flavour = subprocess.run(["rsync", "--version"], capture_output=True,
-                             text=True, timeout=20).stdout
     transport = rep.SshTransport()
     updates: list[rep.Progress] = []
 
@@ -819,11 +892,11 @@ async def test_a_real_copy_of_two_small_files_reports_bytes_and_100_percent(
                                   on_progress=updates.append, total_bytes=total)
 
     assert result.ok, result.error
-    if "openrsync" in flavour:
-        assert result.progress_flag == "--progress"
-    else:
-        assert result.progress_flag == "--info=progress2"
+    assert result.progress_flag == rsync_progress_flag()
     assert result.bytes_done == total
+    # The byte count is read with a comma as the thousands separator, so the
+    # child runs under `LC_ALL=C` (issue #198): with a German locale this line
+    # is `2.097.152` and the parse stops at the first dot.
     assert updates and updates[-1].percent == 100.0
     assert (tmp_path / "dst" / "a.bin").read_bytes() == (tmp_path / "src" / "a.bin").read_bytes()
 
@@ -1269,6 +1342,19 @@ class CopyingTransport(FakeTransport):
         super().__init__(**kwargs)
         self.rsync = rep.SshTransport(rsync_command=rsync_command)
 
+    async def mkdir(self, ep, path):
+        """Create the directory, because this transport's copy is local.
+
+        `run_job` makes the staging directory through the transport before it
+        copies. The real `SshTransport.mkdir` runs `mkdir -p`; the fake only
+        records the call, so with a real rsync behind it the destination's
+        parents were never created. openrsync creates a whole missing path,
+        GNU rsync creates only the last component and fails with exit 11 — the
+        job then looked broken on Linux for a reason that was in the harness.
+        """
+        pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+        return await super().mkdir(ep, path)
+
     async def copy(self, src, dst, src_path, dst_path, *, on_progress=None,
                    cancel=None, total_bytes=0):
         self.copy_started.set()
@@ -1322,10 +1408,9 @@ async def test_the_job_finishes_when_no_progress_flag_survives(tmp_path):
     assert staged.stat().st_size == total // 2
 
 
+@requires_rsync
 async def test_the_job_reports_the_progress_flag_it_used(tmp_path):
     """The happy path names its flag, so a report is never silent about it."""
-    if shutil.which("rsync") is None:
-        pytest.skip("no rsync on this machine")
     source_root = tmp_path / "models"
     target_root = tmp_path / "target"
     total = _two_files(source_root / "Jundot" / QWEN)
@@ -1344,10 +1429,9 @@ async def test_the_job_reports_the_progress_flag_it_used(tmp_path):
     await rep.run_job(job=job, plan=plan, transport=fake,
                       source=rep.Endpoint("A"), target=rep.Endpoint("B"))
 
-    if shutil.which("rsync") is None:
-        pytest.skip("no rsync on this machine")
     assert job["state"] == "done", job
-    assert job["report"]["progress"] in ("--info=progress2", "--progress")
+    # The flag this machine's rsync takes, probed — not the one macOS takes.
+    assert job["report"]["progress"] == rsync_progress_flag()
     assert job["report"]["progress_note"] == ""
     assert job["percent"] == 100.0
 

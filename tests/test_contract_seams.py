@@ -137,6 +137,57 @@ async def test_a_profile_row_carries_its_source_model_id(stub_factory):
     assert residency["X"].source_model_id == ""
 
 
+# -- cluster facts (issue #194) ---------------------------------------------
+DEPLOYMENT = {
+    "deployment_id": "dep-194",
+    "world_size": 2,
+    "tensor_parallel_size": 2,
+    "pipeline_stages": 1,
+    "strategy": "tensor_parallel",
+    "backend": "mlx",
+    "target_context_tokens": 131072,
+    "profile": "cluster",
+}
+
+
+async def test_a_coordinator_carries_the_cluster_facts(stub_factory):
+    """`distributed: true` means *this node is the coordinator*.
+
+    The deployment record lives only on rank 0, so the flag is the only thing
+    that tells a coordinator from a worker. The `cluster` dict is oMLX's own
+    vocabulary and must arrive untouched — a renamed key would no longer be
+    what the node said (issue #194).
+    """
+    stub = stub_factory(models=[
+        StubModel(id="big", loaded=True, distributed=True, cluster=DEPLOYMENT),
+    ])
+    async with httpx.AsyncClient() as client:
+        residency = await (OmlxBackend(stub.url, client=client)).residency()
+
+    assert residency is not None
+    info = residency["big"]
+    assert info.distributed is True
+    assert info.cluster is not None
+    assert info.cluster["deployment_id"] == "dep-194"
+    assert info.cluster == DEPLOYMENT
+
+
+async def test_a_row_without_cluster_facts_reads_as_false_and_none(stub_factory):
+    """A node outside a deployment omits both keys — that is false, not unknown.
+
+    Measured 25.11.2026 on oMLX 0.8.3: a plain node answers neither field. The
+    parse must not invent a cluster or read a missing flag as true.
+    """
+    stub = stub_factory(models=[StubModel(id="plain", loaded=True)])
+    async with httpx.AsyncClient() as client:
+        residency = await (OmlxBackend(stub.url, client=client)).residency()
+
+    assert residency is not None
+    info = residency["plain"]
+    assert info.distributed is False
+    assert info.cluster is None
+
+
 # -- admin surface ----------------------------------------------------------
 async def test_calibration_endpoints_are_mounted_and_need_the_admin_key(
         ripple_factory, stub_factory, tmp_path):

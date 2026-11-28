@@ -2,8 +2,10 @@
 
 Two questions, one document. **Part 1** measures what a single node can do:
 decode throughput, cold prefill, and what those numbers say about the configured
-host weights. **Part 2** measures what the fleet actually did over a multi-day
-run: per-host busy time, its hourly shape, and every thread movement.
+host weights — and closes with the one measurement that is not about a single
+node: the pair running one model as a cluster, against the fleet. **Part 2**
+measures what the fleet actually did over a multi-day run: per-host busy time,
+its hourly shape, and every thread movement.
 
 **Hardware.** Two Macs running oMLX: `alpha` (weight 3) and `beta`
 (weight 2). Models measured: `DeepSeek-V4.1-Flash-1017-oQ4e-mtp` (453.6 GB, the
@@ -384,6 +386,84 @@ Two consequences worth keeping:
    memory profile, so neither ratio may be transferred to it. The 3 : 2 weights
    would then be an untested assumption again — which is exactly the situation #7
    was opened to end.
+
+---
+
+### A cluster against the fleet, 28.11.2026 — is a cluster faster?
+
+**Question:** oMLX can run one model as a deployment over both Macs, so a model
+that fits on neither is servable at all (issue #194). The plan left the other
+half open: is the pair also *faster* than the two Macs serving whole models side
+by side? This is that measurement.
+
+**Conditions.**
+
+- `DeepSeek-V4.1-Flash-1017-oQ4e-mtp`, 432 GB resident — 432,5 GB reported by
+  the M5, 432,9 GB by the M3, against ceilings of 523,3 and 527,3 GB. Same day,
+  both Macs, eviction guard on.
+- Prompts cache-cold: seeded random words with a unique salt per run, so no run
+  inherits a prefix from the one before it.
+- TTFT is the time to the **first streamed delta**; prefill = prompt tokens /
+  TTFT. Every row is **one stream, no concurrency** — what one requester waits
+  for, not an aggregate over the fleet.
+- The cluster ran `tensor_parallel_size 2` over JACCL/Thunderbolt RDMA with the
+  model split in half per rank. The fleet rows went through RIPPLE on `:8010`
+  with the whole model on both Macs and the 3 : 2 weights.
+
+**Prefill, tok/s per prompt size** (the host that answered in parentheses):
+
+| | 2,3k prompt | 9,2k prompt | 18,4k prompt |
+|---|---|---|---|
+| cluster, balanced | 687 | **1 178** | **1 214** |
+| cluster, throughput | — | **1 199** | **1 296** |
+| M5 alone, whole model | 2 342 | **3 897** | **3 988** |
+| M3 alone, whole model | 816 | 1 011 | 1 065 |
+| fleet, run 1 | 812 (beta) | 2 886 (alpha) | 2 809 (alpha) |
+| fleet, run 2 | 2 458 (alpha) | 578 (beta) | 3 408 (alpha) |
+
+The same rows as TTFT: cluster/balanced 3,40 / 7,82 / 15,13 s, cluster/throughput
+— / 7,68 / 14,22 s, M5 1,00 / 2,38 / 4,59 s, M3 2,83 / 9,15 / 17,31 s, fleet run
+1 2,85 / 3,21 / 6,52 s, fleet run 2 0,96 / 15,88 / 5,38 s.
+
+**The conclusion in one sentence: the cluster runs at the slower member's rate,
+not at the fast one's** — 1 178–1 296 tok/s against 3 897–3 988 on the M5 alone
+and 1 011–1 065 on the M3 alone, i.e. the M3's speed with the M5's memory spent.
+
+**Why, structurally.** Tensor parallelism puts one all-reduce between the layers
+of every token, and every rank waits for the slowest one at each collective, so
+the slower machine sets the pace for the pair. The link is not the limit and
+throwing bandwidth at it does not move the number: oMLX's own note in
+`omlx/cluster/link_bandwidth.py` records 28,6 tok/s under RDMA against 6,6 over
+TCP at identical bandwidth — same wire, different collective path, 4× the rate,
+and still nowhere near one machine. Decode points the same way and is too noisy
+to lean on: 24-token completions gave 40–48 tok/s on the M5, 31–36 on the M3 and
+25–51 on the cluster, with oMLX's own counter reporting 25 tok/s for a short
+request on the cluster.
+
+**The serving profile does not change this.** `balanced`, `throughput` and
+`interactive` set admission limits only — 8 decode / 4 prompt / batch 4, 16 / 8 /
+8 and 4 / 2 / 2 (`omlx/cluster/performance.py:287`). For a single stream the
+profile moved prefill by 2–7 %, which is inside the run-to-run spread; it buys
+queueing behaviour under load, not speed for one request.
+
+**Two facts about the accounting, worth keeping.** A distributed rank reports
+`resident_estimated_size` 164,8 GB — 38 % of the model — so the cluster's own
+memory accounting sums to ~330 GB for a 432 GB model: it under-reports, and any
+capacity decision that trusted the sum would be wrong by a quarter of the model.
+And with the deployment deactivated but the cluster *configuration* still in use,
+RIPPLE's `:8011` instance showed the declared-not-loaded state correctly:
+healthy, `world_size: null`, ceiling 523,7 GB — the serving member's real
+ceiling, not a sum over two machines.
+
+**What this does not say.** The fleet rows are one sample each, and the two runs
+disagree by a factor of five on the 9,2k prompt (2 886 against 578) because the
+second one landed on the M3, whose prefill is about a quarter of the M5's; the
+column is a range, not a median. The cluster rows are single samples too. And the
+deployment measured here is tensor-parallel with `pipeline_stages: 1` — a
+pipeline split would move the collectives, not remove them, but it is not what
+these numbers measure. The header of this document gives 453,6 GB for the same
+model; that figure and the 432,5 GB reported here are not the same number, and no
+ratio above depends on which one is quoted.
 
 ---
 
